@@ -30,6 +30,8 @@ const (
 const usage = `kavach inspects, replays and compares Kavach fixtures.
 
 Usage:
+  kavach [--no-banner] <command> ...
+
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <replay-binary> [--json]
   kavach diff    <fixture> --old <binary> --new <binary> [--json]
@@ -37,6 +39,10 @@ Usage:
 
 A replay binary is any Go binary whose main calls kavach.MaybeReplay. --bin
 defaults to $KAVACH_BIN.
+
+On a terminal, output is colored and starts with a banner; --no-banner or
+KAVACH_NO_BANNER=1 drops the banner, NO_COLOR=1 drops all styling. Piped output
+and --json are never styled.
 
 Exit status: 0 when the replay (of the new binary, for diff) is ok or fixed,
 1 when it is not, 2 for usage errors, 3 when a fixture or binary is unusable.
@@ -47,6 +53,17 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	noBanner := false
+	rest := args[:0:0]
+	for _, a := range args {
+		if a == "--no-banner" || a == "-no-banner" {
+			noBanner = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	args = rest
+	u := newUI(stdout, noBanner)
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
@@ -54,15 +71,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	cmd, args := args[0], args[1:]
 	switch cmd {
 	case "inspect":
-		return cmdInspect(args, stdout, stderr)
+		return cmdInspect(u, args, stdout, stderr)
 	case "replay":
-		return cmdReplay(args, stdout, stderr)
+		return cmdReplay(u, args, stdout, stderr)
 	case "diff":
-		return cmdDiff(args, stdout, stderr)
+		return cmdDiff(u, args, stdout, stderr)
 	case "version":
+		u.printBanner(stdout)
 		fmt.Fprintf(stdout, "kavach %s (journal format %d.%d)\n", kavach.Version, journal.Major, journal.Minor)
 		return exitPass
 	case "help", "-h", "--help":
+		u.printBanner(stdout)
 		fmt.Fprint(stdout, usage)
 		return exitPass
 	}
@@ -99,7 +118,7 @@ func oneFixture(name string, pos []string, stderr io.Writer) (string, bool) {
 	return pos[0], true
 }
 
-func cmdInspect(args []string, stdout, stderr io.Writer) int {
+func cmdInspect(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("inspect", stderr)
 	asJSON := fs.Bool("json", false, "print the decoded journal as JSON")
 	full := fs.Bool("full", false, "do not truncate data")
@@ -124,13 +143,15 @@ func cmdInspect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	m := j.Header.Meta
-	fmt.Fprintf(stdout, "%s  format %d.%d\n", path, j.Header.Major, j.Header.Minor)
-	fmt.Fprintf(stdout, "service %s · start %s · %d records\n", m.Service, m.Start, len(j.Records))
+	u.printBanner(stdout)
+	u.header(stdout, "KAVACH INSPECT")
+	fmt.Fprintf(stdout, "%s  %s\n", u.paint(path, ansiBold), u.paint(fmt.Sprintf("format %d.%d", j.Header.Major, j.Header.Minor), ansiDim))
+	fmt.Fprintf(stdout, "%s %s · start %s · %d records\n", u.paint("service", ansiBold), m.Service, m.Start, len(j.Records))
 	if m.Handler != "" || m.Producer != "" || m.RecordedAt != "" {
-		fmt.Fprintf(stdout, "handler %s · producer %s · recorded %s\n", orDash(m.Handler), orDash(m.Producer), orDash(m.RecordedAt))
+		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("handler %s · producer %s · recorded %s", orDash(m.Handler), orDash(m.Producer), orDash(m.RecordedAt)), ansiDim))
 	}
 	if j.Truncated {
-		fmt.Fprintln(stdout, "warning: file ends inside a record; showing complete records only")
+		fmt.Fprintln(stdout, u.paint("warning: file ends inside a record; showing complete records only", ansiYellow))
 	}
 	fmt.Fprintln(stdout)
 	limit := 96
@@ -138,7 +159,12 @@ func cmdInspect(args []string, stdout, stderr io.Writer) int {
 		limit = -1
 	}
 	for _, r := range j.Records {
-		fmt.Fprintf(stdout, "%6d  %-8s  %s\n", r.Seq, r.Type, describeRecord(r, limit))
+		ty := fmt.Sprintf("%-8s", r.Type)
+		desc := describeRecord(r, limit)
+		if r.Type == journal.TypeMarker {
+			desc = u.paint(desc, markerColor(r.Kind))
+		}
+		fmt.Fprintf(stdout, "%s  %s  %s\n", u.paint(fmt.Sprintf("%6d", r.Seq), ansiDim), u.paint(ty, ansiBold, typeColor[r.Type.String()]), desc)
 	}
 	return exitPass
 }
@@ -253,7 +279,7 @@ func replayWith(bin, fixture string) (*kavach.Result, time.Duration, error) {
 	return &res, wall, nil
 }
 
-func cmdReplay(args []string, stdout, stderr io.Writer) int {
+func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("replay", stderr)
 	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "replay binary (a Go binary calling kavach.MaybeReplay)")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
@@ -277,21 +303,26 @@ func cmdReplay(args []string, stdout, stderr io.Writer) int {
 			return exitError
 		}
 	} else {
-		fmt.Fprintf(stdout, "fixture   %s\n", path)
-		fmt.Fprintf(stdout, "service   %s · start %s · %d records · %d steps replayed\n", res.Service, res.Start, res.Records, len(res.Steps))
+		u.printBanner(stdout)
+		u.header(stdout, "KAVACH DETERMINISTIC REPLAY")
+		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
+		fmt.Fprintf(stdout, "%s%s · start %s · %d records · %d steps replayed\n", u.label("service", 10), res.Service, res.Start, res.Records, len(res.Steps))
 		if f := res.Recorded; f != nil {
-			fmt.Fprintf(stdout, "recorded  %s at seq %d: %s\n", f.Kind, f.Seq, f.Message)
+			fmt.Fprintf(stdout, "%s%s\n", u.label("recorded", 10), u.paint(fmt.Sprintf("%s at seq %d: %s", f.Kind, f.Seq, f.Message), markerColor(f.Kind)))
 		} else {
-			fmt.Fprintln(stdout, "recorded  no failure")
+			fmt.Fprintf(stdout, "%s%s\n", u.label("recorded", 10), "no failure")
 		}
-		fmt.Fprintf(stdout, "result    %s\n", res)
+		fmt.Fprintf(stdout, "%s%s\n", u.label("result", 10), u.verdict(res))
 		if res.Detail != "" {
-			fmt.Fprintf(stdout, "          %s\n", res.Detail)
+			fmt.Fprintf(stdout, "          %s\n", u.paint(res.Detail, verdictColor(res.Status)))
 		}
 		if n := synthesized(res); n > 0 {
-			fmt.Fprintf(stdout, "note      %d clock/random reads past the recorded failure were synthesized\n", n)
+			fmt.Fprintf(stdout, "%s%d clock/random reads past the recorded failure were synthesized\n", u.label("note", 10), n)
 		}
-		fmt.Fprintf(stdout, "wall      %.1f ms (including process start)\n", ms(wall))
+		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms (including process start)", ms(wall)), ansiYellow))
+		if u.color && res.Status == kavach.StatusStillFailing {
+			fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: fix the handler, build it, then run kavach diff %s --old %s --new <new-binary>", path, *bin), ansiDim))
+		}
 	}
 	if res.Passed() {
 		return exitPass
@@ -309,7 +340,7 @@ func synthesized(res *kavach.Result) int {
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
-func cmdDiff(args []string, stdout, stderr io.Writer) int {
+func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("diff", stderr)
 	oldBin := fs.String("old", "", "replay binary built from the code that failed")
 	newBin := fs.String("new", "", "replay binary built from the candidate fix")
@@ -345,19 +376,21 @@ func cmdDiff(args []string, stdout, stderr io.Writer) int {
 			return exitError
 		}
 	} else {
-		fmt.Fprintf(stdout, "fixture  %s\n", path)
-		fmt.Fprintf(stdout, "old      %s\n", oldRes)
-		fmt.Fprintf(stdout, "new      %s\n", newRes)
+		u.printBanner(stdout)
+		u.header(stdout, "KAVACH FIX VERIFICATION")
+		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 9), path)
+		fmt.Fprintf(stdout, "%s%s\n", u.label("old", 9), u.verdict(oldRes))
+		fmt.Fprintf(stdout, "%s%s\n", u.label("new", 9), u.verdict(newRes))
 		if newRes.Detail != "" && !newRes.Passed() {
-			fmt.Fprintf(stdout, "         %s\n", newRes.Detail)
+			fmt.Fprintf(stdout, "         %s\n", u.paint(newRes.Detail, verdictColor(newRes.Status)))
 		}
 		if d == nil {
-			fmt.Fprintln(stdout, "outputs  identical at every step")
+			fmt.Fprintf(stdout, "%sidentical at every step\n", u.label("outputs", 9))
 		} else {
-			fmt.Fprintf(stdout, "first divergence at step seq %d: %s\n", d.Seq, d.Detail)
+			fmt.Fprintf(stdout, "%s\n", u.paint(fmt.Sprintf("first divergence at step seq %d: %s", d.Seq, d.Detail), ansiBold, ansiYellow))
 			if d.Output >= 0 {
-				fmt.Fprintf(stdout, "  old  %s\n", showOutput(d.Old))
-				fmt.Fprintf(stdout, "  new  %s\n", showOutput(d.New))
+				fmt.Fprintf(stdout, "  %s  %s\n", u.paint("old", ansiBold, ansiRed), u.paint(showOutput(d.Old), ansiRed))
+				fmt.Fprintf(stdout, "  %s  %s\n", u.paint("new", ansiBold, ansiGreen), u.paint(showOutput(d.New), ansiGreen))
 			}
 		}
 	}
@@ -372,4 +405,14 @@ func showOutput(o *kavach.Output) string {
 		return "(none)"
 	}
 	return o.Sink + "  " + showData(o.Data, 160)
+}
+
+func markerColor(kind string) string {
+	switch kind {
+	case journal.MarkerPanic, journal.MarkerError:
+		return ansiRed
+	case journal.MarkerInvariant:
+		return ansiMagenta
+	}
+	return ansiYellow
 }

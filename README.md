@@ -31,6 +31,20 @@ kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new
 Replay runs no external services: the fixture holds every input, clock read and
 random read the handler made.
 
+The same demo reads from Kafka through [franz-go](https://github.com/twmb/franz-go).
+The topic is the ledger's journal: on every start the service folds it from the
+first offset. With a local broker (for example
+`docker run -p 9092:9092 apache/kafka:3.9.0`):
+
+```bash
+./ledger-old -kafka localhost:9092 -seed examples/ledger/testdata/events.jsonl  # load the topic once
+./ledger-old -kafka localhost:9092                                              # crashes at offset 0:7
+```
+
+The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
+and it still replays with no broker running. The demo is its own Go module, so
+the `kavach` library itself has no dependencies.
+
 ## Using it in a service
 
 ```go

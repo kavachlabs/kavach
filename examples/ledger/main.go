@@ -1,20 +1,23 @@
 // Command ledger is Kavach's demo service: a single-writer wallet ledger that
-// folds a stream of JSON events into balances.
+// folds a stream of JSON events into balances. It reads events from a file or
+// from a Kafka topic:
 //
-//	go run ./examples/ledger -in examples/ledger/testdata/events.jsonl
+//	ledger -in testdata/events.jsonl
+//	ledger -kafka localhost:9092 -seed testdata/events.jsonl   # load the topic once
+//	ledger -kafka localhost:9092
 //
 // One upstream event has "amount": null, which crashes the handler. The flight
 // recorder writes a fixture before the process dies.
 package main
 
 import (
-	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strconv"
+	"os/signal"
+	"strings"
 
 	"github.com/kavachlabs/kavach"
 )
@@ -24,16 +27,26 @@ func main() {
 	kavach.MaybeReplay(func() kavach.Handler { return NewLedger() })
 
 	in := flag.String("in", "", "JSON-lines file of wallet events")
+	brokers := flag.String("kafka", "", "comma-separated Kafka seed brokers; consume -topic instead of -in")
+	topic := flag.String("topic", "wallet-events", "Kafka topic holding the ledger's events")
+	seed := flag.String("seed", "", "produce this JSON-lines file to -topic and exit")
 	dir := flag.String("fixtures", "fixtures", "directory for crash fixtures")
 	flag.Parse()
-	if *in == "" {
-		log.Fatal("ledger: -in is required")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if *seed != "" {
+		if *brokers == "" {
+			log.Fatal("ledger: -seed needs -kafka")
+		}
+		n, err := seedKafka(ctx, strings.Split(*brokers, ","), *topic, *seed)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("ledger: produced %d events to %s", n, *topic)
+		return
 	}
-	f, err := os.Open(*in)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
 
 	rec := kavach.NewRecorder(NewLedger(), kavach.Options{
 		Service: "ledger",
@@ -53,19 +66,22 @@ func main() {
 		},
 	})
 
-	sc := bufio.NewScanner(f)
-	line := 0
-	for sc.Scan() {
-		line++
-		if len(sc.Bytes()) == 0 {
-			continue
+	var err error
+	switch {
+	case *brokers != "":
+		cl, cerr := kafkaClient(strings.Split(*brokers, ","), *topic)
+		if cerr != nil {
+			log.Fatal(cerr)
 		}
-		in := kavach.Input{Source: "file:" + filepath.Base(*in), Position: strconv.Itoa(line), Data: sc.Bytes()}
-		if err := rec.Step(in); err != nil {
-			log.Printf("ledger: %v", err)
-		}
+		defer cl.Close()
+		log.Printf("ledger: folding kafka topic %s from the start", *topic)
+		err = consumeKafka(ctx, cl, rec)
+	case *in != "":
+		err = consumeFile(*in, rec)
+	default:
+		log.Fatal("ledger: pass -in FILE or -kafka BROKERS")
 	}
-	if err := sc.Err(); err != nil {
+	if err != nil {
 		log.Fatal(err)
 	}
 }
