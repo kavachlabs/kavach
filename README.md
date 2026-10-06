@@ -119,8 +119,10 @@ declare invariants that are checked after every step, live and in replay. Use
 | --- | --- |
 | [SPEC.md](SPEC.md) | Journal and fixture format, v0 |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
+| [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
 | [examples/ledger](examples/ledger) | The demo service |
+| [bench](bench) | Ten planted bugs, each with a correct and a too-narrow fix |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute (DCO sign-off required) |
 
 ## Open source

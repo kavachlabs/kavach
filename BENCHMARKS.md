@@ -20,9 +20,12 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 | Fix verification of the demo crash, `kavach diff` end to end (87 binary runs, 4 in parallel) | — | correct fix: median 196.4 ms, p95 224.3 ms; partial fix: median 215.7 ms, p95 273.5 ms (50 runs each) | see below |
 | Variants of the demo crash that reproduce it on the old build | ≥ 10 | 41 of 44 | `go test -run VerifyCandidateFixes -v ./examples/ledger` |
 | Wrong fixes rejected by variants (demo crash) | — | 2 of 2 (`skip evt-008`: 5 variants fail; `deposits only`: 4 fail); correct fix passes 41 of 41 | same |
+| Ten planted bugs (panic, returned error, invariant; see below): old build reproduces the recorded failure | 10 of 10 | 10 of 10 | `go test ./bench -run TestBenchmark -v` |
+| Same ten: correct fix verified as `fixed` | 10 of 10 | 10 of 10 (255 of 340 variants reproduce on the old build, 25.5 per bug on average; each fix passes all it is shown) | same |
+| Same ten: narrow fix rejected | — | 10 of 10, all `variant_failed` | same |
 | Demo crash fixture size | < 100 KB | 3,815 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
 | Determinism | 1,000 replays byte-identical | 1,000 / 1,000 | `go test -run Determinism ./examples/ledger` |
-| Test coverage, core packages | ≥ 80% | `kavach` 83.3%, `journal` 85.8% | `go test -cover . ./journal` |
+| Test coverage, core packages | ≥ 80% | `kavach` 86.9%, `journal` 85.8% | `go test -cover . ./journal` |
 
 ## What each number includes
 
@@ -76,3 +79,27 @@ go build -o /tmp/ledger-partial -tags ledgerpartialfix ./examples/ledger
 **Determinism.** The `Result` of each replay, serialized as JSON, is compared
 byte for byte against the first. It holds with the planted bug and with
 `-tags ledgerfix`.
+
+**Ten planted bugs.** [`bench/`](bench) holds ten small handlers, each with one
+planted bug: nil pointer, index out of range, division by zero, nil map write,
+type assertion, an oversold capacity invariant, an update delivered before its
+create, a redelivered charge, a leap-day array index, and an exhausted random
+pool. For each, `bench.Record` runs a short event stream through the flight
+recorder with a stepped clock and seeded randomness until the last event fails,
+and `kavach.Verify` then checks two candidate fixes against that fixture: a
+correct one that handles every input of the failing kind, and a narrow one that
+handles the recorded incident but not its siblings (for example, guarding only
+`signup` events when `update` events carry the same null). `-v` prints one row
+per bug, with the verdicts. Each bug's story is in `bench/bugs.go`.
+
+What this does and does not show. The bugs, fixtures and both fixes were
+written by this project, in-process rather than through the CLI, so the result
+measures whether variants catch narrow fixes that differ from the correct fix
+along an axis variants perturb (an event type, a field value, the clock, an
+earlier input). It does not show how often an agent's real fixes are narrow in
+ways variants cannot see; a fix that differs from a correct one only on inputs
+no variant produces would pass. The first draft of the correct fix for the
+type-assertion bug validated `qty` but not `price`, and was rejected by the
+variant that removes `price`; it was fixed in the benchmark, and the numbers
+above are for the fixed version. Each narrow fix is run once, and none
+passed, so there is no false-accept rate yet beyond "0 of 10".
