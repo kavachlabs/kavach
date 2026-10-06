@@ -52,6 +52,18 @@ The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
 and it still replays with no broker running. The demo is its own Go module, so
 the `kavach` library itself has no dependencies.
 
+## With an AI agent
+
+`kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server with three tools, `kavach_list_incidents`, `kavach_replay` and
+`kavach_diff`, returning the same verdicts as the CLI as structured JSON:
+
+```bash
+claude mcp add kavach -- kavach mcp
+```
+
+[AGENTS.md](AGENTS.md) is the loop an agent should follow.
+
 ## Using it in a service
 
 ```go

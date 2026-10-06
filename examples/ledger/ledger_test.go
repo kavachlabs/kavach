@@ -151,6 +151,44 @@ func TestCLI(t *testing.T) {
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--variants", "0"), "verdict   fixed")
 	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 41`)
 
+	// The same loop through the MCP server, as an agent drives it.
+	mcp := exec.Command(cli, "mcp")
+	mcp.Stdin = strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		mcpCall(2, "kavach_list_incidents", map[string]any{"dir": fx}),
+		mcpCall(3, "kavach_replay", map[string]any{"fixture": paths[0], "bin": oldBin}),
+		mcpCall(4, "kavach_diff", map[string]any{"fixture": paths[0], "old": oldBin, "new": partialBin}),
+		mcpCall(5, "kavach_diff", map[string]any{"fixture": paths[0], "old": oldBin, "new": newBin}),
+	}, "\n"))
+	mcpOut, err := mcp.Output()
+	if err != nil {
+		t.Fatalf("kavach mcp: %v", err)
+	}
+	var verdicts []string
+	dec := json.NewDecoder(bytes.NewReader(mcpOut))
+	for dec.More() {
+		var resp struct {
+			Result struct {
+				Structured map[string]any `json:"structuredContent"`
+				IsError    bool           `json:"isError"`
+			}
+		}
+		if err := dec.Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Result.IsError {
+			t.Fatalf("tool error in:\n%s", mcpOut)
+		}
+		if v, ok := resp.Result.Structured["verdict"].(string); ok {
+			verdicts = append(verdicts, v)
+		}
+	}
+	if got := strings.Join(verdicts, " "); got != "still_failing@31 variant_failed(6)@22 fixed" {
+		t.Fatalf("MCP verdicts %q in:\n%s", got, mcpOut)
+	}
+	mustContain(string(mcpOut), `\"seq\": 31`, `"passed":false`, `"passed":true`)
+
 	// Usage and environment errors.
 	run(2, "replay")
 	run(2, "diff", paths[0], "--old", oldBin)
@@ -159,6 +197,12 @@ func TestCLI(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "junk.kavach"), []byte("this is a plain text file, not a journal"), 0o644)
 	mustContain(run(3, "inspect", filepath.Join(dir, "junk.kavach")), "bad magic")
 	mustContain(run(0, "version"), "journal format 0.1")
+}
+
+func mcpCall(id int, tool string, args map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call",
+		"params": map[string]any{"name": tool, "arguments": args}})
+	return string(b)
 }
 
 // TestDeterminism replays the demo crash fixture 1,000 times and requires

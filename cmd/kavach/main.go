@@ -33,10 +33,16 @@ const usage = `kavach inspects, replays and compares Kavach fixtures.
 Usage:
   kavach [--no-banner] <command> ...
 
+  kavach list    [dir] [--json]
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <replay-binary> [--json]
   kavach diff    <fixture> --old <binary> --new <binary> [--variants N] [--keep DIR] [--json]
+  kavach mcp
   kavach version
+
+list finds fixtures (*.kavach) under dir (default: the current directory).
+mcp serves kavach_list_incidents, kavach_replay and kavach_diff to an AI agent
+as a Model Context Protocol server on stdin/stdout.
 
 A replay binary is any Go binary whose main calls kavach.MaybeReplay. --bin
 defaults to $KAVACH_BIN.
@@ -83,6 +89,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdReplay(u, args, stdout, stderr)
 	case "diff":
 		return cmdDiff(u, args, stdout, stderr)
+	case "list":
+		return cmdList(u, args, stdout, stderr)
+	case "mcp":
+		return cmdMCP(args, os.Stdin, stdout, stderr)
 	case "version":
 		u.printBanner(stdout)
 		fmt.Fprintf(stdout, "kavach %s (journal format %d.%d)\n", kavach.Version, journal.Major, journal.Minor)
@@ -375,61 +385,15 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kavach diff: --variants must not be negative")
 		return exitUsage
 	}
-	j, err := journal.ReadFile(path)
+	o, err := verifyFix(path, *oldBin, *newBin, *minVariants, *keep)
 	if err != nil {
 		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
 		return exitError
 	}
-	work, err := os.MkdirTemp("", "kavach-diff-")
-	if err != nil {
-		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
-		return exitError
-	}
-	defer os.RemoveAll(work)
-
-	opts := kavach.VerifyOptions{MinVariants: *minVariants, Parallel: runtime.NumCPU()}
-	if *minVariants == 0 {
-		opts.MinVariants = -1
-	}
-	start := time.Now()
-	v, err := kavach.VerifyWith(j, binReplayer(*oldBin, path, work), binReplayer(*newBin, path, work), opts)
-	wall := time.Since(start)
-	if err != nil {
-		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
-		return exitError
-	}
-	saved, err := saveFailingVariants(v, path, *keep)
-	if err != nil {
-		fmt.Fprintf(stderr, "kavach diff: saving failing variants: %v\n", err)
-		return exitError
-	}
-	d := kavach.Compare(v.Old, v.New)
+	v, saved, d, wall := o.v, o.saved, o.divergence, o.wall
 
 	if *asJSON {
-		checks := make([]map[string]any, len(v.Variants))
-		for i, c := range v.Variants {
-			m := map[string]any{"id": c.ID, "mutation": c.Mutation, "incident_seq": c.Incident,
-				"reproduces": c.Reproduces, "old": c.Old, "passed": c.Passed}
-			if c.Reproduces {
-				m["new"] = c.New
-			}
-			if c.Detail != "" {
-				m["detail"] = c.Detail
-			}
-			if f := saved[c.ID]; f != "" {
-				m["file"] = f
-			}
-			checks[i] = m
-		}
-		if writeJSON(stdout, stderr, map[string]any{
-			"fixture": path, "verdict": v.String(), "status": v.Status, "detail": v.Detail,
-			"old": v.Old.String(), "new": v.New.String(), "new_detail": v.New.Detail, "divergence": d,
-			"variants": map[string]any{
-				"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
-				"passing": v.Passing, "checks": checks,
-			},
-			"wall_ms": ms(wall),
-		}) != exitPass {
+		if writeJSON(stdout, stderr, o.report()) != exitPass {
 			return exitError
 		}
 	} else {
@@ -485,6 +449,74 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 		return exitPass
 	}
 	return exitFail
+}
+
+// diffOutcome is a verified fix, as kavach diff and the MCP server report it.
+type diffOutcome struct {
+	fixture    string
+	v          *kavach.Verification
+	saved      map[int]string // failing variants written to disk, by ID
+	divergence *kavach.Divergence
+	wall       time.Duration
+}
+
+// verifyFix checks the fix in newBin against the incident in fixture.
+// minVariants 0 checks only the recorded journal.
+func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*diffOutcome, error) {
+	j, err := journal.ReadFile(fixture)
+	if err != nil {
+		return nil, err
+	}
+	work, err := os.MkdirTemp("", "kavach-diff-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(work)
+
+	opts := kavach.VerifyOptions{MinVariants: minVariants, Parallel: runtime.NumCPU()}
+	if minVariants == 0 {
+		opts.MinVariants = -1
+	}
+	start := time.Now()
+	v, err := kavach.VerifyWith(j, binReplayer(oldBin, fixture, work), binReplayer(newBin, fixture, work), opts)
+	wall := time.Since(start)
+	if err != nil {
+		return nil, err
+	}
+	saved, err := saveFailingVariants(v, fixture, keep)
+	if err != nil {
+		return nil, fmt.Errorf("saving failing variants: %w", err)
+	}
+	return &diffOutcome{fixture, v, saved, kavach.Compare(v.Old, v.New), wall}, nil
+}
+
+// report is the JSON form of a diff outcome.
+func (o *diffOutcome) report() map[string]any {
+	v := o.v
+	checks := make([]map[string]any, len(v.Variants))
+	for i, c := range v.Variants {
+		m := map[string]any{"id": c.ID, "mutation": c.Mutation, "incident_seq": c.Incident,
+			"reproduces": c.Reproduces, "old": c.Old, "passed": c.Passed}
+		if c.Reproduces {
+			m["new"] = c.New
+		}
+		if c.Detail != "" {
+			m["detail"] = c.Detail
+		}
+		if f := o.saved[c.ID]; f != "" {
+			m["file"] = f
+		}
+		checks[i] = m
+	}
+	return map[string]any{
+		"fixture": o.fixture, "verdict": v.String(), "status": v.Status, "detail": v.Detail,
+		"old": v.Old.String(), "new": v.New.String(), "new_detail": v.New.Detail, "divergence": o.divergence,
+		"variants": map[string]any{
+			"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
+			"passing": v.Passing, "checks": checks,
+		},
+		"wall_ms": ms(o.wall),
+	}
 }
 
 // binReplayer replays journals with a replay binary: the fixture at path

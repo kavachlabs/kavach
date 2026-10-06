@@ -62,7 +62,26 @@ errors, `3` when the fixture or binary cannot be used.
   `time.Now`, `math/rand`/`crypto/rand`, or performing effects directly.
 - Report the verdict exactly as Kavach prints it.
 
+## Over MCP
+
+`kavach mcp` serves the same loop as a Model Context Protocol server on
+stdin/stdout. Register it with your client, e.g. for Claude Code:
+
+```bash
+claude mcp add kavach -- kavach mcp
+```
+
+(This repository's `.mcp.json` does the same with `go run ./cmd/kavach mcp`.)
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `kavach_list_incidents` | `dir` (default: working directory) | every `*.kavach` under it, with the recorded failure's kind, seq and message |
+| `kavach_replay` | `fixture`, `bin` (default `$KAVACH_BIN`), `include_steps` | `verdict`, `passed`, `detail`, `recorded_failure` |
+| `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants |
+
+A verdict that is not a pass is a normal tool result; `isError` is set only
+when a tool could not run (missing file, binary without `kavach.MaybeReplay`).
+
 ## Coming later
 
-An MCP server exposing `kavach_list_incidents`, `kavach_replay` and
-`kavach_diff`, and an `llms.txt`.
+An `llms.txt`.

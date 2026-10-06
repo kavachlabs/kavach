@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kavach": {
+      "command": "go",
+      "args": ["run", "./cmd/kavach", "mcp"]
+    }
+  }
+}
