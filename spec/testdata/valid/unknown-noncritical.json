@@ -1,0 +1,22 @@
+{
+  "major": 0,
+  "minor": 1,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "clock",
+      "seq": 0,
+      "unix_nanos": 1
+    },
+    {
+      "type": "clock",
+      "seq": 2,
+      "unix_nanos": 2
+    }
+  ],
+  "truncated": false
+}

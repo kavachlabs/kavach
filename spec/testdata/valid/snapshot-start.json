@@ -1,0 +1,24 @@
+{
+  "major": 0,
+  "minor": 1,
+  "meta": {
+    "service": "conformance",
+    "start": "snapshot"
+  },
+  "records": [
+    {
+      "type": "snapshot",
+      "flags": 1,
+      "seq": 100,
+      "data": "eyJhbGljZSI6MTB9"
+    },
+    {
+      "type": "input",
+      "seq": 101,
+      "source": "s",
+      "position": "7",
+      "data": "eA=="
+    }
+  ],
+  "truncated": false
+}

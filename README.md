@@ -7,25 +7,67 @@ state from the journal instead of replaying a tape.
 **Scope:** deterministic replay and fix verification for single-writer,
 journal-driven Go services.
 
-> **Status: pre-alpha.** The journal format ([SPEC.md](SPEC.md)) is the first
-> artifact. The recorder, replayer and CLI are being built in the open; nothing
-> here is ready for production use yet. Every performance number this project
-> publishes will be linked to a benchmark you can run.
+> **Status: pre-alpha.** The journal format ([SPEC.md](SPEC.md)), the flight
+> recorder, replay and the CLI work on the demo service. APIs and the format
+> will change before 1.0. Every performance number this project publishes is in
+> [BENCHMARKS.md](BENCHMARKS.md) with the command that measured it.
+
+## Try it
+
+The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
+
+```bash
+git clone https://github.com/kavachlabs/kavach && cd kavach
+go install ./cmd/kavach
+go build -o ledger-old ./examples/ledger
+go build -tags ledgerfix -o ledger-new ./examples/ledger   # the fixed build
+
+./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes fixtures/ledger-*.kavach
+kavach inspect fixtures/ledger-*.kavach                    # what happened, record by record
+kavach replay  fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@31
+kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new
+```
+
+Replay runs no external services: the fixture holds every input, clock read and
+random read the handler made.
+
+## Using it in a service
+
+```go
+func main() {
+	// Lets the kavach CLI replay fixtures with this binary.
+	kavach.MaybeReplay(func() kavach.Handler { return NewLedger() })
+
+	rec := kavach.NewRecorder(NewLedger(), kavach.Options{Service: "ledger", Deliver: publish})
+	for msg := range consume() {
+		rec.Step(kavach.Input{Source: "kafka:wallet", Position: msg.Offset, Data: msg.Value})
+	}
+}
+
+// Handle reads time and randomness through env and emits effects through it.
+func (l *Ledger) Handle(env kavach.Env, in kavach.Input) error { ... }
+```
+
+A handler can also implement `kavach.Snapshotter`, so that fixtures start from
+recent state instead of from the service's first event, and `kavach.Checker` to
+declare invariants that are checked after every step, live and in replay. Use
+[`kavachtest.Run`](kavachtest) to run captured fixtures as Go tests.
 
 ## How it works
 
-1. **Record.** Your service reads time and randomness through injected
-   `kavach.Clock` and `kavach.Rand`, and consumes its inputs from a journal. An
+1. **Record.** Your handler reads time and randomness, and emits effects,
+   through the `kavach.Env` it is given for each input. An
    in-process flight recorder keeps recent journal events in memory and flushes
    them to a fixture file when the handler panics, returns an error, or you
    trigger it.
-2. **Replay.** `kavach replay <fixture>` folds the recorded inputs through your
-   handler, serving every clock and random read from the fixture. Outputs are
+2. **Replay.** `kavach replay <fixture> --bin <your-binary>` folds the recorded
+   inputs through your handler, serving every clock and random read from the fixture. Outputs are
    captured as events, never executed, so replay touches no external system.
 3. **Verify.** `kavach diff <fixture> --old <bin> --new <bin>` reports the first
    output where two builds diverge. A fix only counts when the original failure
-   is gone, declared invariants hold, and mutated variants of the incident
-   journal also pass.
+   is gone, declared invariants hold, and steps before the failure still
+   produce the outputs production saw. (Checking mutated variants of the
+   incident journal is next.)
 
 ## Not in scope
 
@@ -41,6 +83,8 @@ journal-driven Go services.
 | --- | --- |
 | [SPEC.md](SPEC.md) | Journal and fixture format, v0 |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
+| [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
+| [examples/ledger](examples/ledger) | The demo service |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute (DCO sign-off required) |
 
 ## Open source

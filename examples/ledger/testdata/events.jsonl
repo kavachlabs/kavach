@@ -1,0 +1,9 @@
+{"id":"evt-001","type":"deposit","account":"alice","amount":5000}
+{"id":"evt-002","type":"deposit","account":"bob","amount":1200}
+{"id":"evt-003","type":"transfer","account":"alice","to":"bob","amount":750}
+{"id":"evt-004","type":"withdraw","account":"bob","amount":300}
+{"id":"evt-005","type":"withdraw","account":"carol","amount":100}
+{"id":"evt-006","type":"deposit","account":"carol","amount":2500}
+{"id":"evt-007","type":"transfer","account":"carol","to":"alice","amount":400}
+{"id":"evt-008","type":"deposit","account":"bob","amount":null}
+{"id":"evt-009","type":"withdraw","account":"alice","amount":1000}

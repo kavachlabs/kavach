@@ -6,3 +6,6 @@ coverage.*
 .DS_Store
 .idea/
 .vscode/
+/fixtures/
+/ledger-old
+/ledger-new

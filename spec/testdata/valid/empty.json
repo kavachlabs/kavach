@@ -1,0 +1,11 @@
+{
+  "major": 0,
+  "minor": 1,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "producer": "kavach-go/conformance"
+  },
+  "records": null,
+  "truncated": false
+}

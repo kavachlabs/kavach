@@ -63,7 +63,7 @@ whose `meta_len` exceeds 1 MiB.
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `service` | string | yes | Name of the service that produced the journal. |
-| `start` | string | yes | Where the journal starts. In 0.1 the only value is `"genesis"`: the first record is the first event the handler ever consumed, from an empty state. |
+| `start` | string | yes | Where the journal starts. `"genesis"`: the first record is the first event the handler ever consumed, from an empty state. `"snapshot"`: the first record is a `snapshot` record (§4.6) holding the handler's state. |
 | `handler` | string | no | Build identity of the handler that wrote it, e.g. a module version or VCS revision. |
 | `producer` | string | no | Library that wrote the file, e.g. `"kavach-go/0.1.0"`. |
 | `recorded_at` | string | no | RFC 3339 wall-clock time of the flush. Informational only; replay MUST NOT read it. |
@@ -88,8 +88,10 @@ Each record is framed as:
 | payload | rest of body | type-specific (§4) |
 
 Sequence numbers MUST increase by exactly one from each record to the next. In
-a journal with `start: "genesis"` the first record has `seq` 0. A gap or
-repeat is a fatal error.
+a journal with `start: "genesis"` the first record has `seq` 0 and no record is
+a `snapshot`. In a journal with `start: "snapshot"` the first record is a
+`snapshot`, its `seq` may be any value, and no later record is a `snapshot`. A
+gap or repeat, or a misplaced `snapshot`, is a fatal error.
 
 The fixed `body_len` prefix lets a reader skip any record, including one of an
 unknown type, without parsing it.
@@ -163,10 +165,19 @@ Defined kinds: `panic` (the handler panicked), `error` (the handler returned an
 error), `trigger` (a manual flush), `invariant` (a declared invariant failed;
 `message` names it). Other kinds MAY be used; readers MUST accept unknown kinds.
 
-### 4.6 Reserved — `0x06`
+### 4.6 `snapshot` — `0x06`
 
-Reserved for `snapshot`: handler state at a given `seq`, so that a journal can
-start somewhere other than genesis. Not specified in 0.1.
+The handler's state, so that a journal can start somewhere other than genesis.
+Only valid as the first record of a journal with `start: "snapshot"`. Writers
+MUST set the critical flag on it.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| data | `bytes` | The state in the handler's own encoding. Opaque to Kavach. |
+
+A flight recorder keeps a bounded window of history by taking a snapshot every
+N steps and discarding the records before it. Its `seq` keeps counting from the
+journal it was cut from, so record numbers in a fixture match production.
 
 ## 5. Ordering
 
@@ -186,12 +197,13 @@ A writer MUST NOT reorder records within a step.
 ## 6. Replay semantics
 
 To replay a journal, a replayer starts the handler from the state named by
-`start` and, for each `input` in order, runs one handler step:
+`start` (empty, or restored from the `snapshot` record) and, for each `input`
+in order, runs one handler step:
 
-1. When the handler reads the clock, the next unconsumed record of the step
-   MUST be a `clock`; its value is returned. Likewise for `rand`: the handler
-   receives exactly the recorded bytes, and requesting a different number of
-   bytes is a divergence.
+1. When the handler reads the clock, the next unread read of the step (its
+   `clock` and `rand` records, in order) MUST be a `clock`; its value is
+   returned. Likewise for `rand`: the handler receives exactly the recorded
+   bytes, and requesting a different number of bytes is nondeterminism.
 2. When the handler produces an output, it is captured. It is not compared
    against the next recorded `output` until the step ends.
 3. If the handler reads the clock or random source and the next record is of
@@ -200,9 +212,29 @@ To replay a journal, a replayer starts the handler from the state named by
    The same applies if the step ends while `clock` or `rand` records of that
    step remain unread.
 
+**The failing step.** The step whose input is followed by a `panic`, `error`
+or `invariant` marker is the **recorded failure**. A fixed handler is expected
+to behave differently there, and may read more than the failing handler did
+before it stopped. For that step only, rules 1 and 3 are relaxed: `clock` and
+`rand` reads are served from the step's records of that type in recorded order;
+once those run out, a `clock` read returns the last time served and a `rand`
+read returns bytes derived deterministically from the step's `seq` and a read
+counter. A replayer MUST report how many reads it synthesized.
+
 A replay result reports, at least: the steps run, every captured output, any
-panic or error, and the `seq` of the first output that differs from the
-recorded one (the **divergence point**), if any.
+panic or error, and its status:
+
+| Status | Meaning |
+| --- | --- |
+| `nondeterministic@N` | Reads did not match the journal at record `N`. |
+| `still_failing@N` | The step of input `N` panicked or returned an error. |
+| `invariant_violated(X)@N` | Invariant `X` failed after the step of input `N`. |
+| `diverged@N` | A step other than the recorded failure, at input `N`, produced outputs different from those recorded (the **divergence point**). |
+| `fixed` | A failure was recorded; every step ran without any of the above. |
+| `ok` | No failure was recorded; every step ran without any of the above. |
+
+Checks are applied in the order of the table, per step, and replay stops at the
+first one that applies.
 
 Two builds of a handler are compared by replaying the same journal under both
 and reporting the first output where their captured outputs differ.
@@ -227,18 +259,19 @@ notice. Conformance fixtures are regenerated on every 0.x change.
 
 ## 8. Conformance
 
-The conformance suite will live in `spec/testdata/`: each `.kavach` file is
-paired with a `.json` file holding the expected decoding, plus invalid files
-that a reader MUST reject. Any implementation, in any language, that decodes
+The conformance suite lives in [`spec/testdata/`](spec/testdata): each file in
+`valid/` is paired with a `.json` file holding the expected decoding (byte
+fields base64-encoded, record types by name), and every file in `invalid/` MUST
+be rejected. The Go implementation regenerates the suite with
+`go test ./journal -update`. Any implementation, in any language, that decodes
 every valid file to the expected JSON and rejects every invalid one conforms
 to this version.
 
 ## 9. Open questions
 
-- **Starting mid-stream.** A flight recorder that keeps only recent events
-  cannot produce a `genesis` journal for a long-running service. Options: a
-  `snapshot` record (§4.6), or a fixture that references the service's own
-  durable journal by source position. To be decided before the recorder ships.
+- **Starting mid-stream** — *resolved in 0.1 by the `snapshot` record (§4.6).*
+  Referencing the service's own durable log by position was rejected: the
+  fixture would no longer replay on its own, without access to that log.
 - **Concurrency inside a step.** 0.1 assumes the handler reads the clock and
   random source from one goroutine. Concurrent reads within a step would make
   their order nondeterministic.

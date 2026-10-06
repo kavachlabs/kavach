@@ -14,7 +14,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go test -race ./...
+      - name: Demo with the bug fixed
+        run: go test -race -tags ledgerfix ./examples/ledger
 
   dco:
     if: github.event_name == 'pull_request'

@@ -1,0 +1,17 @@
+{
+  "major": 0,
+  "minor": 1,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "rand",
+      "seq": 0,
+      "data": "qrs="
+    }
+  ],
+  "truncated": false
+}
