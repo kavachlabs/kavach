@@ -81,7 +81,3 @@ claude mcp add kavach -- kavach mcp
 
 A verdict that is not a pass is a normal tool result; `isError` is set only
 when a tool could not run (missing file, binary without `kavach.MaybeReplay`).
-
-## Coming later
-
-An `llms.txt`.

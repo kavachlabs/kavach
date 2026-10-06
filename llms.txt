@@ -1,0 +1,28 @@
+# Kavach
+
+> Kavach turns production crashes in journal-driven Go services into deterministic fixtures that AI coding agents can reproduce, fix and verify. A fix counts only when `kavach diff` prints `fixed`: the recorded failure is gone, invariants hold, earlier outputs match production, and at least 10 perturbed variants of the incident (on which the old build fails the same way) pass too. Scope is single-writer, journal-driven Go services. Pre-alpha: APIs and the format will change before 1.0.
+
+Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never edit, regenerate or delete a fixture (`*.kavach`) to make something pass, and report verdicts exactly as Kavach prints them.
+
+## Agent guide
+
+- [AGENTS.md](AGENTS.md): the reproduce, fix, verify loop; every verdict and what to do about it; exit codes; the MCP tools.
+
+## Docs
+
+- [README.md](README.md): the demo (a wallet ledger that crashes on `"amount": null`), how recording, replay and verification work, and what is out of scope.
+- [SPEC.md](SPEC.md): the journal and fixture format, and the fix-verification rules (section 6.1).
+- [BENCHMARKS.md](BENCHMARKS.md): every published number, with the command that measured it.
+- [CONTRIBUTING.md](CONTRIBUTING.md): DCO sign-off is required on every commit; keep pull requests small.
+
+## Code
+
+- [examples/ledger](examples/ledger): the demo service, with a fixture (`testdata/null-amount.kavach`), the planted bug, a correct fix (`-tags ledgerfix`) and a too-narrow one (`-tags ledgerpartialfix`).
+- [bench](bench): ten planted bugs, each with a correct and a too-narrow fix, run with `go test ./bench -v`.
+- [kavachtest](kavachtest): `kavachtest.Run` runs captured fixtures as Go tests.
+- [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`) and the MCP server (`kavach mcp`).
+
+## Optional
+
+- [LICENSE](LICENSE): Apache 2.0.
+- [DCO](DCO): Developer Certificate of Origin text.
