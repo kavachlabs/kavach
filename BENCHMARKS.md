@@ -103,3 +103,13 @@ type-assertion bug validated `qty` but not `price`, and was rejected by the
 variant that removes `price`; it was fixed in the benchmark, and the numbers
 above are for the fixed version. Each narrow fix is run once, and none
 passed, so there is no false-accept rate yet beyond "0 of 10".
+
+**End to end.** `go test ./bench -run EndToEnd -v` repeats the ten bugs through
+real binaries instead of in-process calls: each bug is built as a service
+(`bench/cmd/benchsvc`) in its buggy, fixed and narrow forms, the buggy build
+records its own fixture, and the `kavach` CLI inspects it, replays it, accepts
+the correct fix, rejects the narrow fix and saves a failing variant that still
+fails the narrow build and passes the correct one. The same verdicts are then
+read back over `kavach mcp`. It builds 31 binaries (about 7 s here) and is
+skipped under `-short`.
+
