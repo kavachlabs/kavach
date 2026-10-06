@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -34,17 +35,23 @@ Usage:
 
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <replay-binary> [--json]
-  kavach diff    <fixture> --old <binary> --new <binary> [--json]
+  kavach diff    <fixture> --old <binary> --new <binary> [--variants N] [--keep DIR] [--json]
   kavach version
 
 A replay binary is any Go binary whose main calls kavach.MaybeReplay. --bin
 defaults to $KAVACH_BIN.
 
+diff accepts a fix only if the new binary replays the fixture as fixed and also
+passes at least N (default 10) variants of the incident: the failing input with
+fields changed, moved earlier, earlier inputs dropped or redelivered, the clock
+shifted. A variant counts only if the old binary fails on it exactly as it did
+in production. Variants the new binary fails are saved for kavach replay.
+
 On a terminal, output is colored and starts with a banner; --no-banner or
 KAVACH_NO_BANNER=1 drops the banner, NO_COLOR=1 drops all styling. Piped output
 and --json are never styled.
 
-Exit status: 0 when the replay (of the new binary, for diff) is ok or fixed,
+Exit status: 0 when the replay is ok or fixed (for diff: the verdict is fixed),
 1 when it is not, 2 for usage errors, 3 when a fixture or binary is unusable.
 `
 
@@ -149,6 +156,9 @@ func cmdInspect(u ui, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%s %s · start %s · %d records\n", u.paint("service", ansiBold), m.Service, m.Start, len(j.Records))
 	if m.Handler != "" || m.Producer != "" || m.RecordedAt != "" {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("handler %s · producer %s · recorded %s", orDash(m.Handler), orDash(m.Producer), orDash(m.RecordedAt)), ansiDim))
+	}
+	if v := m.Variant; v != nil {
+		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("variant %d: %s · expected failure at seq %d: %s", v.ID, v.Mutation, v.Incident, v.Failure), ansiYellow))
 	}
 	if j.Truncated {
 		fmt.Fprintln(stdout, u.paint("warning: file ends inside a record; showing complete records only", ansiYellow))
@@ -307,12 +317,14 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		u.header(stdout, "KAVACH DETERMINISTIC REPLAY")
 		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
 		fmt.Fprintf(stdout, "%s%s · start %s · %d records · %d steps replayed\n", u.label("service", 10), res.Service, res.Start, res.Records, len(res.Steps))
-		if f := res.Recorded; f != nil {
+		if res.Variant != "" {
+			fmt.Fprintf(stdout, "%s%s\n", u.label("variant", 10), u.paint(res.Variant, ansiYellow))
+		} else if f := res.Recorded; f != nil {
 			fmt.Fprintf(stdout, "%s%s\n", u.label("recorded", 10), u.paint(fmt.Sprintf("%s at seq %d: %s", f.Kind, f.Seq, f.Message), markerColor(f.Kind)))
 		} else {
 			fmt.Fprintf(stdout, "%s%s\n", u.label("recorded", 10), "no failure")
 		}
-		fmt.Fprintf(stdout, "%s%s\n", u.label("result", 10), u.verdict(res))
+		fmt.Fprintf(stdout, "%s%s\n", u.label("result", 10), u.verdict(res.Status, res.String()))
 		if res.Detail != "" {
 			fmt.Fprintf(stdout, "          %s\n", u.paint(res.Detail, verdictColor(res.Status)))
 		}
@@ -344,7 +356,9 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("diff", stderr)
 	oldBin := fs.String("old", "", "replay binary built from the code that failed")
 	newBin := fs.String("new", "", "replay binary built from the candidate fix")
-	asJSON := fs.Bool("json", false, "print the comparison as JSON")
+	minVariants := fs.Int("variants", kavach.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
+	keep := fs.String("keep", "", "directory to save failing variants in (default: a new temporary directory)")
+	asJSON := fs.Bool("json", false, "print the verification as JSON")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return exitUsage
@@ -357,35 +371,78 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kavach diff: both --old and --new are required")
 		return exitUsage
 	}
-	oldRes, _, err := replayWith(*oldBin, path)
+	if *minVariants < 0 {
+		fmt.Fprintln(stderr, "kavach diff: --variants must not be negative")
+		return exitUsage
+	}
+	j, err := journal.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(stderr, "kavach diff: old: %v\n", err)
+		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
 		return exitError
 	}
-	newRes, _, err := replayWith(*newBin, path)
+	work, err := os.MkdirTemp("", "kavach-diff-")
 	if err != nil {
-		fmt.Fprintf(stderr, "kavach diff: new: %v\n", err)
+		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
 		return exitError
 	}
-	d := kavach.Compare(oldRes, newRes)
+	defer os.RemoveAll(work)
+
+	opts := kavach.VerifyOptions{MinVariants: *minVariants, Parallel: runtime.NumCPU()}
+	if *minVariants == 0 {
+		opts.MinVariants = -1
+	}
+	start := time.Now()
+	v, err := kavach.VerifyWith(j, binReplayer(*oldBin, path, work), binReplayer(*newBin, path, work), opts)
+	wall := time.Since(start)
+	if err != nil {
+		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
+		return exitError
+	}
+	saved, err := saveFailingVariants(v, path, *keep)
+	if err != nil {
+		fmt.Fprintf(stderr, "kavach diff: saving failing variants: %v\n", err)
+		return exitError
+	}
+	d := kavach.Compare(v.Old, v.New)
+
 	if *asJSON {
+		checks := make([]map[string]any, len(v.Variants))
+		for i, c := range v.Variants {
+			m := map[string]any{"id": c.ID, "mutation": c.Mutation, "incident_seq": c.Incident,
+				"reproduces": c.Reproduces, "old": c.Old, "passed": c.Passed}
+			if c.Reproduces {
+				m["new"] = c.New
+			}
+			if c.Detail != "" {
+				m["detail"] = c.Detail
+			}
+			if f := saved[c.ID]; f != "" {
+				m["file"] = f
+			}
+			checks[i] = m
+		}
 		if writeJSON(stdout, stderr, map[string]any{
-			"fixture": path, "old": oldRes.String(), "new": newRes.String(),
-			"new_detail": newRes.Detail, "divergence": d,
+			"fixture": path, "verdict": v.String(), "status": v.Status, "detail": v.Detail,
+			"old": v.Old.String(), "new": v.New.String(), "new_detail": v.New.Detail, "divergence": d,
+			"variants": map[string]any{
+				"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
+				"passing": v.Passing, "checks": checks,
+			},
+			"wall_ms": ms(wall),
 		}) != exitPass {
 			return exitError
 		}
 	} else {
 		u.printBanner(stdout)
 		u.header(stdout, "KAVACH FIX VERIFICATION")
-		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 9), path)
-		fmt.Fprintf(stdout, "%s%s\n", u.label("old", 9), u.verdict(oldRes))
-		fmt.Fprintf(stdout, "%s%s\n", u.label("new", 9), u.verdict(newRes))
-		if newRes.Detail != "" && !newRes.Passed() {
-			fmt.Fprintf(stdout, "         %s\n", u.paint(newRes.Detail, verdictColor(newRes.Status)))
+		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
+		fmt.Fprintf(stdout, "%s%s\n", u.label("old", 10), u.verdict(v.Old.Status, v.Old.String()))
+		fmt.Fprintf(stdout, "%s%s\n", u.label("new", 10), u.verdict(v.New.Status, v.New.String()))
+		if v.New.Detail != "" && !v.New.Passed() {
+			fmt.Fprintf(stdout, "          %s\n", u.paint(v.New.Detail, verdictColor(v.New.Status)))
 		}
 		if d == nil {
-			fmt.Fprintf(stdout, "%sidentical at every step\n", u.label("outputs", 9))
+			fmt.Fprintf(stdout, "%sidentical at every step\n", u.label("outputs", 10))
 		} else {
 			fmt.Fprintf(stdout, "%s\n", u.paint(fmt.Sprintf("first divergence at step seq %d: %s", d.Seq, d.Detail), ansiBold, ansiYellow))
 			if d.Output >= 0 {
@@ -393,11 +450,89 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "  %s  %s\n", u.paint("new", ansiBold, ansiGreen), u.paint(showOutput(d.New), ansiGreen))
 			}
 		}
+		if v.Candidates > 0 {
+			fmt.Fprintf(stdout, "%s%d of %d reproduce the incident on the old build · %d of those pass on the new build\n",
+				u.label("variants", 10), v.Reproducing, v.Candidates, v.Passing)
+			shown := 0
+			for _, c := range v.Variants {
+				if !c.Reproduces || c.Passed {
+					continue
+				}
+				if shown == 5 {
+					fmt.Fprintf(stdout, "          %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.Reproducing-v.Passing-shown), ansiDim))
+					break
+				}
+				shown++
+				fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
+				fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
+				if f := saved[c.ID]; f != "" {
+					fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
+				}
+			}
+		}
+		fmt.Fprintf(stdout, "%s%s\n", u.label("verdict", 10), u.verdict(v.Status, v.String()))
+		if v.Status == kavach.StatusVariantFailed || v.Status == kavach.StatusUnverified {
+			fmt.Fprintf(stdout, "          %s\n", u.paint(v.Detail, verdictColor(v.Status)))
+		}
+		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms for %d replays", ms(wall), replays(v)), ansiYellow))
+		if u.color && v.Status == kavach.StatusVariantFailed {
+			if f := saved[v.Variant]; f != "" {
+				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --bin %s", f, *newBin), ansiDim))
+			}
+		}
 	}
-	if newRes.Passed() {
+	if v.Passed() {
 		return exitPass
 	}
 	return exitFail
+}
+
+// binReplayer replays journals with a replay binary: the fixture at path
+// itself, and anything else (variants) after writing it under dir.
+func binReplayer(bin, path, dir string) kavach.ReplayFunc {
+	return func(j *journal.Journal) (*kavach.Result, error) {
+		f := path
+		if v := j.Header.Meta.Variant; v != nil {
+			f = filepath.Join(dir, fmt.Sprintf("variant-%02d.kavach", v.ID))
+			if _, err := os.Stat(f); err != nil {
+				if err := journal.WriteFile(f, j.Header.Meta, j.Records); err != nil {
+					return nil, err
+				}
+			}
+		}
+		res, _, err := replayWith(bin, f)
+		return res, err
+	}
+}
+
+// saveFailingVariants writes the variants the new build failed to dir (a new
+// temporary directory if empty) and returns their paths by variant ID.
+func saveFailingVariants(v *kavach.Verification, fixture, dir string) (map[int]string, error) {
+	saved := map[int]string{}
+	for _, c := range v.Variants {
+		if !c.Reproduces || c.Passed {
+			continue
+		}
+		if dir == "" {
+			var err error
+			if dir, err = os.MkdirTemp("", "kavach-variants-"); err != nil {
+				return nil, err
+			}
+		} else if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		base := strings.TrimSuffix(filepath.Base(fixture), ".kavach")
+		f := filepath.Join(dir, fmt.Sprintf("%s.variant-%02d.kavach", base, c.ID))
+		if err := journal.WriteFile(f, c.Journal.Header.Meta, c.Journal.Records); err != nil {
+			return nil, err
+		}
+		saved[c.ID] = f
+	}
+	return saved, nil
+}
+
+func replays(v *kavach.Verification) int {
+	return 2 + v.Candidates + v.Reproducing
 }
 
 func showOutput(o *kavach.Output) string {

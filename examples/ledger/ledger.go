@@ -51,6 +51,9 @@ func (l *Ledger) Handle(env kavach.Env, in kavach.Input) error {
 	if fixNullAmount && ev.Amount == nil {
 		return reject(env, ev, "missing amount")
 	}
+	if partialFix && ev.Type == "deposit" && ev.Amount == nil {
+		return reject(env, ev, "missing amount")
+	}
 	amount := *ev.Amount
 	if amount <= 0 {
 		return reject(env, ev, "amount must be positive")

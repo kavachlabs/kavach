@@ -64,6 +64,7 @@ type Result struct {
 	Start     string       `json:"start"`
 	Records   int          `json:"records"`
 	Recorded  *Failure     `json:"recorded_failure,omitempty"`
+	Variant   string       `json:"variant,omitempty"` // the mutation, when replaying a variant journal
 	Steps     []StepResult `json:"steps"`
 }
 
@@ -105,6 +106,12 @@ type step struct {
 func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 	h := newHandler()
 	res := &Result{Service: j.Header.Meta.Service, Start: j.Header.Meta.Start, Records: len(j.Records), Steps: []StepResult{}}
+	// A variant never happened, so it has no recorded outputs to match and its
+	// recorded reads are only a source of plausible values: every step is lenient.
+	variant := j.Header.Meta.Variant != nil
+	if variant {
+		res.Variant = j.Header.Meta.Variant.Mutation
+	}
 
 	recs := j.Records
 	if j.Header.Meta.Start == journal.StartSnapshot {
@@ -138,7 +145,7 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 	env := &replayEnv{}
 	for _, st := range steps {
 		seq := st.input.Seq
-		env.reset(st, st.marker != nil)
+		env.reset(st, variant || st.marker != nil)
 		sr := StepResult{Seq: seq}
 		pv, panicked, herr := runReplayStep(h, env, Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
 		sr.Outputs = append([]Output{}, env.outs...)
@@ -167,7 +174,7 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 			res.Invariant = name
 			return res.set(StatusInvariantViolated, seq, ierr.Error()), nil
 		}
-		if st.marker == nil {
+		if st.marker == nil && !variant {
 			if d := diffOutputs(st.outputs, sr.Outputs); d != "" {
 				return res.set(StatusDiverged, seq, d), nil
 			}

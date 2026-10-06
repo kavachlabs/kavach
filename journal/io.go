@@ -23,6 +23,21 @@ type Meta struct {
 	Handler    string `json:"handler,omitempty"`
 	Producer   string `json:"producer,omitempty"`
 	RecordedAt string `json:"recorded_at,omitempty"`
+	// Variant is set on journals derived from a recorded one by perturbing it
+	// (SPEC.md §3.2). They are replayed leniently and carry no outputs.
+	Variant *Variant `json:"variant,omitempty"`
+}
+
+// Variant describes how a journal was derived from a recorded incident.
+type Variant struct {
+	ID       int    `json:"id"`
+	Mutation string `json:"mutation"`
+	// Incident is the seq of the input on which the old build is expected to
+	// fail the way it failed in production.
+	Incident uint64 `json:"incident"`
+	// Failure is the recorded failure: "panic: <message>", "error: <message>"
+	// or "invariant: <name>".
+	Failure string `json:"failure"`
 }
 
 func (m Meta) validate() error {

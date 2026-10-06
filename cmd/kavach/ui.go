@@ -112,17 +112,19 @@ var statusStyle = map[kavach.Status]struct{ bg, fg, text string }{
 	kavach.StatusDiverged:          {"\033[48;5;208m", ansiOrange, "DIVERGED"},
 	kavach.StatusInvariantViolated: {"\033[48;5;201m", ansiMagenta, "INVARIANT VIOLATED"},
 	kavach.StatusNondeterministic:  {"\033[48;5;220m", ansiYellow, "NONDETERMINISTIC"},
+	kavach.StatusVariantFailed:     {"\033[48;5;196m", ansiRed, "VARIANT FAILED"},
+	kavach.StatusUnverified:        {"\033[48;5;220m", ansiYellow, "UNVERIFIED"},
 }
 
-// verdict renders a result: a colored badge followed by the exact verdict
+// verdict renders a verdict: a colored badge followed by the exact verdict
 // string when color is on, the verdict string alone when it is off.
-func (u ui) verdict(res *kavach.Result) string {
-	st, ok := statusStyle[res.Status]
+func (u ui) verdict(status kavach.Status, verdict string) string {
+	st, ok := statusStyle[status]
 	if !u.color || !ok {
-		return res.String()
+		return verdict
 	}
 	badge := st.bg + ansiOnBlack + ansiBold + " " + st.text + " " + ansiReset
-	return badge + " " + u.paint(res.String(), ansiBold, st.fg)
+	return badge + " " + u.paint(verdict, ansiBold, st.fg)
 }
 
 // verdictColor returns the foreground color for a status.

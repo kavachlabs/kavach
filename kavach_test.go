@@ -26,6 +26,7 @@ type wallet struct {
 	fixed      bool // reject "null" instead of crashing
 	newFormat  bool // change the output format of every step
 	extraClock bool // read the clock twice per step
+	lateFormat bool // change the output format after 2023
 	failOn     string
 }
 
@@ -61,7 +62,7 @@ func (w *wallet) Handle(env kavach.Env, in kavach.Input) error {
 	var id [8]byte
 	env.Read(id[:])
 	format := "%s=%d at %d id %x"
-	if w.newFormat {
+	if w.newFormat || w.lateFormat && at.Year() > 2023 {
 		format = "%s balance %d at %d id %x"
 	}
 	env.Emit("entries", []byte(fmt.Sprintf(format, acct, w.bal[acct], at.UnixNano(), id)))

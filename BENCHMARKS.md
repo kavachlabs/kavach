@@ -16,6 +16,10 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 | Recorder overhead, happy path | < 100 ns/event | median 82.6 ns/event; range 79.0–102.8 over 5 runs (one run over target) | `go test -run '^$' -bench RecorderStep -benchtime 2s -count 5 .` |
 | Replay of demo crash fixture, in-process | — | median 61.1 µs; range 59.7–67.3 µs over 5 runs | `go test -run '^$' -bench ReplayFixture -benchtime 2s -count 5 ./examples/ledger` |
 | Replay of demo crash fixture, CLI end to end | < 50 ms | median 5.9 ms, p95 9.1 ms (100 runs) | see below |
+| Fix verification of the demo crash, in-process (2 replays + 44 variants old + 41 new) | — | median 5.9 ms; range 5.7–6.2 ms over 5 runs | `go test -run '^$' -bench VerifyFixture -benchtime 2s -count 5 ./examples/ledger` |
+| Fix verification of the demo crash, `kavach diff` end to end (87 binary runs, 4 in parallel) | — | correct fix: median 196.4 ms, p95 224.3 ms; partial fix: median 215.7 ms, p95 273.5 ms (50 runs each) | see below |
+| Variants of the demo crash that reproduce it on the old build | ≥ 10 | 41 of 44 | `go test -run VerifyCandidateFixes -v ./examples/ledger` |
+| Wrong fixes rejected by variants (demo crash) | — | 2 of 2 (`skip evt-008`: 5 variants fail; `deposits only`: 4 fail); correct fix passes 41 of 41 | same |
 | Demo crash fixture size | < 100 KB | 3,815 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
 | Determinism | 1,000 replays byte-identical | 1,000 / 1,000 | `go test -run Determinism ./examples/ledger` |
 | Test coverage, core packages | ≥ 80% | `kavach` 83.3%, `journal` 85.8% | `go test -cover . ./journal` |
@@ -54,6 +58,19 @@ for _ in range(100):
 ts.sort()
 print(f"median {statistics.median(ts):.1f} ms  p95 {ts[94]:.1f} ms")
 EOF
+```
+
+**Fix verification.** In process, `kavach.Verify` with the planted-bug ledger as
+the old build and the correct nil check as the new one, run serially. End to
+end, wall time of `kavach diff` from process start to exit, which starts a
+replay binary for each of the 87 replays, at most one per CPU at a time:
+
+```bash
+go build -o /tmp/ledger-new -tags ledgerfix ./examples/ledger
+go build -o /tmp/ledger-partial -tags ledgerpartialfix ./examples/ledger
+# then time, as above:
+#   kavach diff examples/ledger/testdata/null-amount.kavach --old /tmp/ledger --new /tmp/ledger-new
+#   kavach diff examples/ledger/testdata/null-amount.kavach --old /tmp/ledger --new /tmp/ledger-partial --keep /tmp/v
 ```
 
 **Determinism.** The `Result` of each replay, serialized as JSON, is compared

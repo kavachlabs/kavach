@@ -21,12 +21,19 @@ git clone https://github.com/kavachlabs/kavach && cd kavach
 go install ./cmd/kavach
 go build -o ledger-old ./examples/ledger
 go build -tags ledgerfix -o ledger-new ./examples/ledger   # the fixed build
+go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger  # a fix that is too narrow
 
 ./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes fixtures/ledger-*.kavach
 kavach inspect fixtures/ledger-*.kavach                    # what happened, record by record
 kavach replay  fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@31
-kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new
+kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
+kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@22
 ```
+
+The partial fix guards only deposits, the event type in the incident. It
+passes the recorded crash, but `diff` also replays 44 variants of it, and the
+old build crashes the same way on 41 of them; the partial fix crashes on 4,
+starting with the same event as a `transfer`.
 
 Replay runs no external services: the fixture holds every input, clock read and
 random read the handler made.
@@ -79,9 +86,12 @@ declare invariants that are checked after every step, live and in replay. Use
    captured as events, never executed, so replay touches no external system.
 3. **Verify.** `kavach diff <fixture> --old <bin> --new <bin>` reports the first
    output where two builds diverge. A fix only counts when the original failure
-   is gone, declared invariants hold, and steps before the failure still
-   produce the outputs production saw. (Checking mutated variants of the
-   incident journal is next.)
+   is gone, declared invariants hold, steps before the failure still produce
+   the outputs production saw, and the fix also passes at least 10 **variants**
+   of the incident: perturbed copies of the journal (fields of the failing
+   event changed, events reordered, dropped or redelivered, the clock shifted)
+   on which the old build fails exactly as it did in production. A fix that
+   only handles the recorded event does not pass. See [SPEC.md §6.1](SPEC.md#61-verifying-a-fix).
 
 ## Not in scope
 

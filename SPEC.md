@@ -67,6 +67,7 @@ whose `meta_len` exceeds 1 MiB.
 | `handler` | string | no | Build identity of the handler that wrote it, e.g. a module version or VCS revision. |
 | `producer` | string | no | Library that wrote the file, e.g. `"kavach-go/0.1.0"`. |
 | `recorded_at` | string | no | RFC 3339 wall-clock time of the flush. Informational only; replay MUST NOT read it. |
+| `variant` | object | no | Present only on a **variant** (§6.1): a journal derived from a recorded incident by perturbing it. Keys: `id` (number), `mutation` (string, human-readable), `incident` (number, the `seq` of the input on which the old build is expected to fail) and `failure` (string, the recorded failure: `"panic: <message>"`, `"error: <message>"` or `"invariant: <name>"`). |
 
 ### 3.3 Records
 
@@ -238,6 +239,40 @@ first one that applies.
 
 Two builds of a handler are compared by replaying the same journal under both
 and reporting the first output where their captured outputs differ.
+
+**Variants.** A journal whose header has a `variant` key never happened, so it
+holds no `output` or `marker` records and its `clock` and `rand` records are
+only a source of plausible values. A replayer MUST treat every step of a
+variant like the failing step above (lenient reads), MUST NOT report
+`diverged`, and reports `ok` when no other status applies.
+
+### 6.1 Verifying a fix
+
+A candidate fix is checked against an incident journal with two builds: the
+**old** build, which failed in production, and the **new** one. The fix counts
+only if:
+
+1. the new build replays the recorded journal as `fixed`;
+2. at least *M* variants of the incident **reproduce** it: replayed under the
+   old build, each fails at its `incident` input exactly as recorded (same
+   `failure` string, compared in full); variants that do not reproduce say
+   nothing about the fix and are ignored; and
+3. the new build passes every reproducing variant: it replays as `ok`, and
+   every step before the `incident` input produces the old build's outputs.
+
+The reference implementation uses *M* = 10 and derives up to 64 variants from
+an incident: the failing input's JSON fields set to values the same field
+takes in other inputs and to nearby values, removed, or added from other
+inputs; the failing input moved earlier; earlier inputs dropped or delivered
+twice; and every clock read shifted. Variant generation is deterministic.
+
+| Verdict | Meaning |
+| --- | --- |
+| `variant_failed(K)@N` | Rule 3 failed for variant `K`, at input `N` of the variant. |
+| `unverified` | Rules 1 and 3 hold, but fewer than *M* variants reproduce the incident. |
+
+Otherwise the verdict is the new build's replay status on the recorded journal
+(`fixed` when all three rules hold).
 
 ## 7. Versioning and compatibility
 

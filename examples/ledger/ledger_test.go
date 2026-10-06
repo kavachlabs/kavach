@@ -80,10 +80,11 @@ func TestCLI(t *testing.T) {
 			t.Fatalf("go build %v: %v\n%s", args, err, b)
 		}
 	}
-	cli, oldBin, newBin := exe("kavach"), exe("ledger-old"), exe("ledger-new")
+	cli, oldBin, newBin, partialBin := exe("kavach"), exe("ledger-old"), exe("ledger-new"), exe("ledger-partial")
 	build(cli, "github.com/kavachlabs/kavach/cmd/kavach")
 	build(oldBin, ".")
 	build(newBin, "-tags", "ledgerfix", ".")
+	build(partialBin, "-tags", "ledgerpartialfix", ".")
 
 	// The buggy service crashes and leaves a fixture behind.
 	fx := filepath.Join(dir, "fixtures")
@@ -133,8 +134,22 @@ func TestCLI(t *testing.T) {
 	mustContain(run(1, "replay", paths[0], "--bin", oldBin), "still_failing@31")
 	mustContain(run(0, "replay", "--json", paths[0], "--bin", newBin), `"verdict": "fixed"`)
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", newBin),
-		"old      still_failing@31", "new      fixed", "first divergence at step seq 31", "missing amount")
-	mustContain(run(1, "diff", paths[0], "--old", newBin, "--new", oldBin), "new      still_failing@31")
+		"old       still_failing@31", "new       fixed", "first divergence at step seq 31", "missing amount",
+		"variants  41 of 44 reproduce the incident on the old build · 41 of those pass", "verdict   fixed")
+	mustContain(run(1, "diff", paths[0], "--old", newBin, "--new", oldBin), "verdict   still_failing@31")
+
+	// A fix that passes the recorded incident but not its variants is rejected,
+	// and the failing variant is saved for replay.
+	keep := filepath.Join(dir, "variants")
+	out := run(1, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--keep", keep)
+	mustContain(out, "new       fixed", `"type" "deposit" → "transfer"`, "verdict   variant_failed(6)@22")
+	saved, _ := filepath.Glob(filepath.Join(keep, "*.kavach"))
+	if len(saved) == 0 {
+		t.Fatalf("no failing variants saved:\n%s", out)
+	}
+	mustContain(run(1, "replay", saved[0], "--bin", partialBin), "still_failing@22")
+	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--variants", "0"), "verdict   fixed")
+	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 41`)
 
 	// Usage and environment errors.
 	run(2, "replay")

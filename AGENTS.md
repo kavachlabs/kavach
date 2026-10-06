@@ -22,7 +22,15 @@ saying how it failed. A **replay binary** is the service's own binary; its
 4. **Verify.**
    `go build -o /tmp/new ./path/to/service`, then
    `kavach diff <fixture> --old /tmp/old --new /tmp/new --json`.
-   The fix is accepted only when the new verdict is `fixed`.
+   The fix is accepted only when `verdict` is `fixed`. Besides the recorded
+   incident, `diff` replays at least 10 **variants** of it (the failing input
+   with fields changed or removed, moved earlier, earlier inputs dropped or
+   redelivered, the clock shifted) that make the old build fail the same way.
+   A fix that only handles the exact recorded input fails one of them.
+   If the verdict is `variant_failed(K)@N`, the variant is saved (its path is
+   under `variants.checks[].file` in the JSON); reproduce it with
+   `kavach replay <variant> --bin /tmp/new` and generalize the fix. Never
+   special-case the variant.
 5. **Keep it as a regression test.** Copy the fixture into the service's
    `testdata/` and run it with `kavachtest.Run` in a Go test.
 
@@ -30,12 +38,18 @@ saying how it failed. A **replay binary** is the service's own binary; its
 
 | Verdict | Meaning | What to do |
 | --- | --- | --- |
-| `fixed` | The recorded failure is gone, invariants hold, earlier steps match production. | Done. |
+| `fixed` | The recorded failure is gone, invariants hold, earlier steps match production, and every variant passes. | Done. |
+| `variant_failed(K)@N` | The recorded incident passes, but variant `K` still fails at its input `N`. | Your fix is too narrow. Replay the saved variant. |
+| `unverified` | The recorded incident passes, but fewer than 10 variants reproduce it on the old build. | Report it; do not claim the fix is verified. |
 | `still_failing@N` | The step of input `N` panicked or returned an error. | Keep working. |
 | `invariant_violated(X)@N` | Declared invariant `X` broke after input `N`. | Your fix corrupted state. |
 | `diverged@N` | A step before the failure produced different outputs from production. | Your fix changed behavior it should not have. |
 | `nondeterministic@N` | The handler read time or randomness differently from the recording. | Read time and randomness only through `env`, in the same order. |
 | `ok` | The fixture recorded no failure and replay matched. | Nothing to fix. |
+
+`still_failing`, `invariant_violated`, `diverged` and `nondeterministic` from
+`diff` refer to the recorded fixture; on a replayed variant they refer to the
+variant.
 
 Exit codes: `0` for `fixed` or `ok`, `1` for any other verdict, `2` for usage
 errors, `3` when the fixture or binary cannot be used.
@@ -50,6 +64,5 @@ errors, `3` when the fixture or binary cannot be used.
 
 ## Coming later
 
-Checking mutated variants of the incident journal (a fix that only handles the
-exact recorded input will be rejected), an MCP server exposing
-`kavach_list_incidents`, `kavach_replay` and `kavach_diff`, and an `llms.txt`.
+An MCP server exposing `kavach_list_incidents`, `kavach_replay` and
+`kavach_diff`, and an `llms.txt`.
