@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,8 +38,16 @@ Usage:
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <replay-binary> [--json]
   kavach diff    <fixture> --old <binary> --new <binary> [--variants N] [--keep DIR] [--json]
+  kavach scrub   <fixture> [-o out] [--bin <replay-binary>] [--json]
   kavach mcp
   kavach version
+
+scrub rewrites a fixture with personal data replaced (emails, phone and card
+numbers, IP addresses, tokens, secret environment variables). Recorders already
+scrub by default (Options.NoScrub turns that off), so this is for fixtures
+recorded unscrubbed. With --bin it replays the original and the scrubbed copy
+and writes the copy only if both give the same verdict. The default output is
+<fixture>.scrubbed.kavach; the original is never modified.
 
 list finds fixtures (*.kavach) under dir (default: the current directory).
 mcp serves kavach_list_incidents, kavach_replay and kavach_diff to an AI agent
@@ -91,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdDiff(u, args, stdout, stderr)
 	case "list":
 		return cmdList(u, args, stdout, stderr)
+	case "scrub":
+		return cmdScrub(u, args, stdout, stderr)
 	case "mcp":
 		return cmdMCP(args, os.Stdin, stdout, stderr)
 	case "version":
@@ -168,6 +179,9 @@ func cmdInspect(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("handler %s · producer %s · recorded %s", orDash(m.Handler), orDash(m.Producer), orDash(m.RecordedAt)), ansiDim))
 	}
 	printEnv(u, stdout, m.Env)
+	if sc := m.Scrub; sc != nil {
+		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("scrubbed (rules v%d): %s", sc.Version, redactionSummary(sc.Redactions)), ansiDim))
+	}
 	if v := m.Variant; v != nil {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("variant %d: %s · expected failure at seq %d: %s", v.ID, v.Mutation, v.Incident, v.Failure), ansiYellow))
 	}
@@ -606,4 +620,107 @@ func printEnv(u ui, w io.Writer, e *journal.Env) {
 	for _, d := range kavach.EnvDrift(e, kavach.CaptureEnv()) {
 		fmt.Fprintln(w, u.paint("drift: "+d, ansiYellow))
 	}
+}
+
+func redactionSummary(m map[string]int) string {
+	if len(m) == 0 {
+		return "nothing to redact"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%d %s", m[k], k)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func cmdScrub(u ui, args []string, stdout, stderr io.Writer) int {
+	fs := newFlags("scrub", stderr)
+	outPath := fs.String("o", "", "output path (default <fixture>.scrubbed.kavach)")
+	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "replay binary used to check that scrubbing keeps the verdict")
+	asJSON := fs.Bool("json", false, "print the result as JSON")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return exitUsage
+	}
+	path, ok := oneFixture("scrub", pos, stderr)
+	if !ok {
+		return exitUsage
+	}
+	j, err := journal.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+		return exitError
+	}
+	if j.Header.Meta.Scrub != nil {
+		fmt.Fprintf(stderr, "kavach scrub: %s is already scrubbed\n", path)
+		return exitPass
+	}
+	if *outPath == "" {
+		*outPath = strings.TrimSuffix(path, ".kavach") + ".scrubbed.kavach"
+	}
+	if filepath.Clean(*outPath) == filepath.Clean(path) {
+		fmt.Fprintln(stderr, "kavach scrub: refusing to overwrite the original fixture")
+		return exitUsage
+	}
+	meta, recs := kavach.NewScrubber().Journal(j.Header.Meta, j.Records)
+
+	res := map[string]any{"fixture": path, "output": *outPath, "redactions": meta.Scrub.Redactions}
+	code := exitPass
+	if *bin != "" {
+		before, _, err := replayWith(*bin, path)
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+			return exitError
+		}
+		tmp, err := os.CreateTemp("", "kavach-scrub-*.kavach")
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+			return exitError
+		}
+		tmp.Close()
+		defer os.Remove(tmp.Name())
+		if err := journal.WriteFile(tmp.Name(), meta, recs); err != nil {
+			fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+			return exitError
+		}
+		after, _, err := replayWith(*bin, tmp.Name())
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+			return exitError
+		}
+		res["verdict_before"], res["verdict_after"] = before.String(), after.String()
+		if before.String() != after.String() {
+			res["written"] = false
+			code = exitFail
+		}
+	}
+	if code == exitPass {
+		if err := journal.WriteFile(*outPath, meta, recs); err != nil {
+			fmt.Fprintf(stderr, "kavach scrub: %v\n", err)
+			return exitError
+		}
+		res["written"] = true
+	}
+	if *asJSON {
+		writeJSON(stdout, stderr, res)
+		return code
+	}
+	u.printBanner(stdout)
+	u.header(stdout, "KAVACH SCRUB")
+	fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
+	fmt.Fprintf(stdout, "%s%s\n", u.label("redacted", 10), redactionSummary(meta.Scrub.Redactions))
+	if b, ok := res["verdict_before"]; ok {
+		fmt.Fprintf(stdout, "%s%v before, %v after\n", u.label("verdict", 10), b, res["verdict_after"])
+	}
+	if code == exitPass {
+		fmt.Fprintf(stdout, "%s%s\n", u.label("wrote", 10), *outPath)
+	} else {
+		fmt.Fprintln(stdout, u.paint("scrubbing changed the verdict, so no file was written: the failure depends on personal data the scrubber replaced", ansiRed))
+	}
+	return code
 }

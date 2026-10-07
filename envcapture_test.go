@@ -13,8 +13,14 @@ func TestFixtureCarriesEnvironment(t *testing.T) {
 	t.Setenv("KAVACH_TEST_DB_PASSWORD", "hunter2")
 	t.Setenv("KAVACH_TEST_REGION", "eu-1")
 	t.Setenv("TZ", "Asia/Kolkata")
-	path := recordCrash(t)
-	j, err := journal.ReadFile(path)
+	opts := testOptions(t)
+	opts.NoScrub = true
+	r := kavach.NewRecorder(newWallet(), opts)
+	var pe *kavach.PanicError
+	if err := feed(t, r, "alice:10", "bob:null"); !errors.As(err, &pe) {
+		t.Fatalf("expected a panic, got %v", err)
+	}
+	j, err := journal.ReadFile(pe.Fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +29,7 @@ func TestFixtureCarriesEnvironment(t *testing.T) {
 		t.Fatal("fixture has no env record")
 	}
 	if e.Scrubbed {
-		t.Error("a fresh recording must be marked unscrubbed")
+		t.Error("a NoScrub recording must be marked unscrubbed")
 	}
 	if e.Vars["KAVACH_TEST_DB_PASSWORD"] != "hunter2" || e.Vars["TZ"] != "Asia/Kolkata" {
 		t.Errorf("vars not captured verbatim: %v", e.Vars)

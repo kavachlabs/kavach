@@ -3,6 +3,7 @@ package bench_test
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,9 @@ func TestEndToEnd(t *testing.T) {
 					t.Fatalf("last record kind %q, want %q", last.Kind, wantMarker)
 				}
 				has(t, run(t, 0, cli, "inspect", fx), "service bench-"+b.Name, "marker    "+wantMarker)
+				if j.Header.Meta.Scrub == nil {
+					t.Fatal("recorded fixture is not scrubbed by default")
+				}
 
 				// Reproduce, then verify the correct fix and the narrow one.
 				wantOld := "still_failing@"
@@ -122,6 +126,31 @@ func TestEndToEnd(t *testing.T) {
 				all[i] = outcome{fx, buggy, fixed, narrow}
 			})
 		}
+	})
+
+	// An unscrubbed fixture is scrubbed by the CLI, which checks that the
+	// verdict survives and never touches the original.
+	t.Run("scrub", func(t *testing.T) {
+		t.Setenv("BENCH_NOSCRUB", "1")
+		buggy := svc(t, "nil-email", "buggy")
+		fx := strings.TrimSpace(run(t, 0, buggy, "record", filepath.Join(dir, "raw")))
+		before, _ := os.ReadFile(fx)
+		if !bytes.Contains(before, []byte("ann@example.com")) {
+			t.Fatal("the NoScrub fixture should hold the raw email")
+		}
+		out := filepath.Join(dir, "clean.kavach")
+		has(t, run(t, 0, cli, "scrub", fx, "-o", out, "--bin", buggy), "redacted", "still_failing@", "wrote")
+		after, _ := os.ReadFile(fx)
+		clean, _ := os.ReadFile(out)
+		if !bytes.Equal(before, after) {
+			t.Error("the original fixture was modified")
+		}
+		if bytes.Contains(clean, []byte("example.com")) && bytes.Contains(clean, []byte("ann@")) {
+			t.Error("scrubbed fixture still holds a raw email")
+		}
+		has(t, run(t, 1, cli, "replay", out, "--bin", buggy), "still_failing@")
+		has(t, run(t, 0, cli, "scrub", out), "already scrubbed")
+		run(t, 2, cli, "scrub", fx, "-o", fx)
 	})
 
 	t.Run("mcp", func(t *testing.T) {

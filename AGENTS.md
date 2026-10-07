@@ -60,9 +60,15 @@ A fixture's header carries the environment it was recorded in: environment
 variables, OS, CPUs, `GOMAXPROCS`, timezone and Go version. `kavach replay`
 and `kavach diff` re-apply the recorded variables to the replay binary (not
 `PATH`, `HOME` or `KAVACH_*`), and `kavach inspect` prints `drift:` lines,
-by name only, where your machine differs. The record is unscrubbed in this
-version and may hold secrets: do not paste `inspect --json` output or commit
-a fixture outside the repository's private test data.
+by name only, where your machine differs. Fixtures are scrubbed of personal data by default (emails keep their domain,
+phone and card numbers, IPs and tokens become same-format placeholders, and
+variables named like `*PASSWORD*`, `*SECRET*`, `*TOKEN*`, `*KEY*` are masked), so
+a replay of a fixture normally behaves like the original; `kavach inspect` shows
+the redaction counts. Scrubbing is opt-out: `Options.NoScrub` keeps raw data,
+and such a fixture must not leave the machine. `kavach scrub <fixture> --bin
+<replay-binary>` scrubs one and keeps the copy only if the verdict is unchanged.
+If a failure only reproduces with the real personal data, the scrubbed fixture
+will not reproduce it: report that.
 
 ## Rules
 

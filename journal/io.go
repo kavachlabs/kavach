@@ -25,6 +25,8 @@ type Meta struct {
 	RecordedAt string `json:"recorded_at,omitempty"`
 	// Env is the environment the journal was recorded in (SPEC.md §3.2).
 	Env *Env `json:"env,omitempty"`
+	// Scrub is set when the PII scrubber processed the journal (SPEC.md §3.2).
+	Scrub *Scrub `json:"scrub,omitempty"`
 	// Variant is set on journals derived from a recorded one by perturbing it
 	// (SPEC.md §3.2). They are replayed leniently and carry no outputs.
 	Variant *Variant `json:"variant,omitempty"`

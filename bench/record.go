@@ -13,7 +13,10 @@ import (
 // Record runs b's events through the planted-bug handler under a flight
 // recorder with a stepped clock and seeded randomness, and returns the path of
 // the fixture written when the last event fails. Recording is reproducible.
-func Record(b Bug, dir string) (string, error) {
+func Record(b Bug, dir string) (string, error) { return RecordWith(b, dir, false) }
+
+// RecordWith is Record with the PII scrubber optionally disabled.
+func RecordWith(b Bug, dir string, noScrub bool) (string, error) {
 	now := b.Start
 	if now.IsZero() {
 		now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -24,6 +27,7 @@ func Record(b Bug, dir string) (string, error) {
 		Clock:         func() time.Time { t := now; now = now.Add(90 * time.Minute); return t },
 		Rand:          rand.New(rand.NewSource(1)),
 		RecoverPanics: true,
+		NoScrub:       noScrub,
 	})
 	var path string
 	for i, ev := range b.Events {

@@ -12,8 +12,8 @@ import (
 )
 
 // CaptureEnv records the process environment and host facts. Variable values
-// are stored verbatim, secrets included; run `kavach scrub` before sharing a
-// fixture.
+// are stored verbatim, secrets included; the Recorder scrubs them before
+// writing unless Options.NoScrub is set.
 func CaptureEnv() *journal.Env {
 	e := &journal.Env{Vars: map[string]string{}}
 	for _, kv := range os.Environ() {
@@ -64,13 +64,13 @@ func ReplayEnv(base []string, rec *journal.Env) []string {
 	out := make([]string, 0, len(base)+len(rec.Vars))
 	for _, kv := range base {
 		name, _, _ := strings.Cut(kv, "=")
-		if _, ok := rec.Vars[name]; ok && applicable(name) {
+		if val, ok := rec.Vars[name]; ok && reapply(name, val) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	for name, val := range rec.Vars {
-		if applicable(name) {
+		if reapply(name, val) {
 			out = append(out, name+"="+val)
 		}
 	}
@@ -80,6 +80,10 @@ func ReplayEnv(base []string, rec *journal.Env) []string {
 func applicable(name string) bool {
 	return !envPlumbing[name] && !strings.HasPrefix(name, "KAVACH_")
 }
+
+// reapply reports whether a recorded variable can be set on a replay: scrubbed
+// secrets cannot.
+func reapply(name, val string) bool { return applicable(name) && val != RedactedValue }
 
 // EnvDrift lists the differences between a recorded environment and the current
 // one, as human-readable lines. Values are never printed, since they may be
@@ -104,7 +108,7 @@ func EnvDrift(rec *journal.Env, cur *journal.Env) []string {
 		d = append(d, "Go "+a.GoVersion+" recorded, "+b.GoVersion+" now")
 	}
 	for name, val := range rec.Vars {
-		if !applicable(name) {
+		if !reapply(name, val) {
 			continue
 		}
 		if now, ok := cur.Vars[name]; !ok {

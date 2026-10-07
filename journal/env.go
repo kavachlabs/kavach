@@ -5,11 +5,10 @@ package journal
 // replay reproduce failures that depend on TZ, GOMAXPROCS, config variables and
 // the like, and lets tools report when the replaying machine differs.
 type Env struct {
-	// Vars holds environment variables, name to value. In 0.1 recorders store
-	// every variable verbatim, secrets included, and set Scrubbed to false.
-	// A scrubber removes or masks values and sets Scrubbed to true.
+	// Vars holds environment variables, name to value. Recorders scrub them by
+	// default; with scrubbing off they are stored verbatim, secrets included.
 	Vars map[string]string `json:"vars,omitempty"`
-	// Scrubbed reports whether a scrubber has processed Vars.
+	// Scrubbed reports whether a scrubber has processed the journal.
 	Scrubbed bool    `json:"scrubbed"`
 	System   *System `json:"system,omitempty"`
 	Build    *Build  `json:"build,omitempty"`
@@ -31,4 +30,12 @@ type Build struct {
 	GoVersion string `json:"go_version"`
 	Module    string `json:"module,omitempty"`
 	Revision  string `json:"revision,omitempty"`
+}
+
+// Scrub records that a journal went through the PII scrubber (SPEC.md §3.2).
+type Scrub struct {
+	Version int `json:"version"`
+	// Redactions counts replaced values by detector: "email", "phone", "card",
+	// "ip", "token", "env_secret", "hostname".
+	Redactions map[string]int `json:"redactions,omitempty"`
 }

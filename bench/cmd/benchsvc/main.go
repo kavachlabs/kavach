@@ -36,7 +36,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: benchsvc record <dir>")
 		os.Exit(2)
 	}
-	path, err := bench.Record(*b, os.Args[2])
+	path, err := bench.RecordWith(*b, os.Args[2], os.Getenv("BENCH_NOSCRUB") != "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "benchsvc:", err)
 		os.Exit(1)

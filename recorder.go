@@ -53,6 +53,11 @@ type Options struct {
 	// RecoverPanics makes Step return a *PanicError instead of re-panicking
 	// after the fixture is written.
 	RecoverPanics bool
+	// NoScrub disables PII scrubbing. By default every fixture is scrubbed
+	// before it is written: emails, phone numbers, card numbers, IP addresses
+	// and tokens in inputs, outputs and snapshots become stable placeholders,
+	// and secret-looking environment variables are masked.
+	NoScrub bool
 	// NoEnv disables capturing the process environment and host facts into
 	// fixture headers.
 	NoEnv bool
@@ -261,7 +266,11 @@ func (r *Recorder) flushLocked(kind string) (path string, err error) {
 		RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Env:        r.envRecord,
 	}
-	if err := journal.WriteFile(path, meta, r.window); err != nil {
+	recs := r.window
+	if !r.opts.NoScrub {
+		meta, recs = NewScrubber().Journal(meta, recs)
+	}
+	if err := journal.WriteFile(path, meta, recs); err != nil {
 		return "", err
 	}
 	return path, nil
