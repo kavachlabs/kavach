@@ -54,6 +54,16 @@ variant.
 Exit codes: `0` for `fixed` or `ok`, `1` for any other verdict, `2` for usage
 errors, `3` when the fixture or binary cannot be used.
 
+## Environment record
+
+A fixture's header carries the environment it was recorded in: environment
+variables, OS, CPUs, `GOMAXPROCS`, timezone and Go version. `kavach replay`
+and `kavach diff` re-apply the recorded variables to the replay binary (not
+`PATH`, `HOME` or `KAVACH_*`), and `kavach inspect` prints `drift:` lines,
+by name only, where your machine differs. The record is unscrubbed in this
+version and may hold secrets: do not paste `inspect --json` output or commit
+a fixture outside the repository's private test data.
+
 ## Rules
 
 - Never edit, regenerate or delete a fixture to make a test pass. A fixture is

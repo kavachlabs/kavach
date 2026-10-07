@@ -53,6 +53,9 @@ type Options struct {
 	// RecoverPanics makes Step return a *PanicError instead of re-panicking
 	// after the fixture is written.
 	RecoverPanics bool
+	// NoEnv disables capturing the process environment and host facts into
+	// fixture headers.
+	NoEnv bool
 	// OnFlush, if set, is called after every fixture write attempt.
 	OnFlush func(path string, err error)
 }
@@ -93,6 +96,9 @@ type Recorder struct {
 	steps   int
 	lost    bool
 	env     recordEnv
+	// envRecord is captured when the recorder is created, so it describes the
+	// process at startup, not at the moment of failure.
+	envRecord *journal.Env
 }
 
 // NewRecorder returns a Recorder that drives h.
@@ -117,6 +123,9 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 	}
 	r := &Recorder{h: h, opts: opts, start: journal.StartGenesis}
 	r.env.r = r
+	if !opts.NoEnv {
+		r.envRecord = CaptureEnv()
+	}
 	return r
 }
 
@@ -250,6 +259,7 @@ func (r *Recorder) flushLocked(kind string) (path string, err error) {
 		Handler:    buildRevision(),
 		Producer:   "kavach-go/" + Version,
 		RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Env:        r.envRecord,
 	}
 	if err := journal.WriteFile(path, meta, r.window); err != nil {
 		return "", err

@@ -167,6 +167,7 @@ func cmdInspect(u ui, args []string, stdout, stderr io.Writer) int {
 	if m.Handler != "" || m.Producer != "" || m.RecordedAt != "" {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("handler %s · producer %s · recorded %s", orDash(m.Handler), orDash(m.Producer), orDash(m.RecordedAt)), ansiDim))
 	}
+	printEnv(u, stdout, m.Env)
 	if v := m.Variant; v != nil {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("variant %d: %s · expected failure at seq %d: %s", v.ID, v.Mutation, v.Incident, v.Failure), ansiYellow))
 	}
@@ -278,6 +279,9 @@ func replayWith(bin, fixture string) (*kavach.Result, time.Duration, error) {
 	var stderr bytes.Buffer
 	cmd := exec.Command(bin, kavach.ReplayCommand, fixture, out)
 	cmd.Stderr = &stderr
+	if j, err := journal.ReadFile(fixture); err == nil {
+		cmd.Env = kavach.ReplayEnv(os.Environ(), j.Header.Meta.Env)
+	}
 	start := time.Now()
 	err = cmd.Run()
 	wall := time.Since(start)
@@ -582,4 +586,24 @@ func markerColor(kind string) string {
 		return ansiMagenta
 	}
 	return ansiYellow
+}
+
+// printEnv summarises the recorded environment and how the current one differs.
+// Values are never printed.
+func printEnv(u ui, w io.Writer, e *journal.Env) {
+	if e == nil {
+		return
+	}
+	var sys string
+	if s := e.System; s != nil {
+		sys = fmt.Sprintf("%s/%s · %d cpus · GOMAXPROCS %d · %s", s.OS, s.Arch, s.CPUs, s.GOMAXPROCS, orDash(s.Timezone))
+	}
+	state := "unscrubbed"
+	if e.Scrubbed {
+		state = "scrubbed"
+	}
+	fmt.Fprintln(w, u.paint(fmt.Sprintf("env %d vars (%s) · %s", len(e.Vars), state, sys), ansiDim))
+	for _, d := range kavach.EnvDrift(e, kavach.CaptureEnv()) {
+		fmt.Fprintln(w, u.paint("drift: "+d, ansiYellow))
+	}
 }

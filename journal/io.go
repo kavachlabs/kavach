@@ -23,6 +23,8 @@ type Meta struct {
 	Handler    string `json:"handler,omitempty"`
 	Producer   string `json:"producer,omitempty"`
 	RecordedAt string `json:"recorded_at,omitempty"`
+	// Env is the environment the journal was recorded in (SPEC.md §3.2).
+	Env *Env `json:"env,omitempty"`
 	// Variant is set on journals derived from a recorded one by perturbing it
 	// (SPEC.md §3.2). They are replayed leniently and carry no outputs.
 	Variant *Variant `json:"variant,omitempty"`

@@ -67,6 +67,7 @@ whose `meta_len` exceeds 1 MiB.
 | `handler` | string | no | Build identity of the handler that wrote it, e.g. a module version or VCS revision. |
 | `producer` | string | no | Library that wrote the file, e.g. `"kavach-go/0.1.0"`. |
 | `recorded_at` | string | no | RFC 3339 wall-clock time of the flush. Informational only; replay MUST NOT read it. |
+| `env` | object | no | The **environment record**: the process environment and host facts when the recorder started. Keys: `vars` (object, name to value; a 0.1 recorder stores every variable verbatim, secrets included), `scrubbed` (boolean, `false` until a scrubber has processed `vars`), `system` (object: `os`, `arch`, `kernel`, `cpus`, `gomaxprocs`, `timezone`, `hostname`) and `build` (object: `go_version`, `module`, `revision`). Replay tools SHOULD apply `vars` to the replayed process, except process plumbing such as `PATH` and `HOME`, and SHOULD report differences from the current environment by name only, never by value. Replay MUST NOT read `env` to decide a verdict. |
 | `variant` | object | no | Present only on a **variant** (§6.1): a journal derived from a recorded incident by perturbing it. Keys: `id` (number), `mutation` (string, human-readable), `incident` (number, the `seq` of the input on which the old build is expected to fail) and `failure` (string, the recorded failure: `"panic: <message>"`, `"error: <message>"` or `"invariant: <name>"`). |
 
 ### 3.3 Records
