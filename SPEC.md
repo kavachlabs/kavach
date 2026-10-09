@@ -1041,6 +1041,10 @@ therefore start it with the process's environment unchanged. It collects
 `host.` facts itself, since it runs on the same host, as the same user, in the
 same mount namespace and cgroup.
 
+The SDK SHOULD wait for `ready` (§10.3), up to a bounded time (a couple of
+seconds), before its first step, so that it never fills the ring or the pipe
+before the recorder reads it. If the time passes, it goes on.
+
 The recorder MUST outlive the service long enough to finish the journal. It
 MUST ignore `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGPIPE`, and SHOULD start a
 session of its own, so that a signal sent to the service's process group does
