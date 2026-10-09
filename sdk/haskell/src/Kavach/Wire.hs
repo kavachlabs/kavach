@@ -9,6 +9,9 @@ module Kavach.Wire
   , frameSnapshot
   , frameFlush
   , frameClose
+  , Enc (..)
+  , encBytes
+  , encRaw
   , recInput
   , recClock
   , recRand
@@ -23,11 +26,15 @@ import qualified Data.ByteString as BS
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Internal as BI
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int (Int64)
 import Data.Text (Text)
-import qualified Data.Text.Encoding as TE
-import Data.Word (Word8)
+import qualified Data.Text.Foreign as TF
+import Data.Word (Word64, Word8)
+import Foreign.Marshal.Utils (copyBytes)
+import Foreign.Ptr (Ptr, castPtr, plusPtr)
+import Foreign.Storable (poke)
 
 build :: B.Builder -> ByteString
 build = BL.toStrict . B.toLazyByteString
@@ -69,67 +76,88 @@ base64Decode s
           bytes = [fromIntegral (w `shiftR` 16), fromIntegral (w `shiftR` 8), fromIntegral w] :: [Word8]
       Just (mconcat (map B.word8 (take (3 - pad) bytes)))
 
-uvarint :: Int -> B.Builder
-uvarint n
-  | n >= 0x80 = B.word8 (fromIntegral (n .&. 0x7f) .|. 0x80) <> uvarint (n `shiftR` 7)
-  | otherwise = B.word8 (fromIntegral n)
+-- | A piece of the record stream whose size is known before it is written, so
+-- a step's frames are written into one buffer without intermediate copies.
+data Enc = Enc !Int (Ptr Word8 -> IO ())
 
-bytesF :: ByteString -> B.Builder
-bytesF b = uvarint (BS.length b) <> B.byteString b
+instance Semigroup Enc where
+  Enc a f <> Enc b g = Enc (a + b) (\p -> f p >> g (p `plusPtr` a))
 
-stringF :: Text -> B.Builder
-stringF = bytesF . TE.encodeUtf8
+instance Monoid Enc where
+  mempty = Enc 0 (\_ -> pure ())
 
-scopeF :: Bool -> B.Builder
-scopeF local = B.word8 (if local then 1 else 0)
+encBytes :: Enc -> ByteString
+encBytes (Enc n w) = BI.unsafeCreate n w
 
-frame :: Word8 -> B.Builder -> ByteString
-frame kind payload =
-  let p = build payload in build (uvarint (1 + BS.length p) <> B.word8 kind <> B.byteString p)
+encRaw :: ByteString -> Enc
+encRaw b = Enc (BS.length b) (\p -> BU.unsafeUseAsCStringLen b (\(src, n) -> copyBytes p (castPtr src) n))
+
+byteE :: Word8 -> Enc
+byteE b = Enc 1 (\p -> poke p b)
+
+uvarint :: Int -> Enc
+uvarint n = Enc (len n) (\p -> go p n)
+  where
+    len k = if k >= 0x80 then 1 + len (k `shiftR` 7) else 1 :: Int
+    go p k
+      | k >= 0x80 = poke p (fromIntegral (k .&. 0x7f) .|. 0x80) >> go (p `plusPtr` 1) (k `shiftR` 7)
+      | otherwise = poke p (fromIntegral k)
+
+bytesF :: ByteString -> Enc
+bytesF b = uvarint (BS.length b) <> encRaw b
+
+stringF :: Text -> Enc
+stringF t = let n = TF.lengthWord8 t in uvarint n <> Enc n (TF.unsafeCopyToPtr t)
+
+scopeF :: Bool -> Enc
+scopeF local = byteE (if local then 1 else 0)
+
+frame :: Word8 -> Enc -> Enc
+frame kind payload@(Enc n _) = uvarint (1 + n) <> byteE kind <> payload
 
 frameOpen :: ByteString -> ByteString
-frameOpen = frame 0x01 . B.byteString
+frameOpen = encBytes . frame 0x01 . encRaw
 
 frameStepEnd, frameClose :: ByteString
-frameStepEnd = frame 0x03 mempty
-frameClose = frame 0x07 mempty
+frameStepEnd = encBytes (frame 0x03 mempty)
+frameClose = encBytes (frame 0x07 mempty)
 
 -- | A @facts@ frame whose facts all have form 0 (value).
 frameFacts :: [(Text, ByteString)] -> ByteString
 frameFacts kvs =
-  frame 0x04 (uvarint (length kvs) <> mconcat [stringF k <> B.word8 0 <> bytesF v | (k, v) <- kvs])
+  encBytes (frame 0x04 (uvarint (length kvs) <> mconcat [stringF k <> byteE 0 <> bytesF v | (k, v) <- kvs]))
 
 frameSnapshot :: ByteString -> ByteString
-frameSnapshot = frame 0x05 . bytesF
+frameSnapshot = encBytes . frame 0x05 . bytesF
 
 frameFlush :: Bool -> ByteString
-frameFlush durable = frame 0x06 (B.word8 (if durable then 1 else 0))
+frameFlush durable = encBytes (frame 0x06 (byteE (if durable then 1 else 0)))
 
-record :: Word8 -> Bool -> B.Builder -> ByteString
-record ty critical payload = frame 0x02 (B.word8 ty <> B.word8 (if critical then 1 else 0) <> payload)
+record :: Word8 -> Bool -> Enc -> Enc
+record ty critical payload = frame 0x02 (byteE ty <> byteE (if critical then 1 else 0) <> payload)
 
-recInput :: Text -> Text -> ByteString -> ByteString
+recInput :: Text -> Text -> ByteString -> Enc
 recInput src pos d = record 0x01 False (stringF src <> stringF pos <> bytesF d)
 
-recClock :: Int64 -> ByteString
-recClock = record 0x02 False . B.int64LE
+recClock :: Int64 -> Enc
+recClock ns = record 0x02 False (Enc 8 (\p -> poke (castPtr p) (fromIntegral ns :: Word64)))
 
-recRand :: ByteString -> ByteString
+recRand :: ByteString -> Enc
 recRand = record 0x03 False . bytesF
 
-recOutput :: Text -> ByteString -> Bool -> ByteString
+recOutput :: Text -> ByteString -> Bool -> Enc
 recOutput sink d local = record 0x04 False (stringF sink <> bytesF d <> scopeF local)
 
-recMarker :: Text -> Text -> ByteString -> ByteString
+recMarker :: Text -> Text -> ByteString -> Enc
 recMarker kind msg d = record 0x05 False (stringF kind <> stringF msg <> bytesF d)
 
 -- | gateway name, request, response, error, local
-recGateway :: Text -> ByteString -> ByteString -> Text -> Bool -> ByteString
+recGateway :: Text -> ByteString -> ByteString -> Text -> Bool -> Enc
 recGateway g req resp err local =
   record 0x07 True (stringF g <> bytesF req <> bytesF resp <> stringF err <> scopeF local)
 
 -- | key, value if present, source
-recConfig :: Text -> Maybe ByteString -> Text -> ByteString
+recConfig :: Text -> Maybe ByteString -> Text -> Enc
 recConfig k v src =
   record 0x09 True
-    (stringF k <> B.word8 (maybe 0 (const 1) v) <> bytesF (maybe BS.empty id v) <> stringF src)
+    (stringF k <> byteE (maybe 0 (const 1) v) <> bytesF (maybe BS.empty id v) <> stringF src)

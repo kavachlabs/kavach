@@ -36,8 +36,6 @@ import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Time.Clock (nominalDiffTimeToSeconds)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Typeable (Typeable)
 import Kavach.Internal
 import Kavach.Json
@@ -123,7 +121,7 @@ defaultOptions service =
     , roRetainSegments = Nothing
     , roSecretKeys = []
     , roOnFixture = const (pure ())
-    , roClock = (\t -> floor (nominalDiffTimeToSeconds t * 1000000000)) <$> getPOSIXTime
+    , roClock = realtimeNanos
     , roRandom = \n -> withBinaryFile "/dev/urandom" ReadMode (`BS.hGet` n)
     , roReadyTimeout = 10
     , roCloseTimeout = 10
@@ -201,30 +199,47 @@ pipeWrite r bs = do
 rawWrite :: Recorder s -> ByteString -> IO ()
 rawWrite r bs = case rRing r of
   Nothing -> pipeWrite r bs
-  Just g -> publish g bs
+  Just g -> publish r g bs
+
+-- | 'rawWrite' for an encoded step: over the ring it is written in place, with
+-- no intermediate buffer, unless it would wrap or the ring is nearly full.
+rawWriteEnc :: Recorder s -> Enc -> IO ()
+rawWriteEnc r enc@(Enc n w) = case rRing r of
+  Nothing -> rawWrite r (encBytes enc)
+  Just g -> do
+    active <- readTVarIO (rActive r)
+    when active $ do
+      done <- tryPublishDirect g n w
+      case done of
+        Just used -> afterPublish r g used
+        Nothing -> publish r g (encBytes enc)
+
+afterPublish :: Recorder s -> Ring -> Int -> IO ()
+afterPublish r g used = do
+  let half = ringCap g `div` 2
+  belled <- readIORef (ringBelled g)
+  if used > half
+    then unless belled (writeIORef (ringBelled g) True >> pipeWrite r (BS.singleton 1))
+    else when belled (writeIORef (ringBelled g) False)
+
+publish :: Recorder s -> Ring -> ByteString -> IO ()
+publish r g b = do
+  active <- readTVarIO (rActive r)
+  unless (BS.null b || not active) $ do
+    (n, used) <- tryPublish g b
+    if n == 0
+      then do
+        -- Full: the recorder drains the ring on the doorbell. If it has
+        -- exited, the control loop stops recording and ends the wait.
+        pipeWrite r (BS.singleton 1)
+        wait
+      else afterPublish r g used >> publish r g (BS.drop n b)
   where
-    publish g b = do
-      active <- readTVarIO (rActive r)
-      unless (BS.null b || not active) $ do
-        (n, used) <- tryPublish g b
-        if n == 0
-          then do
-            -- Full: the recorder drains the ring on the doorbell. If it has
-            -- exited, the control loop stops recording and ends the wait.
-            pipeWrite r (BS.singleton 1)
-            wait g b
-          else do
-            let half = ringCap g `div` 2
-            belled <- readIORef (ringBelled g)
-            if used > half && not belled
-              then writeIORef (ringBelled g) True >> pipeWrite r (BS.singleton 1)
-              else when (used <= half) (writeIORef (ringBelled g) False)
-            publish g (BS.drop n b)
-    wait g b = do
+    wait = do
       active <- readTVarIO (rActive r)
       when active $ do
         (n, _) <- tryPublish g b
-        if n == 0 then threadDelay 20 >> wait g b else publish g (BS.drop n b)
+        if n == 0 then threadDelay 20 >> wait else publish r g (BS.drop n b)
 
 -- | Wake a recorder that reads the ring (§10.7).
 bell :: Recorder s -> IO ()
@@ -370,12 +385,12 @@ step r inp = withMVar (rLock r) $ \_ -> do
   closed <- readIORef (rClosed r)
   when closed $ ioError (userError "kavach: step on a closed Recorder")
   answerSnapshotRequest r
-  buf <- newIORef []
+  buf <- newIORef mempty
   outs <- newIORef []
   ckpt <- newIORef Nothing
   let h = rHandler r
       o = rOpts r
-      rec' f = modifyIORef' buf (f :)
+      rec' f = modifyIORef' buf (<> f)
       env =
         EnvImpl
           { envClock = do ns <- roClock o; rec' (recClock ns); pure ns
@@ -397,7 +412,7 @@ step r inp = withMVar (rLock r) $ \_ -> do
   s0 <- readIORef (rState r)
   -- The input goes in before the handler runs, so that a step that kills the
   -- process still leaves it on record (§10.2).
-  rawWrite r (recInput (inputSource inp) (inputPosition inp) (inputData inp))
+  rawWriteEnc r (recInput (inputSource inp) (inputPosition inp) (inputData inp))
   res <- runStep h env inp s0
   (failure, exc) <- case res of
     Right s' -> do
@@ -411,9 +426,9 @@ step r inp = withMVar (rLock r) $ \_ -> do
   case failure of
     Just f -> rec' (recMarker (failKind f) (failMessage f) (TE.encodeUtf8 (failDetail f)))
     Nothing -> pure ()
-  rec' frameStepEnd
-  frames <- reverse <$> readIORef buf
-  rawWrite r (BS.concat frames)
+  rec' (encRaw frameStepEnd)
+  frames <- readIORef buf
+  rawWriteEnc r frames
   outputs <- reverse <$> readIORef outs
   when (failure == Nothing) $ roDeliver o outputs
   case exc >>= fromException of
@@ -428,7 +443,8 @@ gatewayErrorText e = case fromException e of
 
 answerSnapshotRequest :: Recorder s -> IO ()
 answerSnapshotRequest r = do
-  wanted <- atomically (swapTVar (rSnapReq r) False)
+  pending <- readTVarIO (rSnapReq r)
+  wanted <- if pending then atomically (swapTVar (rSnapReq r) False) else pure False
   active <- readTVarIO (rActive r)
   when (wanted && active && rSnapshots r) $ case snapshot (rHandler r) of
     Nothing -> pure ()

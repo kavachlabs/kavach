@@ -9,8 +9,8 @@ extra-doc-files:    README.md
 common shared
   default-language: Haskell2010
   default-extensions: OverloadedStrings
-  ghc-options:      -Wall -Wno-name-shadowing
-  build-depends:    base >=4.17 && <5, bytestring, text
+  ghc-options:      -Wall -Wno-name-shadowing -O2
+  build-depends:    base >=4.17 && <5, bytestring, text >=2.0
 
 library
   import:           shared
@@ -50,7 +50,7 @@ executable kavach-bench
   import:           shared
   hs-source-dirs:   bench
   main-is:          Bench.hs
-  ghc-options:      -O2
+  ghc-options:      -O2 -rtsopts
   build-depends:    kavach, directory, time
 
 executable ledger
