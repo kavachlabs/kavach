@@ -3,10 +3,11 @@
 The Julia SDK for [Kavach](../../README.md): a flight recorder
 ([SPEC.md §10](../../SPEC.md#10-recorder-protocol)) and a replay host
 ([§9](../../SPEC.md#9-host-protocol)). Julia 1.10 or later, standard library
-only (`Base64`, `Dates`, `Logging`, `Random`).
+only (`Base64`, `Dates`, `Logging`, `Mmap`, `Random`).
 
 ```bash
 julia --project=sdk/julia -e 'using Pkg; Pkg.test()'
+julia --project=sdk/julia sdk/julia/bench/recorder_step.jl   # ns/event, pipe vs ring; needs kavach-recorder
 ```
 
 ## Writing a handler
@@ -68,6 +69,14 @@ reports a fatal error, the SDK `@error`s loudly, stops recording and carries on;
 `required=true` makes the constructor throw `RecorderError` instead. `fixture`
 messages are logged with `@warn` (and passed to `on_fixture`). `host.runtime`
 is `julia-<VERSION>`.
+
+On Unix the record stream travels over a shared-memory ring (§10.7): a file
+in `/dev/shm` (else `tempdir()`), created owner-only and mapped shared, which
+the recorder opens by name (`ring_path`; Julia cannot pass a child descriptor 3)
+and unlinks. `ring_bytes` sets its capacity (default 8 MiB); `ring=false`
+forces the pipe, which is also the fallback, with a `@warn`, when the ring
+cannot be set up. A full ring makes the step wait for the recorder, unless the
+recorder has exited, which stops recording.
 
 Known limit: the pipe keeps its default size instead of the 1 MiB `F_SETPIPE_SZ`
 buffer §10.2 suggests.

@@ -20,8 +20,8 @@ function pop_answer!(a::Answers, kind)
     return popfirst!(q)
 end
 
-"""Runs one case; returns the fake recorder's result.json contents."""
-function run_case(path::AbstractString; fake=joinpath(spec_dir(), "recorder", "sdk", "fake_recorder.py"))
+"""Runs one case over the ring or the pipe; returns the fake recorder's result.json contents."""
+function run_case(path::AbstractString; ring::Bool=true, fake=joinpath(spec_dir(), "recorder", "sdk", "fake_recorder.py"))
     case = Json.parse(read(path, String))
     handler = Conformance()
     haskey(case, "snapshot") && Kavach.restore!(handler, Vector{UInt8}(codeunits(case["snapshot"])))
@@ -49,7 +49,7 @@ function run_case(path::AbstractString; fake=joinpath(spec_dir(), "recorder", "s
                        gateways=AnyGateway(gateway), config=config, config_source="case",
                        flags=isempty(flags) ? nothing : () -> flags,
                        clock_ns=() -> parse(Int64, pop_answer!(answers, "clock")), random_bytes=rand_bytes,
-                       required=true)
+                       required=true, ring=ring)
         for action in case["actions"]
             if haskey(action, "step")
                 s = action["step"]
@@ -69,16 +69,18 @@ function main(args)
     paths = isempty(args) ? sort(filter(endswith(".json"), readdir(joinpath(spec_dir(), "recorder", "sdk"); join=true))) : args
     failed = 0
     for p in paths
-        result = try
-            run_case(p)
-        catch e
-            Dict{String,Any}("pass" => false, "error" => sprint(showerror, e))
+        for ring in (false, true)
+            result = try
+                run_case(p; ring)
+            catch e
+                Dict{String,Any}("pass" => false, "error" => sprint(showerror, e))
+            end
+            ok = get(result, "pass", false) === true
+            println(ok ? "PASS  " : "FAIL  ", basename(p), ring ? " (ring)" : " (pipe)")
+            ok || (failed += 1; println(stderr, result["error"]))
         end
-        ok = get(result, "pass", false) === true
-        println(ok ? "PASS  " : "FAIL  ", basename(p))
-        ok || (failed += 1; println(stderr, result["error"]))
     end
-    println("$(length(paths) - failed)/$(length(paths)) cases passed")
+    println("$(2 * length(paths) - failed)/$(2 * length(paths)) runs passed")
     return failed == 0 ? 0 : 1
 end
 

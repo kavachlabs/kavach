@@ -39,6 +39,7 @@ mutable struct Recorder{H}
     snapshot_requested::Threads.Atomic{Bool}
     buf::Union{IOBuffer,Nothing}
     outputs::Vector{Output}
+    ring::Union{Ring,Nothing}
     proc::Any
     reader::Union{Task,Nothing}
     file::Union{String,Nothing}
@@ -63,14 +64,16 @@ Keywords: `service` (required), `start` (`:genesis` or `:snapshot`),
 `flag.*` key/value pairs), `recorder_command` (argument vector), `required`,
 `handler_id`, `dir`, `compression`, `level`, `block_bytes`, `flush_ms`,
 `segment_bytes`, `segment_seconds`, `retain_segments`, `secret_keys`,
-`on_fixture`, `clock_ns`, `random_bytes`, `ready_timeout`, `close_timeout`.
+`on_fixture`, `clock_ns`, `random_bytes`, `ring` (default `true`: carry the record stream over a
+shared-memory ring, SPEC §10.7; `false` forces the pipe), `ring_bytes` (a power of two, at least 64 KiB), `ready_timeout`,
+`close_timeout`.
 """
 function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snapshots=nothing, deliver=nothing,
                   gateways=nothing, config=nothing, config_source=nothing, flags=nothing, recorder_command=nothing,
                   required::Bool=false, handler_id=nothing, dir=nothing, compression=nothing, level=nothing,
                   block_bytes=nothing, flush_ms=nothing, segment_bytes=nothing, segment_seconds=nothing,
                   retain_segments=nothing, secret_keys=nothing, on_fixture=nothing, clock_ns=nothing,
-                  random_bytes=nothing, ready_timeout::Real=10.0, close_timeout::Real=10.0)
+                  random_bytes=nothing, ring::Bool=true, ring_bytes::Integer=RING_DEFAULT, ready_timeout::Real=10.0, close_timeout::Real=10.0)
     start in (:genesis, :snapshot) || throw(ArgumentError("start must be :genesis or :snapshot"))
     cs = can_snapshot(handler)
     start === :snapshot && !cs && throw(ArgumentError("start=:snapshot needs snapshot and restore! methods"))
@@ -84,7 +87,7 @@ function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snap
         random_bytes === nothing ? (n -> Random.rand(Random.RandomDevice(), UInt8, n)) : random_bytes,
         on_fixture, Float64(close_timeout), snaps, ReentrantLock(),
         Threads.Atomic{Bool}(false), false, false, false, Threads.Atomic{Bool}(false), Threads.Atomic{Bool}(false),
-        Threads.Atomic{Int}(0), Threads.Atomic{Bool}(false), nothing, Output[], nothing, nothing, nothing, nothing)
+        Threads.Atomic{Int}(0), Threads.Atomic{Bool}(false), nothing, Output[], nothing, nothing, nothing, nothing, nothing)
 
     open_obj = Dict{String,Any}("protocol" => 1, "service" => service, "start" => String(start),
                                 "producer" => PRODUCER, "snapshots" => snaps)
@@ -97,8 +100,16 @@ function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snap
     cmd = find_recorder(recorder_command)
     try
         cmd === nothing && throw(RecorderError("kavach-recorder not found (set recorder_command, \$KAVACH_RECORDER or put it on PATH)"))
+        g = ring && Sys.isunix() ? new_ring(ring_bytes) : nothing
+        if g !== nothing
+            open_obj["ring"] = Int(g.cap)
+            open_obj["ring_path"] = g.path
+        end
+        rec.ring = g
         spawn!(rec, cmd)
-        write_frame(rec, Wire.frame(Wire.OPEN, io -> write(io, Json.stringify(open_obj))))
+        # The open frame goes over standard input, every later one into the ring.
+        write(rec.proc, Wire.frame(Wire.OPEN, io -> write(io, Json.stringify(open_obj))))
+        flush(rec.proc)
         facts = Pair{String,Vector{UInt8}}["host.runtime" => to_bytes(runtime())]
         if flags !== nothing
             for (k, v) in flags()
@@ -123,6 +134,19 @@ function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snap
     return rec
 end
 
+# A ring that cannot be set up is not an error: the pipe carries the stream.
+function new_ring(capacity)
+    try
+        return Ring(ring_dir(), capacity)
+    catch e
+        @warn "kavach: no shared-memory ring, recording over the pipe: $(sprint(showerror, e))"
+        return nothing
+    end
+end
+
+# The recorder unlinks the ring file once it has opened it; this covers one that never did.
+rm_ring(rec::Recorder) = rec.ring === nothing || rm(rec.ring.path; force=true)
+
 unix_nanos() = (tv = Libc.TimeVal(); Int64(tv.sec) * 1_000_000_000 + Int64(tv.usec) * 1_000)
 
 # shortcut: the pipe keeps its default size (§10.2 asks for 1 MiB on Linux); upgrade if steps block on a full pipe.
@@ -135,6 +159,7 @@ end
 
 function kill_recorder(rec::Recorder)
     rec.active[] = false
+    rm_ring(rec)
     p = rec.proc
     p === nothing && return
     process_running(p) && kill(p)
@@ -199,13 +224,55 @@ function on_control(rec::Recorder, t::String, msg::Dict)
     end
 end
 
-function write_frame(rec::Recorder, data::Vector{UInt8})
+function write_frame(rec::Recorder, data::Vector{UInt8}; bell::Bool=false)
     (rec.active[] && !isempty(data)) || return
     try
-        write(rec.proc, data)
-        flush(rec.proc)
+        g = rec.ring
+        if g === nothing
+            write(rec.proc, data)
+            flush(rec.proc)
+        else
+            publish(rec, g, data)
+            bell && ring_bell(rec)
+        end
     catch e
         fail(rec, "could not write to the recorder: " * sprint(showerror, e))
+    end
+end
+
+function publish(rec::Recorder, g::Ring, data::Vector{UInt8})
+    from = 1
+    while from <= length(data)
+        n, used = try_publish(g, data, from)
+        if n == 0
+            # Full: the recorder drains the ring on the doorbell. If it has
+            # exited, the control task stops recording and ends the wait.
+            ring_bell(rec)
+            while n == 0 && rec.active[]
+                sleep(0.0001)
+                n, used = try_publish(g, data, from)
+            end
+            n == 0 && return
+        end
+        from += n
+        if used > g.cap ÷ 2
+            g.belled || ring_bell(rec)
+            g.belled = true
+        else
+            g.belled = false
+        end
+    end
+end
+
+# Wakes a recorder that reads the ring (SPEC §10.7).
+function ring_bell(rec::Recorder)
+    rec.active[] || return
+    try
+        write(rec.proc, 0x01)
+        flush(rec.proc)
+    catch
+        # A recorder that has read `close` may already be gone.
+        rec.closing || rethrow()
     end
 end
 
@@ -273,7 +340,7 @@ function flush!(rec::Recorder; durable::Bool=false, timeout::Real=10.0)
     sent = lock(rec.lock) do
         rec.active[] || return false
         before = rec.durable_count[]
-        write_frame(rec, Wire.flush_frame(durable))
+        write_frame(rec, Wire.flush_frame(durable); bell=true)
         true
     end
     sent || return false
@@ -287,10 +354,10 @@ function Base.close(rec::Recorder)
     lock(rec.lock) do
         rec.closed && return
         rec.closed = true
-        rec.proc === nothing && return
+        rec.proc === nothing && return rm_ring(rec)
         if rec.active[]
             rec.closing = true
-            write_frame(rec, Wire.close_frame())
+            write_frame(rec, Wire.close_frame(); bell=true)
             timedwait(() -> rec.closed_ack[], rec.close_timeout; pollint=0.002) == :ok ||
                 @warn "kavach: the recorder did not answer close within $(rec.close_timeout)s"
         end
@@ -301,6 +368,7 @@ function Base.close(rec::Recorder)
             @warn "kavach: the recorder is still running after close"
         rec.reader === nothing || timedwait(() -> istaskdone(rec.reader), 2.0; pollint=0.005)
         try; close(rec.proc); catch; end
+        rm_ring(rec)
     end
     return nothing
 end

@@ -13,6 +13,7 @@ using Random: Random
 
 include("json.jl")
 include("wire.jl")
+include("ring.jl")
 
 const PRODUCER = "kavach-julia/0.1.0"
 
