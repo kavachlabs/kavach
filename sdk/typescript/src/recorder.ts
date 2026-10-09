@@ -113,6 +113,9 @@ export function realClock(): () => bigint {
   return () => anchor + process.hrtime.bigint();
 }
 
+/** How long `start` waits for `ready` when recording is not required (SPEC §10.1). */
+const READY_WAIT_MS = 2000;
+
 export class Recorder {
   private child: ChildProcess | undefined;
   private recording = false;
@@ -237,6 +240,10 @@ export class Recorder {
         this.stopChild();
         throw new Error("kavach: the recorder did not become ready and recording is required");
       }
+    } else {
+      // Waiting here, not in a step, keeps a slow-starting recorder from
+      // finding a full pipe at its first read; on timeout recording goes on.
+      await this.waitFor(this.readyWaiters, () => this.ready, READY_WAIT_MS);
     }
   }
 
