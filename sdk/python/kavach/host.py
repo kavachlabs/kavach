@@ -10,14 +10,11 @@ import sys
 from typing import IO, Any, Callable, Mapping
 
 from .core import (
-    LOCAL,
     PRODUCER,
     Env,
     Failure,
     GatewayError,
     Input,
-    Output,
-    call_gateway,
     check_invariants,
     classify,
     invariant_list,
@@ -86,19 +83,13 @@ class Host:
         writer: IO[bytes],
         *,
         gateways: Mapping[str, Any] | None = None,
-        local_setup: Callable[[], None] | None = None,
-        deliver_local: Callable[[list[Output]], None] | None = None,
         environment: Callable[[], dict] = collect_environment,
     ):
         self._factory = handler_factory
         self._rd, self._wr = reader, writer
         self._gateways = gateways
-        self._local_setup = local_setup
-        self._deliver_local = deliver_local
         self._environment = environment
-        self.mode = "process"
         self.aborted = False
-        self.local_outputs: list[Output] = []
 
     # -- transport ------------------------------------------------------
 
@@ -174,10 +165,11 @@ class Host:
     def _hello(self, msg: dict) -> Any:
         if msg.get("protocol") != PROTOCOL:
             raise _Fatal(f"unsupported protocol {msg.get('protocol')!r}")
-        self.mode = msg.get("mode") or "process"
+        if msg.get("mode") == "sandbox":
+            raise _Fatal("sandbox mode not supported")
         try:
             handler = self._factory()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise _Fatal(f"could not create the handler: {type(e).__name__}: {e}") from None
         if msg.get("start") == "snapshot":
             restore = getattr(handler, "restore", None)
@@ -185,13 +177,8 @@ class Host:
                 raise _Fatal("the journal starts from a snapshot but the handler has no restore()")
             try:
                 restore(_unb64(msg.get("snapshot", "")))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 raise _Fatal(f"could not restore the snapshot: {type(e).__name__}: {e}") from None
-        if self.mode == "sandbox" and self._local_setup is not None:
-            try:
-                self._local_setup()
-            except Exception as e:  # noqa: BLE001
-                raise _Fatal(f"local setup failed: {type(e).__name__}: {e}") from None
         self.send({
             "t": "ready",
             "protocol": PROTOCOL,
@@ -204,7 +191,6 @@ class Host:
     def _step(self, handler: Any, msg: dict) -> None:
         inp = Input(str(msg.get("source", "")), str(msg.get("position", "")), _unb64(msg.get("data", "")))
         self.aborted = False
-        self.local_outputs = []
         failure: Failure | None = None
         try:
             handler.handle(_HostEnv(self), inp)
@@ -212,7 +198,7 @@ class Host:
             pass
         except (_Fatal, _Gone, KeyboardInterrupt, SystemExit):
             raise
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             failure = classify(e)
         if self.aborted:
             self.send({"t": "done", "outcome": "aborted"})
@@ -224,11 +210,6 @@ class Host:
             done["message"] = failure.message
             if failure.detail:
                 done["detail"] = failure.detail
-        if failure is None and self.mode == "sandbox" and self.local_outputs and self._deliver_local:
-            try:
-                self._deliver_local(self.local_outputs)
-            except Exception as e:  # noqa: BLE001
-                print(f"kavach: delivering local outputs failed: {e}", file=sys.stderr)
         self.send(done)
 
 
@@ -251,9 +232,8 @@ class _HostEnv(Env):
             {"t": "gateway", "gateway": gateway, "request": _b64(request), "scope": gw.scope}, "gateway",
         )
         if ans.get("live"):
-            resp, err = call_gateway(gw, request)
-            self._h.send({"t": "observed", **({"error": err} if err else {"response": _b64(resp)})})
-        elif ans.get("error"):
+            raise _Fatal("live gateway answers are not supported")
+        if ans.get("error"):
             err, resp = str(ans["error"]), b""
         else:
             err, resp = "", _unb64(ans.get("response", ""))
@@ -272,24 +252,18 @@ class _HostEnv(Env):
             raise _Abort()
         data = to_bytes(data)
         self._h.send({"t": "emit", "sink": sink, "data": _b64(data), "scope": "local" if local else "remote"})
-        if local:
-            self._h.local_outputs.append(Output(sink, data, True))
 
 
 def maybe_host(
     handler_factory: Callable[[], Any],
     gateways: Mapping[str, Any] | None = None,
-    local_setup: Callable[[], None] | None = None,
-    deliver_local: Callable[[list[Output]], None] | None = None,
 ) -> None:
     """If this process was started as a replay host (its last argument is
     ``kavach-host``), serve the driver and exit; otherwise return at once.
 
     Call it first thing in ``main``, before consuming any input or starting
     any servers. `gateways` maps names to `Gateway` (or ``(connection,
-    scope)``); `local_setup` creates local resources and runs before
-    ``ready`` in sandbox mode; `deliver_local` receives a successful step's
-    local outputs in sandbox mode.
+    scope)``).
     """
     if not sys.argv or sys.argv[-1] != HOST_ARG:
         return
@@ -303,10 +277,7 @@ def maybe_host(
     devnull = os.open(os.devnull, os.O_RDONLY)
     os.dup2(devnull, 0)
     os.close(devnull)
-    code = Host(
-        handler_factory, proto_in, proto_out,
-        gateways=gateways, local_setup=local_setup, deliver_local=deliver_local,
-    ).run()
+    code = Host(handler_factory, proto_in, proto_out, gateways=gateways).run()
     try:
         proto_out.close()
     except OSError:

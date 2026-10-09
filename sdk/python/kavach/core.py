@@ -53,9 +53,8 @@ class Invariant:
 class Gateway:
     """A registered gateway: the connection that makes the query, and its scope.
 
-    `connection(request: bytes) -> bytes` is called when recording (and, in a
-    sandbox replay, for local gateways). Raise any exception to report a
-    failure; its text is recorded as the gateway's error.
+    `connection(request: bytes) -> bytes` is called when recording. Raise any
+    exception to report a failure; its text is recorded as the gateway's error.
     """
 
     connection: Callable[[bytes], bytes]
@@ -169,7 +168,7 @@ def check_invariants(handler: Any) -> Failure | None:
     for inv in invariant_list(handler):
         try:
             res = inv.check()
-        except Exception as e:  # noqa: BLE001 - any exception violates it
+        except Exception as e:
             return Failure("invariant", inv.name, str(e) or type(e).__name__)
         if res is False:
             return Failure("invariant", inv.name, "check returned False")
@@ -202,7 +201,7 @@ def call_gateway(gw: Gateway, request: bytes) -> tuple[bytes, str]:
         resp = gw.connection(request)
     except GatewayError as e:
         return b"", e.error
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return b"", str(e) or type(e).__name__
     if isinstance(resp, str):
         resp = resp.encode()

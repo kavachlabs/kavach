@@ -19,7 +19,9 @@ from .core import (
     PRODUCER,
     Env,
     Failure,
+    GatewayError,
     Input,
+    LOCAL,
     Output,
     RecorderError,
     call_gateway,
@@ -28,7 +30,6 @@ from .core import (
     resolve_gateway,
     runtime,
     to_bytes,
-    LOCAL,
 )
 
 log = logging.getLogger("kavach")
@@ -132,7 +133,7 @@ class Recorder:
         self._step_lock = threading.RLock()
         self._step_thread: int | None = None
         self._cond = threading.Condition()
-        self._active = False  # guarded by nothing: a bool flipped one way
+        self._active = False
         self._failed_logged = False
         self._closing = False
         self._closed = False
@@ -213,7 +214,7 @@ class Recorder:
         if p is not None:
             try:
                 p.wait(timeout=2)
-            except subprocess.TimeoutExpired:  # pragma: no cover
+            except subprocess.TimeoutExpired:
                 pass
             for stream in (p.stdin, p.stdout):
                 try:
@@ -242,7 +243,7 @@ class Recorder:
                     log.warning("kavach: unreadable message from the recorder: %r", raw[:200])
                     continue
                 self._on_control(t, msg)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("kavach: control stream failed: %s", e)
         if not self._closing:
             self._fail("the recorder exited unexpectedly")
@@ -270,7 +271,7 @@ class Recorder:
             if self._on_fixture is not None:
                 try:
                     self._on_fixture(msg)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.exception("kavach: on_fixture callback failed")
         elif t == "error":
             fatal = bool(msg.get("fatal"))
@@ -326,7 +327,7 @@ class Recorder:
         raised: BaseException | None = None
         try:
             self._handler.handle(_RecordEnv(self), inp)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             failure, raised = classify(e), e
         if failure is None:
             failure = check_invariants(self._handler)
@@ -354,7 +355,7 @@ class Recorder:
             return
         try:
             data = to_bytes(self._handler.snapshot())
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("kavach: snapshot failed; staying in the current segment")
             return
         self._write(wire.snapshot_frame(data))
@@ -443,8 +444,6 @@ class _RecordEnv(Env):
         return data
 
     def query(self, gateway: str, request: bytes) -> bytes:
-        from .core import GatewayError
-
         request = to_bytes(request)
         gw = resolve_gateway(self._r._gateways, gateway)
         resp, err = call_gateway(gw, request)
