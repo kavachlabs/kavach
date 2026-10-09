@@ -32,7 +32,7 @@ import qualified Data.ByteString.Char8 as BC
 import Data.Dynamic (fromDynamic)
 import Data.Int (Int64)
 import Data.IORef
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -134,7 +134,7 @@ data StepResult = StepResult
   }
 
 stepOk :: StepResult -> Bool
-stepOk = not . isJust . stepFailure
+stepOk = isNothing . stepFailure
 
 data Recorder s = Recorder
   { rHandler :: Handler s
