@@ -68,11 +68,13 @@ valid Zstandard stream (RFC 8878), compressed by default (§3).
 
 - All fixed-width integers are little-endian.
 - `u8`, `u16`, `u32`, `u64` are unsigned; `i64` is two's-complement signed.
-- `uvarint` is an unsigned LEB128 varint, as Go's `encoding/binary.PutUvarint`
-  writes it. A uvarint longer than 10 bytes is invalid.
+- `uvarint` is an unsigned LEB128 varint: seven bits per byte, least
+  significant group first, the high bit set on every byte but the last. A
+  uvarint longer than 10 bytes is invalid.
 - `bytes` is a `uvarint` length followed by that many bytes.
 - `string` is `bytes` whose content MUST be valid UTF-8.
-- `crc32c` is CRC-32 with the Castagnoli polynomial (Go's `crc32.Castagnoli`).
+- `crc32c` is CRC-32C: CRC-32 with the Castagnoli polynomial `0x1EDC6F41`
+  (reflected, `0x82F63B78`), as in iSCSI (RFC 3720).
 - A **zstd frame** is a Zstandard frame (RFC 8878 §3.1.1). A **skippable
   frame** is a Zstandard skippable frame (RFC 8878 §3.1.2): a `u32` magic
   number from `0x184D2A50` to `0x184D2A5F`, a `u32` length, and that many bytes
@@ -813,7 +815,7 @@ recording by a separate recorder process, with segments and fixtures (§3.6,
 The conformance suite lives in [`spec/testdata/`](spec/testdata): each file in
 `valid/` is paired with a `.json` file holding the expected decoding (byte
 fields base64-encoded, record types by name), and every file in `invalid/` MUST
-be rejected. The Go implementation regenerates the suite with
+be rejected. The reference implementation regenerates the suite with
 `go test ./journal -update`. Any implementation, in any language, that decodes
 every valid file to the expected JSON and rejects every invalid one conforms
 to this version of the format.
@@ -1292,7 +1294,7 @@ recorder cases over both.
   the Go SDK speaks the host protocol, the CLI should use it for every
   language, and self-replay becomes a Go convenience outside this spec.
 - **Concurrency inside a step.** 0.2 assumes the handler makes its reads from
-  one goroutine or thread at a time, or at least issues them in a
+  one thread at a time, or at least issues them in a
   deterministic order. Concurrent queries whose issue order depends on
   scheduling would make replay nondeterministic.
 - **Sensitive data.** Inputs and gateway responses are production data. A

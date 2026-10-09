@@ -7,9 +7,12 @@ A **fixture** (`*.kavach`) is a recording of what a service did before it
 failed: every input, every clock and random read, every output, and a marker
 saying how it failed. A **host command** starts the service's own build in a
 mode where the `kavach` CLI drives it over a pipe, in any language: `./ledger`
-for a Go service (its `main` calls `kavach.MaybeReplay`), `python -m ledger`,
-`node dist/main.js`. `--bin`, `--old` and `--new` all take a host command; a
+for a compiled service, `python -m ledger`, `node dist/main.js`. Each SDK's
+README under `sdk/` says how its service starts as a host. `--bin`, `--old` and `--new` all take a host command; a
 string is split into words like a shell would, and `kavach-host` is appended.
+
+No SDK for your language? [INTEGRATING.md](INTEGRATING.md) shows how to speak
+the protocols directly.
 
 ## The loop
 
@@ -17,13 +20,17 @@ string is split into words like a shell would, and `kavach-host` is appended.
    `kavach inspect <fixture>` prints each record; add `--full` for the panic
    stack and untruncated data, or `--json` to parse it.
 2. **Reproduce it before changing code.**
-   `go build -o /tmp/old ./path/to/service`, then
+   Make a host command for the code as it is now: for a compiled service, build
+   it (`go build -o /tmp/old ./path/to/service`, `cargo build`, ...); for an
+   interpreted one, copy the checkout (`git worktree add /tmp/old HEAD`) and
+   point the command at the copy. Then
    `kavach replay <fixture> --bin /tmp/old`. Expect `still_failing@N`, where `N`
    is the seq of the input that failed. If replay does not reproduce the
    failure, stop and report that; do not guess at a fix.
 3. **Fix the handler.** Change code, never the fixture.
 4. **Verify.**
-   `go build -o /tmp/new ./path/to/service`, then
+   Make a host command for the changed code the same way (`/tmp/new`, or the
+   working tree itself), then
    `kavach diff <fixture> --old /tmp/old --new /tmp/new --json`.
    The fix is accepted only when `verdict` is `fixed`. Besides the recorded
    incident, `diff` replays at least 10 **variants** of it (the failing input
@@ -35,7 +42,9 @@ string is split into words like a shell would, and `kavach-host` is appended.
    `kavach replay <variant> --bin /tmp/new` and generalize the fix. Never
    special-case the variant.
 5. **Keep it as a regression test.** Copy the fixture into the service's
-   `testdata/` and run it with `kavachtest.Run` in a Go test.
+   `testdata/` and have its test suite run
+   `kavach replay <fixture> --bin <host command>`, which exits 0 on `fixed`.
+   With the Go SDK, `kavachtest.Run` does the same inside `go test`.
 
 ## Verdicts
 
@@ -61,8 +70,10 @@ errors, `3` when the fixture or binary cannot be used.
 
 - Never edit, regenerate or delete a fixture to make a test pass. A fixture is
   a record of what happened in production.
-- Handlers must call `env.Now()`, `env.Read()` and `env.Emit()` instead of
-  `time.Now`, `math/rand`/`crypto/rand`, or performing effects directly.
+- Handlers must read the clock, random bytes, gateways and config, and emit
+  effects, only through the env their SDK gives them (in Go, `env.Now()`,
+  `env.Read()`, `env.Emit()`), never through the language's own clock or
+  random generator, or by performing effects directly.
 - Report the verdict exactly as Kavach prints it.
 
 ## Over MCP

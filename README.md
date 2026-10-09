@@ -1,11 +1,12 @@
 # Kavach
 
-Kavach turns production crashes in journal-driven Go services into deterministic
-tests that AI coding agents can reproduce, fix, and *verify* — by re-deriving
+Kavach turns production crashes in journal-driven services, in any language,
+into deterministic tests that AI coding agents can reproduce, fix, and *verify* — by re-deriving
 state from the journal instead of replaying a tape.
 
 **Scope:** deterministic replay and fix verification for single-writer,
-journal-driven Go services.
+journal-driven services. A service takes part through an SDK, or by speaking
+two small protocols directly ([INTEGRATING.md](INTEGRATING.md)).
 
 > **Status: pre-alpha.** The journal format ([SPEC.md](SPEC.md)), the flight
 > recorder, replay and the CLI work on the demo service. APIs and the format
@@ -15,6 +16,9 @@ journal-driven Go services.
 ## Try it
 
 The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
+The commands below use its Go version; every SDK under [sdk](sdk) has a port
+with the same bug. The CLI and the recorder are written in Go, so building them
+needs Go; your service does not.
 
 ```bash
 git clone https://github.com/kavachlabs/kavach && cd kavach
@@ -49,9 +53,8 @@ first offset. With a local broker (for example
 ```
 
 The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
-and it still replays with no broker running. The demo is its own Go module, so
-Kafka is not a dependency of the Go SDK, which depends only on
-`github.com/klauspost/compress`.
+and it still replays with no broker running. Kafka is a dependency of the demo
+only, not of the SDK.
 
 ## With an AI agent
 
@@ -67,39 +70,49 @@ claude mcp add kavach -- kavach mcp
 
 ## Using it in a service
 
-The Go SDK is `github.com/kavachlabs/kavach/sdk/go` (package `kavach`); the
-other languages are under [sdk](sdk).
+| Language | SDK |
+| --- | --- |
+| Go | [sdk/go](sdk/go) |
+| Python | [sdk/python](sdk/python) |
+| TypeScript / JavaScript | [sdk/typescript](sdk/typescript) |
+| Rust | [sdk/rust](sdk/rust) |
+| Java | [sdk/java](sdk/java) |
+| C and C++ | [sdk/c](sdk/c) |
+| Julia | [sdk/julia](sdk/julia) |
+| Ruby | [sdk/ruby](sdk/ruby) |
+| PHP | [sdk/php](sdk/php) |
+| Elixir | [sdk/elixir](sdk/elixir) |
+| Haskell | [sdk/haskell](sdk/haskell) |
+| OCaml | [sdk/ocaml](sdk/ocaml) |
 
-```go
-func main() {
-	// Lets the kavach CLI replay fixtures with this binary.
-	kavach.MaybeReplay(func() kavach.Handler { return NewLedger() })
+Every SDK has the same shape:
 
-	rec := kavach.NewRecorder(NewLedger(), kavach.Options{Service: "ledger", Deliver: publish})
-	defer rec.Close()
-	for msg := range consume() {
-		rec.Step(kavach.Input{Source: "kafka:wallet", Position: msg.Offset, Data: msg.Value})
-	}
-}
+- a **handler**, called once per input, that reads the clock, random bytes,
+  gateways and config, and emits its effects, only through the env it is
+  given;
+- a **recorder** that wraps your consume loop: one step per input, with
+  effects delivered after the step succeeds;
+- a **host mode**: when the program is started with `kavach-host` as its last
+  argument, it serves replays to the CLI instead of consuming.
 
-// Handle reads time and randomness through env and emits effects through it.
-func (l *Ledger) Handle(env kavach.Env, in kavach.Input) error { ... }
-```
+A handler can also provide snapshots, so that fixtures start from recent state
+instead of from the service's first event, and declare invariants that are
+checked after every step, live and in replay. Each SDK's README shows the code.
 
-A handler can also implement `kavach.Snapshotter`, so that fixtures start from
-recent state instead of from the service's first event, and `kavach.Checker` to
-declare invariants that are checked after every step, live and in replay. Use
-[`kavachtest.Run`](sdk/go/kavachtest) to run captured fixtures as Go tests.
+No SDK for your language? An SDK is a wrapper over the recorder and host
+protocols in [SPEC.md](SPEC.md) §9 and §10; [INTEGRATING.md](INTEGRATING.md)
+shows how to speak them directly.
 
 ## How it works
 
 1. **Record.** Your handler reads time and randomness, and emits effects,
-   through the `kavach.Env` it is given for each input. The SDK writes
+   through the env the SDK gives it for each input. The SDK writes
    everything to `kavach-recorder`, a child process that keeps the journal on
    disk and writes a fixture file when the handler panics, returns an error, or
    violates an invariant, even if the service dies in the step.
 2. **Replay.** `kavach replay <fixture> --bin <your-service>` runs your own
-   build as a host process (any language; `--bin "python -m ledger"` works too)
+   build as a host process (`--bin ./ledger`, `--bin "python -m ledger"`,
+   `--bin "node dist/main.js"`)
    and folds the recorded inputs through its handler, serving every clock,
    random, gateway and config read from the fixture. Outputs are captured as
    events, never executed, so replay touches no external system.
@@ -118,14 +131,15 @@ declare invariants that are checked after every step, live and in replay. Use
   journal into state.
 - Record-and-replay of network traffic ("tapes"). Kavach re-derives state from
   inputs; it does not stub dependencies from recorded responses.
-- Languages other than Go, for now. The format is language-neutral by design.
 
 ## Repository guide
 
 | File | What it is |
 | --- | --- |
-| [SPEC.md](SPEC.md) | Journal and fixture format, v0 |
+| [SPEC.md](SPEC.md) | Journal and fixture format, and the host and recorder protocols, v0 |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
+| [INTEGRATING.md](INTEGRATING.md) | Using Kavach from a language with no SDK |
+| [sdk](sdk) | The SDKs, one per language |
 | [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
 | [examples/ledger](examples/ledger) | The demo service |
