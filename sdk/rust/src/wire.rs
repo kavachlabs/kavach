@@ -45,11 +45,9 @@ pub fn put_frame(buf: &mut Vec<u8>, kind: u8, payload: &[u8]) {
 
 /// Appends a `record` frame holding a record of `rtype` with `flags`.
 pub fn put_record(buf: &mut Vec<u8>, rtype: u8, flags: u8, fields: &[u8]) {
-    let mut payload = Vec::with_capacity(fields.len() + 2);
-    payload.push(rtype);
-    payload.push(flags);
-    payload.extend_from_slice(fields);
-    put_frame(buf, FRAME_RECORD, &payload);
+    put_uvarint(buf, fields.len() as u64 + 3);
+    buf.extend_from_slice(&[FRAME_RECORD, rtype, flags]);
+    buf.extend_from_slice(fields);
 }
 
 #[cfg(test)]

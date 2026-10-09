@@ -97,7 +97,6 @@ impl Error for StepError {}
 #[derive(Default)]
 struct Ctl {
     ready: bool,
-    snapshot_requested: bool,
     durables: u64,
     closed: bool,
     fatal: Option<String>,
@@ -108,6 +107,8 @@ struct Shared {
     cv: Condvar,
     /// The recorder reported a fatal error or its output ended: stop recording.
     dead: AtomicBool,
+    /// Kept out of `ctl` so that each step checks it without taking the lock.
+    snapshot_requested: AtomicBool,
 }
 
 impl Shared {
@@ -410,6 +411,7 @@ impl RecorderBuilder {
             ctl: Mutex::new(Ctl::default()),
             cv: Condvar::new(),
             dead: AtomicBool::new(false),
+            snapshot_requested: AtomicBool::new(false),
         });
 
         let argv = self.argv.clone().unwrap_or_else(|| {
@@ -548,6 +550,8 @@ impl RecorderBuilder {
             child,
             thread,
             closed: false,
+            buf: Vec::new(),
+            scratch: Vec::new(),
         })
     }
 
@@ -656,7 +660,7 @@ fn control_loop(out: std::process::ChildStdout, sh: &Shared, log: &LogFn) {
         };
         match msg.str_field("t") {
             Some("ready") => sh.lock().ready = true,
-            Some("snapshot_request") => sh.lock().snapshot_requested = true,
+            Some("snapshot_request") => sh.snapshot_requested.store(true, Ordering::Release),
             Some("durable") => sh.lock().durables += 1,
             Some("closed") => sh.lock().closed = true,
             Some("fixture") => {
@@ -806,7 +810,10 @@ struct Reads {
 struct RecEnv<'a> {
     reads: &'a mut Reads,
     buf: &'a mut Vec<u8>,
-    outs: &'a mut Vec<Output>,
+    /// Reused for encoding a record's fields.
+    scratch: &'a mut Vec<u8>,
+    /// Outputs are kept only when there is a `deliver` to hand them to.
+    outs: Option<&'a mut Vec<Output>>,
 }
 
 impl Env for RecEnv<'_> {
@@ -825,9 +832,9 @@ impl Env for RecEnv<'_> {
             (None, Some(u)) => u.fill(buf).expect("reading /dev/urandom"),
             (None, None) => unreachable!("a recorder always has a random source"),
         }
-        let mut f = Vec::with_capacity(buf.len() + 4);
-        put_bytes(&mut f, buf);
-        put_record(self.buf, REC_RAND, 0, &f);
+        self.scratch.clear();
+        put_bytes(self.scratch, buf);
+        put_record(self.buf, REC_RAND, 0, self.scratch);
     }
 
     fn query(&mut self, gateway: &str, request: &[u8]) -> Result<Vec<u8>, GatewayError> {
@@ -859,16 +866,18 @@ impl Env for RecEnv<'_> {
     }
 
     fn emit(&mut self, sink: &str, data: &[u8], scope: Scope) {
-        let mut f = Vec::new();
-        put_str(&mut f, sink);
-        put_bytes(&mut f, data);
-        f.push(scope.code());
-        put_record(self.buf, REC_OUTPUT, 0, &f);
-        self.outs.push(Output {
-            sink: sink.to_string(),
-            data: data.to_vec(),
-            scope,
-        });
+        self.scratch.clear();
+        put_str(self.scratch, sink);
+        put_bytes(self.scratch, data);
+        self.scratch.push(scope.code());
+        put_record(self.buf, REC_OUTPUT, 0, self.scratch);
+        if let Some(outs) = self.outs.as_deref_mut() {
+            outs.push(Output {
+                sink: sink.to_string(),
+                data: data.to_vec(),
+                scope,
+            });
+        }
     }
 }
 
@@ -896,6 +905,9 @@ pub struct Recorder {
     child: Option<Child>,
     thread: Option<JoinHandle<()>>,
     closed: bool,
+    /// Per-step scratch space, kept to avoid allocating on every step.
+    buf: Vec<u8>,
+    scratch: Vec<u8>,
 }
 
 impl Recorder {
@@ -929,24 +941,27 @@ impl Recorder {
     pub fn step(&mut self, input: &Input) -> Result<(), StepError> {
         self.answer_snapshot_request();
 
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut buf = std::mem::take(&mut self.buf);
         if self.pipe.live() {
-            let mut f = Vec::with_capacity(input.data.len() + 32);
-            put_str(&mut f, &input.source);
-            put_str(&mut f, &input.position);
-            put_bytes(&mut f, &input.data);
-            let mut frame = Vec::with_capacity(f.len() + 8);
-            put_record(&mut frame, REC_INPUT, 0, &f);
-            self.pipe.write(&frame);
+            scratch.clear();
+            put_str(&mut scratch, &input.source);
+            put_str(&mut scratch, &input.position);
+            put_bytes(&mut scratch, &input.data);
+            buf.clear();
+            put_record(&mut buf, REC_INPUT, 0, &scratch);
+            self.pipe.write(&buf);
         }
 
-        let mut buf = Vec::new();
+        buf.clear();
         let mut outs = Vec::new();
         let caught = {
             let handler = &mut self.handler;
             let mut env = RecEnv {
                 reads: &mut self.reads,
                 buf: &mut buf,
-                outs: &mut outs,
+                scratch: &mut scratch,
+                outs: self.deliver.is_some().then_some(&mut outs),
             };
             panics::catch(|| match handler.handle(&mut env, input) {
                 Ok(()) => Ok(first_violation(&**handler)),
@@ -981,6 +996,8 @@ impl Recorder {
         };
         put_frame(&mut buf, FRAME_STEP_END, &[]);
         self.pipe.write(&buf);
+        self.scratch = scratch;
+        self.buf = buf;
 
         if let Some(payload) = resume {
             std::panic::resume_unwind(payload);
@@ -997,7 +1014,10 @@ impl Recorder {
     /// Answers a pending `snapshot_request` at this step boundary (SPEC.md
     /// section 10.4).
     fn answer_snapshot_request(&mut self) {
-        let requested = std::mem::take(&mut self.shared.lock().snapshot_requested);
+        let requested = self
+            .shared
+            .snapshot_requested
+            .swap(false, Ordering::Acquire);
         if !requested || !self.pipe.live() {
             return;
         }
