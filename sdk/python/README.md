@@ -113,7 +113,7 @@ rec.close()                                           # waits for the recorder t
 
 ```python
 def main():
-    kavach.maybe_host(lambda: Wallet(), gateways={...}, local_setup=None, deliver_local=None)
+    kavach.maybe_host(lambda: Wallet(), gateways={...})
     ...  # normal startup
 ```
 
@@ -122,9 +122,8 @@ it serves the CLI over stdin/stdout and exits; otherwise it returns. It takes th
 protocol stream for itself and points file descriptor 1 and `sys.stdout` at
 standard error, so `print` in a handler is safe. `ready.environment` is
 `host.runtime` plus the output of `kavach-recorder facts` if that command exists.
-In sandbox mode `local_setup()` runs before `ready`, local gateways answered
-`live` run on the host and are reported as `observed`, and `deliver_local(outputs)`
-receives a successful step's local outputs.
+Sandbox mode (§6.3) is not supported: the host answers a sandbox `hello`, or a
+`live` gateway answer, with `fatal`.
 
 Choose old and new builds with a command-line flag or by running different
 code, **never** an environment variable: `env.` facts are served from the

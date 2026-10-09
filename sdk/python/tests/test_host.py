@@ -131,7 +131,7 @@ class Aborts(unittest.TestCase):
                 for _ in range(3):
                     try:
                         env.now_ns()
-                    except BaseException:  # noqa: BLE001
+                    except BaseException:
                         pass
                 env.emit("late", b"x")
 
@@ -176,71 +176,21 @@ class Gateways(unittest.TestCase):
         code, out = play(Conformance, [HELLO, self.query()], gateways={"g": Gateway(lambda r: b"", "local")})
         self.assertEqual(out[1]["scope"], "local")
 
-    def test_live_answer_executes_locally_and_reports_observed(self):
-        calls = []
+    def test_live_answer_is_fatal(self):
+        code, out = play(Conformance, [HELLO, self.query(), {"t": "gateway", "live": True}], gateways=AnyGateway())
+        self.assertEqual((code, out[-1]["t"]), (1, "fatal"))
 
-        def conn(req):
-            calls.append(req)
-            return b"live-response"
-
-        code, out = play(
-            Conformance,
-            [{**HELLO, "mode": "sandbox"}, self.query(), {"t": "gateway", "live": True}, {"t": "end"}],
-            gateways={"g": Gateway(conn, "local")},
-        )
-        self.assertEqual(calls, [b"q"])
-        obs = [m for m in out if m["t"] == "observed"][0]
-        self.assertEqual(base64.b64decode(obs["response"]), b"live-response")
-        emit = [m for m in out if m["t"] == "emit"][0]
-        self.assertEqual(base64.b64decode(emit["data"]), b"live-response")
-
-    def test_live_failure_is_observed_as_error(self):
-        def conn(req):
-            raise OSError("ENOENT")
-
-        code, out = play(
-            Conformance, [{**HELLO, "mode": "sandbox"}, self.query(), {"t": "gateway", "live": True}, {"t": "end"}],
-            gateways={"g": Gateway(conn, "local")},
-        )
-        obs = [m for m in out if m["t"] == "observed"][0]
-        self.assertEqual(obs, {"t": "observed", "error": "ENOENT"})
-
-
-class Sandbox(unittest.TestCase):
-    class H:
-        def handle(self, env, input):
-            env.emit("shm", b"local-data", local=True)
-            env.emit("db", b"remote-data")
-            if input.data == b"fail":
-                raise HandlerError("no")
-
-    def test_local_setup_runs_before_ready_in_sandbox_only(self):
-        order = []
-        play(self.H, [HELLO], local_setup=lambda: order.append("setup"))
-        self.assertEqual(order, [])
-        code, out = play(self.H, [{**HELLO, "mode": "sandbox"}], local_setup=lambda: order.append("setup"))
-        self.assertEqual(order, ["setup"])
-        self.assertEqual(out[0]["t"], "ready")
-
-    def test_failing_local_setup_is_fatal(self):
-        def bad():
-            raise OSError("no shm")
-
-        code, out = play(self.H, [{**HELLO, "mode": "sandbox"}], local_setup=bad)
-        self.assertEqual((code, out[0]["t"]), (1, "fatal"))
-
-    def test_local_outputs_delivered_after_success_in_sandbox_only(self):
-        got = []
-        sb = {**HELLO, "mode": "sandbox"}
-        play(self.H, [sb, step(base64.b64encode(b"ok").decode()), step(base64.b64encode(b"fail").decode(), "1")],
-             deliver_local=lambda outs: got.append([o.sink for o in outs]))
-        self.assertEqual(got, [["shm"]])  # the failed step delivered nothing
-        got.clear()
-        play(self.H, [HELLO, step(base64.b64encode(b"ok").decode())], deliver_local=got.append)
-        self.assertEqual(got, [])
+    def test_sandbox_mode_is_fatal(self):
+        code, out = play(Conformance, [{**HELLO, "mode": "sandbox"}])
+        self.assertEqual((code, out), (1, [{"t": "fatal", "message": "sandbox mode not supported"}]))
 
     def test_emit_scope_on_the_wire(self):
-        code, out = play(self.H, [HELLO, step(base64.b64encode(b"ok").decode())])
+        class H:
+            def handle(self, env, input):
+                env.emit("shm", b"local-data", local=True)
+                env.emit("db", b"remote-data")
+
+        code, out = play(H, [HELLO, step(base64.b64encode(b"ok").decode())])
         self.assertEqual([m["scope"] for m in out if m["t"] == "emit"], ["local", "remote"])
 
 
