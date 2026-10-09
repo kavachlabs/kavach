@@ -21,7 +21,7 @@ module Kavach.Recorder
   , findRecorder
   ) where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Exception hiding (Handler, handle)
@@ -41,6 +41,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Typeable (Typeable)
 import Kavach.Internal
 import Kavach.Json
+import Kavach.Ring
 import Kavach.Wire
 import System.Directory (findExecutable)
 import System.Environment (lookupEnv)
@@ -72,6 +73,10 @@ data RecorderOptions = RecorderOptions
   , roFlags :: IO [(Text, ByteString)]
   , roRecorderCommand :: Maybe [String]
   -- ^ recorder argument vector; else @$KAVACH_RECORDER@, else @kavach-recorder@ on PATH
+  , roNoRing :: Bool
+  -- ^ carry the record stream over the recorder's pipe instead of the shared-memory ring (§10.7)
+  , roRingBytes :: Maybe Int
+  -- ^ ring capacity: a power of two of at least 64 KiB; default 8 MiB
   , roRequired :: Bool
   , roHandlerId :: Maybe Text
   , roDir :: Maybe Text
@@ -104,6 +109,8 @@ defaultOptions service =
     , roConfigSource = "env"
     , roFlags = pure []
     , roRecorderCommand = Nothing
+    , roNoRing = False
+    , roRingBytes = Nothing
     , roRequired = False
     , roHandlerId = Nothing
     , roDir = Nothing
@@ -143,6 +150,7 @@ data Recorder s = Recorder
   , rLock :: MVar ()
   , rIn :: Maybe Handle
   , rProc :: Maybe ProcessHandle
+  , rRing :: Maybe Ring
   , rActive :: TVar Bool
   , rClosing :: TVar Bool
   , rClosed :: IORef Bool
@@ -177,8 +185,9 @@ failRec r reason = do
     writeIORef (rLogged r) True
     logLine (reason ++ "; recording has stopped and steps run unrecorded")
 
-rawWrite :: Recorder s -> ByteString -> IO ()
-rawWrite r bs = do
+-- | Write to the recorder's standard input.
+pipeWrite :: Recorder s -> ByteString -> IO ()
+pipeWrite r bs = do
   active <- readTVarIO (rActive r)
   case rIn r of
     Just h | active && not (BS.null bs) -> do
@@ -187,6 +196,39 @@ rawWrite r bs = do
         Left e -> failRec r ("could not write to the recorder: " ++ show (e :: IOException))
         Right () -> pure ()
     _ -> pure ()
+
+-- | Hand whole frames to the recorder, through the ring or the pipe.
+rawWrite :: Recorder s -> ByteString -> IO ()
+rawWrite r bs = case rRing r of
+  Nothing -> pipeWrite r bs
+  Just g -> publish g bs
+  where
+    publish g b = do
+      active <- readTVarIO (rActive r)
+      unless (BS.null b || not active) $ do
+        (n, used) <- tryPublish g b
+        if n == 0
+          then do
+            -- Full: the recorder drains the ring on the doorbell. If it has
+            -- exited, the control loop stops recording and ends the wait.
+            pipeWrite r (BS.singleton 1)
+            wait g b
+          else do
+            let half = ringCap g `div` 2
+            belled <- readIORef (ringBelled g)
+            if used > half && not belled
+              then writeIORef (ringBelled g) True >> pipeWrite r (BS.singleton 1)
+              else when (used <= half) (writeIORef (ringBelled g) False)
+            publish g (BS.drop n b)
+    wait g b = do
+      active <- readTVarIO (rActive r)
+      when active $ do
+        (n, _) <- tryPublish g b
+        if n == 0 then threadDelay 20 >> wait g b else publish g (BS.drop n b)
+
+-- | Wake a recorder that reads the ring (§10.7).
+bell :: Recorder s -> IO ()
+bell r = when (isJust (rRing r)) (pipeWrite r (BS.singleton 1))
 
 newRecorder :: Typeable s => RecorderOptions -> Handler s -> IO (Recorder s)
 newRecorder opts h = do
@@ -197,6 +239,16 @@ newRecorder opts h = do
   when (snaps && not canSnap) $
     ioError (userError "kavach: snapshots need a handler with snapshot and restore")
   cmd <- findRecorder (roRecorderCommand opts)
+  ring <-
+    if roNoRing opts
+      then pure Nothing
+      else do
+        res <- try (createRing (fromMaybe defaultRingBytes (roRingBytes opts)))
+        case res of
+          Right g -> pure (Just g)
+          Left e -> do
+            logLine ("no shared-memory ring, recording over the pipe: " ++ displayException (e :: IOException))
+            pure Nothing
   spawned <- try (maybe (throwIO (RecorderError "kavach-recorder not found (set roRecorderCommand, $KAVACH_RECORDER or put it on PATH)")) spawn cmd)
   active <- newTVarIO (either (const False) (const True) (spawned :: Either SomeException (Handle, Handle, ProcessHandle)))
   closing <- newTVarIO False
@@ -208,12 +260,13 @@ newRecorder opts h = do
   logged <- newIORef False
   st <- newIORef (initial h)
   lock <- newMVar ()
+  when (either (const True) (const False) spawned) $ mapM_ destroyRing ring
   let (inH, proc') = case spawned of
         Right (i, _, p) -> (Just i, Just p)
         Left _ -> (Nothing, Nothing)
       r =
         Recorder
-          { rHandler = h, rOpts = opts, rState = st, rLock = lock, rIn = inH, rProc = proc'
+          { rHandler = h, rOpts = opts, rState = st, rLock = lock, rIn = inH, rProc = proc', rRing = ring
           , rActive = active, rClosing = closing, rClosed = closed, rDurable = durable
           , rSnapReq = snapReq, rReady = ready, rAck = ack, rLogged = logged, rSnapshots = snaps
           }
@@ -222,7 +275,7 @@ newRecorder opts h = do
     Left _ -> pure ()
   startup <- try $ do
     either throwIO (const (pure ())) spawned
-    rawWrite r (frameOpen (renderJson (openObject opts snaps)))
+    pipeWrite r (frameOpen (renderJson (openObject opts snaps ring)))
     flags <- roFlags opts
     rawWrite r (frameFacts (("host.runtime", BC.pack runtimeName) : flags))
     when (roStart opts == FromSnapshot) $ do
@@ -257,8 +310,8 @@ spawn (c : args) = do
   hSetBuffering i (BlockBuffering Nothing)
   pure (i, o, p)
 
-openObject :: RecorderOptions -> Bool -> Json
-openObject o snaps =
+openObject :: RecorderOptions -> Bool -> Maybe Ring -> Json
+openObject o snaps ring =
   JObj $
     [ ("protocol", JNum "1")
     , ("service", JStr (roService o))
@@ -266,6 +319,7 @@ openObject o snaps =
     , ("producer", JStr (T.pack producer))
     , ("snapshots", JBool snaps)
     ]
+      ++ concat [[("ring", JNum (show (ringCap g))), ("ring_path", JStr (T.pack (ringPath g)))] | Just g <- [ring]]
       ++ [("handler", JStr v) | Just v <- [roHandlerId o]]
       ++ [("dir", JStr v) | Just v <- [roDir o]]
       ++ [("compression", JStr v) | Just v <- [roCompression o]]
@@ -397,6 +451,7 @@ flush r durable = do
       else do
         b <- readTVarIO (rDurable r)
         rawWrite r (frameFlush durable)
+        bell r
         pure (Just b)
   case before of
     Nothing -> pure False
@@ -413,12 +468,13 @@ flush r durable = do
 closeRecorder :: Recorder s -> IO ()
 closeRecorder r = withMVar (rLock r) $ \_ -> do
   already <- atomicModifyIORef' (rClosed r) (\c -> (True, c))
-  unless already $ case (rIn r, rProc r) of
+  unless already $ (`finally` mapM_ destroyRing (rRing r)) $ case (rIn r, rProc r) of
     (Just i, Just p) -> do
       active <- readTVarIO (rActive r)
       when active $ do
         atomically (writeTVar (rClosing r) True)
         rawWrite r frameClose
+        bell r
         ok <- timeout (secs (roCloseTimeout (rOpts r))) (atomically (readTVar (rAck r) >>= check))
         when (ok == Nothing) $ logLine "the recorder did not answer close in time"
       atomically (writeTVar (rClosing r) True >> writeTVar (rActive r) False)
