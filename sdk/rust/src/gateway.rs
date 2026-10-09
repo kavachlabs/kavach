@@ -11,8 +11,7 @@ type Fallback = Box<dyn FnMut(&str, &[u8]) -> Result<Vec<u8>, GatewayError>>;
 /// The gateways a handler may query: name to connection and [`Scope`].
 ///
 /// Names MUST be stable across builds, and so must scopes (SPEC.md section 4.7).
-/// A recorder calls the connection; a host only asks for the scope, except for
-/// local gateways in sandbox replay, where it calls the connection (section 6.3).
+/// A recorder calls the connection; a host only asks for the scope.
 #[derive(Default)]
 pub struct Gateways {
     named: HashMap<String, (Scope, Connection)>,

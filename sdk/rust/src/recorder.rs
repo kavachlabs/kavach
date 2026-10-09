@@ -427,7 +427,6 @@ impl RecorderBuilder {
             shared: shared.clone(),
         };
 
-        // open, facts, and the starting snapshot.
         let mut buf = Vec::new();
         put_frame(&mut buf, FRAME_OPEN, self.open_json(snapshots).as_bytes());
         let mut facts: Vec<(String, Vec<u8>)> =

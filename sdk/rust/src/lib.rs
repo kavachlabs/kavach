@@ -69,7 +69,7 @@ pub fn runtime() -> &'static str {
     env!("KAVACH_RUNTIME")
 }
 
-/// Where an output or a gateway lives (SPEC.md sections 4.4, 4.7, 6.3).
+/// Where an output or a gateway lives (SPEC.md sections 4.4 and 4.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// A system on another host.

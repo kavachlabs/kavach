@@ -1,6 +1,5 @@
 //! The host side of the replay protocol (SPEC.md section 9).
 
-use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, Write};
 use std::os::unix::io::FromRawFd;
@@ -11,9 +10,8 @@ use crate::b64;
 use crate::gateway::Gateways;
 use crate::json::Value;
 use crate::panics::{self, Caught};
-use crate::recorder::Deliver;
 use crate::sys;
-use crate::{first_violation, Env, GatewayError, Handler, Input, Output, Scope};
+use crate::{first_violation, Env, GatewayError, Handler, Input, Scope};
 
 /// The argument that makes a binary act as a host (SPEC.md section 9.1).
 const HOST_ARG: &str = "kavach-host";
@@ -22,8 +20,6 @@ const HOST_ARG: &str = "kavach-host";
 #[derive(Default)]
 pub struct HostOptions {
     gateways: Gateways,
-    local_setup: Option<Box<dyn FnMut()>>,
-    deliver: Option<Deliver>,
 }
 
 impl HostOptions {
@@ -32,28 +28,9 @@ impl HostOptions {
     }
 
     /// The gateways the handler queries. The host needs their scopes to report
-    /// queries, and calls the connection of a local gateway when the driver
-    /// answers `live` in sandbox replay (SPEC.md section 6.3).
+    /// queries.
     pub fn gateways(mut self, gateways: Gateways) -> Self {
         self.gateways = gateways;
-        self
-    }
-
-    /// The application's local setup (SPEC.md section 6.3): creates the local
-    /// resources the handler uses. Run before `ready`, in `sandbox` mode only. It
-    /// must not reach the network.
-    pub fn local_setup(mut self, f: impl FnMut() + 'static) -> Self {
-        self.local_setup = Some(Box::new(f));
-        self
-    }
-
-    /// Executes a successful step's local outputs. Used in `sandbox` mode only;
-    /// remote outputs are never delivered by a host.
-    pub fn deliver_local(
-        mut self,
-        f: impl FnMut(&[Output]) -> Result<(), Box<dyn Error>> + 'static,
-    ) -> Self {
-        self.deliver = Some(Box::new(f));
         self
     }
 }
@@ -149,14 +126,15 @@ where
     panics::install_panic_hook();
 
     let mut handler: Option<Box<dyn Handler>> = None;
-    let mut sandbox = false;
     while let Some(msg) = proto.recv() {
         match msg.str_field("t") {
             Some("hello") => {
                 if msg.get("protocol").and_then(Value::as_u64) != Some(1) {
                     proto.fatal("unsupported protocol version");
                 }
-                sandbox = msg.str_field("mode") == Some("sandbox");
+                if msg.str_field("mode") == Some("sandbox") {
+                    proto.fatal("sandbox mode not supported");
+                }
                 let snapshot = match msg.get("snapshot").and_then(Value::as_str) {
                     Some(s) => match b64::decode(s) {
                         Some(b) => Some(b),
@@ -167,13 +145,7 @@ where
                 if msg.str_field("start") == Some("snapshot") && snapshot.is_none() {
                     proto.fatal("hello: start is snapshot but there is no snapshot");
                 }
-                let setup = &mut options.local_setup;
                 let made = panics::catch(|| {
-                    if sandbox {
-                        if let Some(f) = setup.as_mut() {
-                            f();
-                        }
-                    }
                     let mut h = factory();
                     if let Some(data) = &snapshot {
                         match h.snapshotter() {
@@ -222,7 +194,7 @@ where
                     proto.fatal("malformed step")
                 };
                 let input = Input::new(source, position, data);
-                step(&mut proto, h.as_mut(), &input, &mut options, sandbox);
+                step(&mut proto, h.as_mut(), &input, &mut options);
             }
             Some("end") => return 0,
             t => proto.fatal(&format!("unexpected message {:?}", t.unwrap_or(""))),
@@ -231,39 +203,24 @@ where
     0 // the driver closed its end between steps
 }
 
-fn step(
-    proto: &mut Proto,
-    handler: &mut dyn Handler,
-    input: &Input,
-    options: &mut HostOptions,
-    sandbox: bool,
-) {
+fn step(proto: &mut Proto, handler: &mut dyn Handler, input: &Input, options: &mut HostOptions) {
     let mut env = HostEnv {
         proto,
         gateways: &mut options.gateways,
-        sandbox,
-        local_outs: Vec::new(),
         aborted: false,
     };
     let caught = panics::catch(|| match handler.handle(&mut env, input) {
         Ok(()) => Ok(first_violation(&*handler)),
         Err(e) => Err(e),
     });
-    let HostEnv {
-        proto,
-        local_outs,
-        aborted,
-        ..
-    } = env;
+    let HostEnv { proto, aborted, .. } = env;
 
     let mut done = vec![("t", Value::str("done"))];
-    let mut ok = false;
     if aborted {
         done.push(("outcome", Value::str("aborted")));
     } else {
         match caught {
             Caught::Done(Ok(None)) => {
-                ok = true;
                 done.push(("outcome", Value::str("ok")));
             }
             Caught::Done(Ok(Some((name, detail)))) => {
@@ -297,22 +254,11 @@ fn step(
         }
     }
     proto.send(&Value::obj_vec(done));
-
-    // Local outputs are delivered after the step succeeds, in sandbox mode.
-    if ok && sandbox && !local_outs.is_empty() {
-        if let Some(deliver) = options.deliver.as_mut() {
-            if let Err(e) = deliver(&local_outs) {
-                eprintln!("kavach: delivering local outputs: {e}");
-            }
-        }
-    }
 }
 
 struct HostEnv<'a> {
     proto: &'a mut Proto,
     gateways: &'a mut Gateways,
-    sandbox: bool,
-    local_outs: Vec<Output>,
     aborted: bool,
 }
 
@@ -397,20 +343,7 @@ impl Env for HostEnv<'_> {
             "gateway",
         );
         if a.get("live").and_then(Value::as_bool) == Some(true) {
-            // Sandbox replay: a local query runs for real and the result is reported.
-            let result = self.gateways.call(gateway, request);
-            let observed = match &result {
-                Ok(r) => Value::obj([
-                    ("t", Value::str("observed")),
-                    ("response", Value::Str(b64::encode(r))),
-                ]),
-                Err(e) => Value::obj([
-                    ("t", Value::str("observed")),
-                    ("error", Value::str(e.message())),
-                ]),
-            };
-            self.proto.send(&observed);
-            return result;
+            self.proto.fatal("sandbox mode not supported");
         }
         if let Some(e) = a.str_field("error") {
             return Err(GatewayError::new(e));
@@ -440,13 +373,6 @@ impl Env for HostEnv<'_> {
             ("data", Value::Str(b64::encode(data))),
             ("scope", Value::str(scope.name())),
         ]));
-        if self.sandbox && scope == Scope::Local {
-            self.local_outs.push(Output {
-                sink: sink.to_string(),
-                data: data.to_vec(),
-                scope,
-            });
-        }
     }
 }
 

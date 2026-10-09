@@ -28,7 +28,8 @@ kavach = { path = "sdk/rust" }   # not yet published
   `capture_backtraces`.
 - `Gateways::new().register(name, Scope, connection)`: name to connection and scope.
 - `kavach::maybe_host(factory, HostOptions::new()...)`: call first in `main`. If the
-  last argument is `kavach-host` it serves the host protocol and exits.
+  last argument is `kavach-host` it serves the host protocol and exits. Sandbox
+  mode (SPEC.md section 6.3) is not supported: the host answers `fatal`.
   Fd 1 is duplicated for the protocol and then pointed at stderr, so `println!`
   in a handler cannot corrupt it.
 
@@ -68,5 +69,5 @@ cargo test --all-features
 
 runs `spec/host/run.py` against `kavach-conformance-host` and every
 `spec/recorder/sdk/*.json` case through `kavach-conformance-recorder` and the
-fake recorder. The spec is read from `$KAVACH_SPEC_DIR` (default: the main
-checkout's `spec/` directory). python3 is required.
+fake recorder. The spec is read from `$KAVACH_SPEC_DIR` (default: the
+repository's `spec/` directory). python3 is required.
