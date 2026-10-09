@@ -15,8 +15,9 @@ import (
 // MaxCandidates bounds the number of variants generated from one incident.
 const MaxCandidates = 64
 
-// vstep is one step of a variant under construction: an input and the clock
-// and random reads served to whichever input runs in its slot.
+// vstep is one step of a variant under construction: an input and the reads
+// served to whichever input runs in its slot. Gateway and config reads belong
+// to the input they were recorded for and travel with it.
 type vstep struct {
 	input    journal.Record
 	reads    []journal.Record
@@ -46,16 +47,7 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 	}
 	// Variants keep the journal's genesis environment: a replay serves it, and a
 	// journal without one is invalid. They never change environment records.
-	var env *journal.Record
-	for i := range recs {
-		if recs[i].Type == journal.TypeEnvironment {
-			env = &recs[i]
-			break
-		}
-		if recs[i].Type == journal.TypeInput {
-			break
-		}
-	}
+	env := genesisEnv(recs)
 	steps, err := splitSteps(recs)
 	if err != nil {
 		return nil, err
@@ -142,7 +134,7 @@ func buildVariant(meta journal.Meta, snap, env *journal.Record, steps []vstep, i
 func cloneSteps(s []vstep) []vstep { return append([]vstep(nil), s...) }
 
 // moves runs the incident's input d slots earlier, against less history.
-// Reads stay with their slots, so time still moves forward.
+// Clock and random reads stay with their slots, so time still moves forward.
 func moves(base []vstep, k int) []candidate {
 	var out []candidate
 	for d := 1; d <= k; d++ {
@@ -152,13 +144,24 @@ func moves(base []vstep, k int) []candidate {
 		copy(s[to+1:k+1], base[to:k])
 		s[to] = inc
 		for i := range s {
-			s[i].reads = base[i].reads
+			s[i].reads = append(readsOf(base[i].reads, true), readsOf(s[i].reads, false)...)
 		}
 		n := "1 input"
 		if d > 1 {
 			n = fmt.Sprintf("%d inputs", d)
 		}
 		out = append(out, candidate{fmt.Sprintf("failing input (seq %d) moved %s earlier, before seq %d", base[k].input.Seq, n, base[to].input.Seq), s})
+	}
+	return out
+}
+
+// readsOf returns the clock and random reads of rs, or its other reads.
+func readsOf(rs []journal.Record, timeAndRand bool) []journal.Record {
+	var out []journal.Record
+	for _, r := range rs {
+		if (r.Type == journal.TypeClock || r.Type == journal.TypeRand) == timeAndRand {
+			out = append(out, r)
+		}
 	}
 	return out
 }

@@ -34,12 +34,20 @@ type Rand interface {
 }
 
 // Env is passed to a handler for each input. Everything nondeterministic a
-// handler does must go through it: reading time, reading randomness, and
-// producing effects. When recording, reads are journaled; when replaying, they
-// are served from the journal and effects are captured instead of executed.
+// handler does must go through it: reading time, reading randomness, querying
+// external systems, reading config values, and producing effects. When
+// recording, reads are journaled; when replaying, they are served from the
+// journal and effects are captured instead of executed.
 type Env interface {
 	Clock
 	Rand
+	// Query asks the external system gateway, a name stable across builds, and
+	// returns its response. A failed query returns an error carrying the
+	// connection's failure. Gateways are remote.
+	Query(gateway string, request []byte) ([]byte, error)
+	// Config reads a config value that can change what the handler does, such
+	// as a feature flag. ok is false if the value is not set.
+	Config(key string) (value []byte, ok bool)
 	// Emit requests an effect. Effects are delivered only after the step
 	// returns successfully, and never during replay.
 	Emit(sink string, data []byte)

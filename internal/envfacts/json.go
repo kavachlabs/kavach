@@ -66,7 +66,7 @@ func FromJSON(m map[string]JSONFact) ([]journal.Fact, error) {
 	return facts, nil
 }
 
-// MarshalFacts encodes facts as indented JSON.
+// MarshalFacts encodes facts as JSON on one line (SPEC.md §9.2).
 func MarshalFacts(facts []journal.Fact) ([]byte, error) {
-	return json.MarshalIndent(ToJSON(facts), "", "  ")
+	return json.Marshal(ToJSON(facts))
 }

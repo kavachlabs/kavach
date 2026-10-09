@@ -140,7 +140,9 @@ PYTHONPATH=../.. python -m ledger --fix    # fixed: rejects it
 ```
 
 The replay hosts are `python -m ledger` (old) and `python -m ledger --fix`
-(new). End-to-end replay through the Go CLI is not wired up yet.
+(new): `kavach replay <fixture> --bin "python -m ledger"` and
+`kavach diff <fixture> --old "python -m ledger" --new "python -m ledger --fix"`
+from `examples/ledger`.
 
 ## Tests and conformance
 

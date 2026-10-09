@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -35,8 +34,8 @@ Usage:
 
   kavach list    [dir] [--json]
   kavach inspect <fixture> [--json] [--full]
-  kavach replay  <fixture> --bin <replay-binary> [--json]
-  kavach diff    <fixture> --old <binary> --new <binary> [--variants N] [--keep DIR] [--json]
+  kavach replay  <fixture> --bin <host-command> [--json]
+  kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--keep DIR] [--json]
   kavach mcp
   kavach version
 
@@ -44,13 +43,15 @@ list finds fixtures (*.kavach) under dir (default: the current directory).
 mcp serves kavach_list_incidents, kavach_replay and kavach_diff to an AI agent
 as a Model Context Protocol server on stdin/stdout.
 
-A replay binary is any Go binary whose main calls kavach.MaybeReplay. --bin
-defaults to $KAVACH_BIN.
+A host command starts a service that runs its own handler under the host
+protocol (SPEC.md section 9), in any language: ./ledger, "python -m ledger",
+"node dist/main.js". It is split into words like a shell would, and
+kavach-host is appended. --bin defaults to $KAVACH_BIN.
 
 diff accepts a fix only if the new binary replays the fixture as fixed and also
 passes at least N (default 10) variants of the incident: the failing input with
 fields changed, moved earlier, earlier inputs dropped or redelivered, the clock
-shifted. A variant counts only if the old binary fails on it exactly as it did
+shifted. A variant counts only if the old build fails on it exactly as it did
 in production. Variants the new binary fails are saved for kavach replay.
 
 On a terminal, output is colored and starts with a banner; --no-banner or
@@ -302,50 +303,23 @@ func writeJSON(stdout, stderr io.Writer, v any) int {
 	return exitPass
 }
 
-// replayWith runs bin as a replay binary on fixture and returns its result.
+// replayWith replays the fixture at path through the host command bin.
 func replayWith(bin, fixture string) (*kavach.Result, time.Duration, error) {
 	if bin == "" {
-		return nil, 0, errors.New("no replay binary: pass --bin or set KAVACH_BIN")
+		return nil, 0, errors.New("no host command: pass --bin or set KAVACH_BIN")
 	}
-	if !strings.ContainsRune(bin, filepath.Separator) {
-		if p, err := exec.LookPath(bin); err == nil {
-			bin = p
-		}
-	}
-	dir, err := os.MkdirTemp("", "kavach-replay-")
+	j, err := journal.ReadFile(fixture)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer os.RemoveAll(dir)
-	out := filepath.Join(dir, "result.json")
-
-	var stderr bytes.Buffer
-	cmd := exec.Command(bin, kavach.ReplayCommand, fixture, out)
-	cmd.Stderr = &stderr
 	start := time.Now()
-	err = cmd.Run()
-	wall := time.Since(start)
-	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, wall, fmt.Errorf("%s: %s", bin, msg)
-	}
-	b, err := os.ReadFile(out)
-	if err != nil {
-		return nil, wall, fmt.Errorf("%s did not write a replay result; does its main call kavach.MaybeReplay?", bin)
-	}
-	var res kavach.Result
-	if err := json.Unmarshal(b, &res); err != nil {
-		return nil, wall, fmt.Errorf("%s wrote an invalid replay result: %v", bin, err)
-	}
-	return &res, wall, nil
+	res, err := kavach.ReplayHost(j, bin)
+	return res, time.Since(start), err
 }
 
 func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("replay", stderr)
-	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "replay binary (a Go binary calling kavach.MaybeReplay)")
+	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "host command, e.g. ./ledger or \"python -m ledger\" (kavach-host is appended)")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -383,8 +357,9 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "          %s\n", u.paint(res.Detail, verdictColor(res.Status)))
 		}
 		if n := synthesized(res); n > 0 {
-			fmt.Fprintf(stdout, "%s%d clock/random reads past the recorded failure were synthesized\n", u.label("note", 10), n)
+			fmt.Fprintf(stdout, "%s%d reads past the recorded failure were synthesized from no record\n", u.label("note", 10), n)
 		}
+		printEnvironment(u, stdout, res)
 		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms (including process start)", ms(wall)), ansiYellow))
 		if u.color && res.Status == kavach.StatusStillFailing {
 			fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: fix the handler, build it, then run kavach diff %s --old %s --new <new-binary>", path, *bin), ansiDim))
@@ -394,6 +369,27 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		return exitPass
 	}
 	return exitFail
+}
+
+// printEnvironment shows how the replay's environment differs from production's
+// and when production's environment changed (SPEC.md §6.2).
+func printEnvironment(u ui, stdout io.Writer, res *kavach.Result) {
+	const shown = 10
+	if n := len(res.Drift); n > 0 {
+		fmt.Fprintf(stdout, "%s%d facts differ from the recorded environment\n", u.label("drift", 10), n)
+		for i, d := range res.Drift {
+			if i == shown {
+				fmt.Fprintf(stdout, "          %s\n", u.paint(fmt.Sprintf("... and %d more (--json lists them all)", n-shown), ansiDim))
+				break
+			}
+			fmt.Fprintf(stdout, "          %s  recorded %s  replay %s\n", d.Key, showData([]byte(d.Recorded), 60), showData([]byte(d.Replay), 60))
+		}
+	}
+	for _, c := range res.EnvChanges {
+		for _, f := range c.Facts {
+			fmt.Fprintf(stdout, "%s%s = %s\n", u.label(fmt.Sprintf("after %d", c.After), 10), f.Key, showData([]byte(f.Value), 60))
+		}
+	}
 }
 
 func synthesized(res *kavach.Result) int {
@@ -408,8 +404,8 @@ func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("diff", stderr)
-	oldBin := fs.String("old", "", "replay binary built from the code that failed")
-	newBin := fs.String("new", "", "replay binary built from the candidate fix")
+	oldBin := fs.String("old", "", "host command for the code that failed")
+	newBin := fs.String("new", "", "host command for the candidate fix")
 	minVariants := fs.Int("variants", kavach.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
 	keep := fs.String("keep", "", "directory to save failing variants in (default: a new temporary directory)")
 	asJSON := fs.Bool("json", false, "print the verification as JSON")
@@ -511,18 +507,12 @@ func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*d
 	if err != nil {
 		return nil, err
 	}
-	work, err := os.MkdirTemp("", "kavach-diff-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(work)
-
 	opts := kavach.VerifyOptions{MinVariants: minVariants, Parallel: runtime.NumCPU()}
 	if minVariants == 0 {
 		opts.MinVariants = -1
 	}
 	start := time.Now()
-	v, err := kavach.VerifyWith(j, binReplayer(oldBin, fixture, work), binReplayer(newBin, fixture, work), opts)
+	v, err := kavach.VerifyWith(j, hostReplayer(oldBin), hostReplayer(newBin), opts)
 	wall := time.Since(start)
 	if err != nil {
 		return nil, err
@@ -563,22 +553,9 @@ func (o *diffOutcome) report() map[string]any {
 	}
 }
 
-// binReplayer replays journals with a replay binary: the fixture at path
-// itself, and anything else (variants) after writing it under dir.
-func binReplayer(bin, path, dir string) kavach.ReplayFunc {
-	return func(j *journal.Journal) (*kavach.Result, error) {
-		f := path
-		if v := j.Header.Meta.Variant; v != nil {
-			f = filepath.Join(dir, fmt.Sprintf("variant-%02d.kavach", v.ID))
-			if _, err := os.Stat(f); err != nil {
-				if err := journal.WriteFile(f, j.Header.Meta, j.Records); err != nil {
-					return nil, err
-				}
-			}
-		}
-		res, _, err := replayWith(bin, f)
-		return res, err
-	}
+// hostReplayer replays journals through a host command.
+func hostReplayer(bin string) kavach.ReplayFunc {
+	return func(j *journal.Journal) (*kavach.Result, error) { return kavach.ReplayHost(j, bin) }
 }
 
 // saveFailingVariants writes the variants the new build failed to dir (a new

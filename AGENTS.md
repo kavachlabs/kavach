@@ -5,8 +5,11 @@ production incident. Use it instead of reasoning from logs.
 
 A **fixture** (`*.kavach`) is a recording of what a service did before it
 failed: every input, every clock and random read, every output, and a marker
-saying how it failed. A **replay binary** is the service's own binary; its
-`main` calls `kavach.MaybeReplay`.
+saying how it failed. A **host command** starts the service's own build in a
+mode where the `kavach` CLI drives it over a pipe, in any language: `./ledger`
+for a Go service (its `main` calls `kavach.MaybeReplay`), `python -m ledger`,
+`node dist/main.js`. `--bin`, `--old` and `--new` all take a host command; a
+string is split into words like a shell would, and `kavach-host` is appended.
 
 ## The loop
 
@@ -80,4 +83,4 @@ claude mcp add kavach -- kavach mcp
 | `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants |
 
 A verdict that is not a pass is a normal tool result; `isError` is set only
-when a tool could not run (missing file, binary without `kavach.MaybeReplay`).
+when a tool could not run (missing file, a host command that does not start as a host).
