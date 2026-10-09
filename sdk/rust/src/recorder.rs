@@ -117,6 +117,9 @@ impl Shared {
     }
 }
 
+/// How long `build` waits for `ready` when recording is not `required`.
+const READY_WAIT: Duration = Duration::from_secs(2);
+
 /// Configures and starts a [`Recorder`].
 pub struct RecorderBuilder {
     service: String,
@@ -500,15 +503,26 @@ impl RecorderBuilder {
         }
         pipe.write(&buf);
 
-        if self.required {
-            let deadline = Instant::now() + self.ready_timeout;
+        // Waiting here, not in a step, keeps a slow-starting recorder from
+        // finding a full ring or pipe at its first read (SPEC.md section 10.1).
+        // Without `required`, a silent recorder only delays `build`.
+        {
+            let wait = if self.required {
+                self.ready_timeout
+            } else {
+                READY_WAIT
+            };
+            let deadline = Instant::now() + wait;
             let mut ctl = shared.lock();
             while !ctl.ready && ctl.fatal.is_none() && !shared.dead.load(Ordering::SeqCst) {
                 let left = deadline.saturating_duration_since(Instant::now());
                 if left.is_zero() {
-                    return Err(RecorderError::NotReady(
-                        "timed out waiting for ready".into(),
-                    ));
+                    if self.required {
+                        return Err(RecorderError::NotReady(
+                            "timed out waiting for ready".into(),
+                        ));
+                    }
+                    break;
                 }
                 ctl = shared
                     .cv
@@ -516,7 +530,7 @@ impl RecorderBuilder {
                     .unwrap_or_else(|p| p.into_inner())
                     .0;
             }
-            if !ctl.ready {
+            if self.required && !ctl.ready {
                 return Err(RecorderError::NotReady(
                     ctl.fatal
                         .clone()

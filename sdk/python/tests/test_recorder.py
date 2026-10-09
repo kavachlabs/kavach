@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import time
 import unittest
 
 import kavach
@@ -298,6 +299,19 @@ class RecorderFailure(unittest.TestCase):
                 rec.close()
         with self.assertRaises(RuntimeError):
             rec.step(Input("s", "1", b""))
+
+    def test_silent_recorder_delays_construction_once(self):
+        with tmpdir() as tmp:
+            cmd, _ = stub_command(tmp, "silent")
+            t0 = time.monotonic()
+            rec = Recorder(Echo(), service="svc", recorder_command=cmd, close_timeout=0.2)
+            self.assertTrue(1.0 < time.monotonic() - t0 < 3.0)
+            t0 = time.monotonic()
+            for i in range(100):
+                rec.step(inp("x", str(i)))
+            self.assertLess(time.monotonic() - t0, 0.5)
+            with self.assertLogs("kavach", "WARNING"):
+                rec.close()
 
     def test_snapshot_option_needs_a_snapshotter(self):
         with self.assertRaises(ValueError):

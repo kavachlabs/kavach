@@ -60,6 +60,7 @@ public final class AllTests {
         test("recorder: a recorder that dies does not fail the step", AllTests::recorderDies);
         test("ring: a service killed after its input leaves a crash fixture", AllTests::killedService);
         test("ring: frames larger than the ring and a ring that keeps filling lose nothing", AllTests::smallRing);
+        test("recorder: a silent recorder delays construction once", AllTests::silentRecorder);
         test("ring: a recorder that stops reading a full ring does not hang the service", AllTests::deadRecorderFullRing);
         test("ring: the file is gone once the recorder is", AllTests::ringFileRemoved);
         System.out.println(failures == 0 ? "all tests passed" : failures + " test(s) failed");
@@ -370,6 +371,23 @@ public final class AllTests {
         }
         eq(steps, inputs, "inputs in the journal");
         eq(4, bigs, "large inputs in the journal");
+    }
+
+    static void silentRecorder() throws Exception {
+        java.util.logging.Logger.getLogger("kavach").setLevel(java.util.logging.Level.OFF);
+        Recorder.Options o = new Recorder.Options().service("silent")
+                .dir(java.nio.file.Files.createTempDirectory("kavach-silent-").toString()).recorderCommand(List.of("sleep", "4"));
+        long start = System.nanoTime();
+        try (Recorder r = new Recorder(new ConformanceHandler(), o)) {
+            long ms = (System.nanoTime() - start) / 1_000_000;
+            check(ms >= 1000 && ms <= 3000, "construction took " + ms + " ms");
+            start = System.nanoTime();
+            for (int i = 0; i < 100; i++) {
+                r.step(input("[]"));
+            }
+            ms = (System.nanoTime() - start) / 1_000_000;
+            check(ms <= 500, "100 steps took " + ms + " ms");
+        }
     }
 
     static void deadRecorderFullRing() throws Exception {

@@ -63,6 +63,19 @@ class TestHostAndRecorder < Minitest::Test
     end
   end
 
+  def test_silent_recorder_delays_construction_once
+    quiet_logs do
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      rec = Kavach::Recorder.new(Kavach::Conformance::Handler.new, service: "x", close_timeout: 0.1,
+                                 recorder_command: ["sleep", "4"])
+      assert_in_delta 2.0, Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0, 1.0
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      100.times { |i| rec.step(Kavach::Input.new(source: "s", position: i.to_s, data: "[]")) }
+      assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0, :<, 0.5
+      rec.close
+    end
+  end
+
   def test_required_recorder_fails_construction
     assert_raises(Kavach::RecorderError) do
       Kavach::Recorder.new(Kavach::Conformance::Handler.new, service: "x", required: true,

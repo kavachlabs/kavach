@@ -36,6 +36,9 @@ log = logging.getLogger("kavach")
 
 _F_SETPIPE_SZ = 1031  # Linux; fcntl.F_SETPIPE_SZ only exists on newer Pythons
 _PIPE_SIZE = 1 << 20
+#: How long construction waits for `ready` when recording is not required;
+#: after that, recording goes on and the recorder catches up (§10.1).
+_READY_WAIT = 2.0
 
 
 def find_recorder(command: Sequence[str] | None = None) -> list[str] | None:
@@ -180,6 +183,10 @@ class Recorder:
             if required:
                 if not self._ready.wait(ready_timeout) or not self._active:
                     raise RecorderError("kavach-recorder did not become ready")
+            else:
+                # Waiting here, not in a step, keeps a slow-starting recorder
+                # from finding a full ring or pipe at its first read.
+                self._ready.wait(_READY_WAIT)
         except Exception as e:
             if required:
                 self._kill()
@@ -226,6 +233,7 @@ class Recorder:
         """Stop recording, loudly, once. Never raises."""
         was = self._active
         self._active = False
+        self._ready.set()
         if not self._failed_logged and (was or not self._closing):
             self._failed_logged = True
             log.error("kavach: %s; recording has stopped and steps run unrecorded", reason)

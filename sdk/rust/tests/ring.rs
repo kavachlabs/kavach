@@ -147,6 +147,28 @@ fn dead_recorder_ends_the_wait() {
     assert!(!rec.is_recording());
 }
 
+/// A recorder that never says ready delays `build` once, by the startup
+/// bound, and steps after that do not wait (SPEC.md section 10.1).
+#[test]
+fn silent_recorder_delays_construction_once() {
+    let start = Instant::now();
+    let mut rec = Recorder::builder("silent")
+        .recorder_command(["sleep", "4"])
+        .log(|_| {})
+        .build(Box::new(Sink))
+        .unwrap();
+    let d = start.elapsed();
+    assert!(
+        d > Duration::from_secs(1) && d < Duration::from_secs(3),
+        "{d:?}"
+    );
+    let start = Instant::now();
+    for _ in 0..100 {
+        rec.step(&Input::new("t", "p", b"x".to_vec())).unwrap();
+    }
+    assert!(start.elapsed() < Duration::from_millis(500));
+}
+
 #[test]
 fn bad_ring_size_falls_back_to_the_pipe() {
     let log = Arc::new(Mutex::new(Vec::new()));

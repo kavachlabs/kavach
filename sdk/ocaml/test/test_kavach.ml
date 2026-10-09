@@ -80,4 +80,14 @@ let () =
     (match Recorder.create ~recorder_command:missing ~required:true ~service:"t" (handler (fun () -> Ok ())) with
     | exception Recorder.Recorder_error _ -> true
     | _ -> false);
+
+  (* A recorder that never says ready delays construction once (§10.1). *)
+  let t0 = Unix.gettimeofday () in
+  let r = Recorder.create ~recorder_command:[| "sleep"; "4" |] ~service:"t" (handler (fun () -> Ok ())) in
+  let built = Unix.gettimeofday () -. t0 in
+  check "silent recorder delays construction by about 2s" (built > 1. && built < 3.);
+  let t0 = Unix.gettimeofday () in
+  for _ = 1 to 100 do ignore (Recorder.step r (input "")) done;
+  check "steps do not wait" (Unix.gettimeofday () -. t0 < 0.5);
+  Recorder.close r;
   if !failures > 0 then exit 1 else print_endline "unit tests passed"

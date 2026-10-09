@@ -23,6 +23,9 @@ use Kavach\Internal\Wire;
  */
 final class Recorder
 {
+    /** Seconds construction waits for `ready` when recording is not required (SPEC.md §10.1). */
+    private const READY_WAIT = 2.0;
+
     /** @var resource|null */
     private $proc = null;
     /** @var resource|null */
@@ -173,6 +176,11 @@ final class Recorder
                 if (!$this->ready || !$this->active) {
                     throw new RecorderError('kavach-recorder did not become ready');
                 }
+            } else {
+                // Waiting here, not in a step, keeps a slow-starting recorder
+                // from finding a full pipe at its first read; on timeout
+                // recording goes on.
+                $this->waitUntil(fn () => $this->ready || !$this->active, self::READY_WAIT);
             }
         } catch (\Throwable $e) {
             if ($required) {

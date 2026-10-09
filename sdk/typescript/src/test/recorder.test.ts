@@ -240,6 +240,19 @@ test("a durable flush that is never answered times out", async () => {
   t.cleanup();
 });
 
+test("a recorder that never says ready delays start once", async () => {
+  const t = setup();
+  const t0 = Date.now();
+  const rec = await Recorder.start(t.options({ handle() {} }, { recorderCommand: ["sleep", "4"], closeTimeoutMs: 100 }));
+  const started = Date.now() - t0;
+  assert.ok(started > 1000 && started < 3000, `start took ${started} ms`);
+  const t1 = Date.now();
+  for (let i = 0; i < 100; i++) await rec.step({ source: "s", position: String(i), data: u("x") });
+  assert.ok(Date.now() - t1 < 500);
+  await rec.close().catch(() => {});
+  t.cleanup();
+});
+
 test("env is dead after its step; rand validates n", async () => {
   const t = setup();
   let leaked: Env | undefined;

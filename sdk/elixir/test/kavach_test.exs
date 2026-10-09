@@ -99,4 +99,20 @@ defmodule Kavach.RecorderCasesTest do
 
     assert :ok = Kavach.Recorder.step(rec, %Kavach.Input{source: "t", data: "[]"})
   end
+
+  test "a silent recorder delays start_link once" do
+    {us, {:ok, rec}} =
+      :timer.tc(fn ->
+        Kavach.Recorder.start_link(handler: Kavach.Conformance.Handler, service: "x", command: ["sleep", "4"])
+      end)
+
+    assert us in 1_000_000..3_000_000
+
+    {us, _} =
+      :timer.tc(fn ->
+        for _ <- 1..100, do: Kavach.Recorder.step(rec, %Kavach.Input{source: "t", data: "[]"})
+      end)
+
+    assert us < 500_000
+  end
 end

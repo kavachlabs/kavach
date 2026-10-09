@@ -35,6 +35,7 @@ defmodule Kavach.Recorder do
   alias Kavach.{Env, Input, JSON, Step, Wire}
 
   @durable_timeout 10_000
+  @start_wait 2_000
 
   @doc "Starts the recorder. Returns `{:error, reason}` if `required: true` and recording cannot start."
   def start_link(opts) do
@@ -86,6 +87,7 @@ defmodule Kavach.Recorder do
       durable_waiters: :queue.new(),
       closer: nil,
       closed: false,
+      ready: false,
       snapshot_requested: false
     }
 
@@ -93,7 +95,7 @@ defmodule Kavach.Recorder do
       {:ok, port} ->
         st = %{st | port: port}
         send_open(st)
-        {:ok, st}
+        {:ok, await_ready(st, System.monotonic_time(:millisecond) + @start_wait)}
 
       {:error, reason} ->
         Logger.error("kavach: cannot start the recorder, NOT recording: #{reason}")
@@ -163,6 +165,24 @@ defmodule Kavach.Recorder do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  # Waiting here, not in a step, keeps a slow-starting recorder from finding a
+  # full pipe at its first read (SPEC.md §10.1); on timeout recording goes on.
+  defp await_ready(%{ready: true} = st, _), do: st
+  defp await_ready(%{port: nil} = st, _), do: st
+
+  defp await_ready(%{port: port} = st, deadline) do
+    receive do
+      {^port, {:data, data}} ->
+        {lines, rest} = split_lines(st.buf <> data)
+        await_ready(Enum.reduce(lines, %{st | buf: rest}, &control/2), deadline)
+
+      {^port, {:exit_status, status}} ->
+        stop_recording(st, "the recorder exited with status #{status}")
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> st
+    end
   end
 
   defp send_open(st) do
@@ -272,6 +292,9 @@ defmodule Kavach.Recorder do
 
   defp control(line, st) do
     case JSON.decode(line) do
+      {:ok, %{"t" => "ready"}} ->
+        %{st | ready: true}
+
       {:ok, %{"t" => "snapshot_request"}} ->
         %{st | snapshot_requested: st.opts[:snapshots] != false and function_exported?(st.mod, :snapshot, 1)}
 

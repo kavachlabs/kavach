@@ -93,6 +93,18 @@ end
     end
 end
 
+@testset "a silent recorder delays construction once" begin
+    with_logger(NullLogger()) do
+        t = @elapsed rec = Recorder(Conformance(); service="x", recorder_command=["sleep", "4"])
+        @test 1 < t < 3
+        t = @elapsed for _ in 1:100
+            step!(rec, Input("s", "0", Vector{UInt8}(codeunits("[]"))))
+        end
+        @test t < 0.5
+        close(rec)
+    end
+end
+
 @testset "a process killed during a step leaves a crash fixture" begin
     root = normpath(joinpath(PKG, "..", ".."))
     if Sys.which("go") === nothing || !isdir(joinpath(root, "cmd", "kavach-recorder"))

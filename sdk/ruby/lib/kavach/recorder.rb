@@ -10,6 +10,9 @@ require_relative "wire"
 module Kavach
   F_SETPIPE_SZ = 1031 # Linux
   PIPE_SIZE = 1 << 20
+  # Seconds construction waits for +ready+ when recording is not required
+  # (SPEC.md section 10.1); after that recording goes on.
+  READY_WAIT = 2.0
 
   # The recorder argument vector: +command+, else $KAVACH_RECORDER, else
   # "kavach-recorder" on PATH. nil if there is none.
@@ -124,7 +127,13 @@ module Kavach
         flags&.call&.each { |k, v| facts[k.to_s] = Kavach.binary(v) }
         write(Wire.facts_frame(facts))
         write(Wire.snapshot_frame(Kavach.binary(handler.snapshot))) if start == "snapshot"
-        wait_ready(ready_timeout) if required
+        if required
+          wait_ready(ready_timeout)
+        else
+          # Waiting here, not in a step, keeps a slow-starting recorder from
+          # finding a full pipe at its first read; on timeout recording goes on.
+          wait_until(READY_WAIT) { @ready || !@active }
+        end
       rescue StandardError => e
         if required
           kill

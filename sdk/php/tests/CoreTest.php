@@ -86,6 +86,19 @@ test('a missing recorder fails loudly and never fails the step', function () {
     $rec->close();
 });
 
+test('a silent recorder delays construction once', function () {
+    $t0 = microtime(true);
+    $rec = new Recorder(new Handler(), service: 'x', recorderCommand: ['sleep', '4'], closeTimeout: 0.1, logger: fn () => null);
+    $d = microtime(true) - $t0;
+    assertTrue($d > 1.0 && $d < 3.0, "construction took $d s");
+    $t0 = microtime(true);
+    for ($i = 0; $i < 100; $i++) {
+        $rec->step(new Input('t', (string) $i, '[]'));
+    }
+    assertTrue(microtime(true) - $t0 < 0.5, '100 steps are fast');
+    $rec->close();
+});
+
 test('required recording fails construction without a recorder', function () {
     try {
         new Recorder(new Handler(), service: 'x', recorderCommand: ['/nonexistent/kavach-recorder'], required: true);
