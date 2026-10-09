@@ -25,8 +25,8 @@ module Kavach
   end
 
   # A registered gateway: the connection that makes the query, and its scope.
-  # The connection is called with the request bytes when recording (and, in a
-  # sandbox replay, for local gateways) and returns the response. Raise any
+  # The connection is called with the request bytes when recording and returns
+  # the response. Raise any
   # exception, or Kavach::GatewayError, to report a failure.
   class Gateway
     attr_reader :scope, :connection

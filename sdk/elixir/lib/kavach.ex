@@ -10,8 +10,6 @@ defmodule Kavach do
 
   @version "0.1.0"
 
-  def version, do: @version
-
   @doc "The `ready.sdk` string and the `producer` of recorded journals."
   def sdk, do: "kavach-elixir/" <> @version
 
