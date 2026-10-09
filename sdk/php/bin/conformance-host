@@ -1,0 +1,21 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// The conformance host of SPEC 9.6. Played by spec/host/run.py:
+//
+//     python3 $KAVACH_SPEC_DIR/host/run.py --host "php /path/to/sdk/php/bin/conformance-host"
+
+require __DIR__ . '/../src/autoload.php';
+
+use Kavach\Conformance\Handler;
+
+\Kavach\maybeHost(
+    $argv,
+    static fn () => new Handler(),
+    ['gateways' => Handler::anyGateway(Handler::refuse(...))],
+);
+
+fwrite(STDERR, "conformance-host: run with the argument kavach-host (see spec/host/run.py)\n");
+exit(2);
