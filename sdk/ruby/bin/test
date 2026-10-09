@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs the SDK's tests: unit tests, the host transcripts (spec/host) and the
+# SDK recorder cases (spec/recorder/sdk), all through minitest. Needs Ruby >= 3.1;
+# set RUBY to choose one, and KAVACH_SPEC_DIR to point at the spec directory.
+cd "$(dirname "$0")/.." || exit 1
+RUBY=${RUBY:-/opt/homebrew/opt/ruby/bin/ruby}
+[ -x "$RUBY" ] || RUBY=ruby
+exec "$RUBY" -Ilib -Itest -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }' -- "$@"

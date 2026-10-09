@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The conformance host (SPEC section 9.6). Run the transcripts against it with
+#
+#   python3 spec/host/run.py --host "ruby -I<sdk/ruby/lib> <sdk/ruby/bin/conformance-host>"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "kavach/conformance"
+
+Kavach.maybe_host(gateways: Kavach::Conformance.any_gateway) { Kavach::Conformance::Handler.new }
+warn "conformance-host: run as a replay host: conformance-host kavach-host"
+exit 2

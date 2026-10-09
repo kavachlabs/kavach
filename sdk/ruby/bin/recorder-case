@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs SDK recorder cases (spec/recorder/sdk/*.json) through this SDK and the
+# fake recorder. With no arguments, runs every case in $KAVACH_SPEC_DIR.
+#
+#   bin/recorder-case [case.json ...]
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "kavach/conformance/recorder_case"
+
+cases = ARGV.empty? ? Dir[File.join(Kavach::Conformance.spec_dir, "recorder", "sdk", "*.json")].sort : ARGV
+failed = 0
+cases.each do |path|
+  result = Kavach::Conformance.run_recorder_case(path)
+  ok = result["pass"] == true
+  puts "#{ok ? "PASS" : "FAIL"}  #{File.basename(path)}"
+  next if ok
+
+  failed += 1
+  warn result["error"].to_s
+end
+puts "#{cases.size - failed}/#{cases.size} recorder cases passed"
+exit(failed.zero? ? 0 : 1)
