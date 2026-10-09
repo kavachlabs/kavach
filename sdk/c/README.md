@@ -19,6 +19,12 @@ cmake -S sdk/c -B build && cmake --build build && ctest --test-dir build --outpu
 Compiled with `-Wall -Wextra -Wpedantic -Werror` (turn off with
 `-DKAVACH_WERROR=OFF`). `-DKAVACH_SANITIZE=ON` adds ASan and UBSan.
 
+**Compiler on macOS:** use clang (`-DCMAKE_C_COMPILER=clang
+-DCMAKE_CXX_COMPILER=clang++`). With gcc-15, exceptions such as
+`std::bad_optional_access` are not caught by `catch (const std::exception&)`
+across libstdc++ there, so the C++ wrapper reports them as `"unknown
+exception"`.
+
 The conformance tests read the contract from the repository's `spec/`; they never copy
 it. Point them elsewhere with `-DKAVACH_SPEC_DIR=/path/to/spec` or the
 `KAVACH_SPEC_DIR` environment variable (default
@@ -77,8 +83,8 @@ int main(int argc, char** argv) {
 * **Env** (valid only during the step): `kavach_now_ns`, `kavach_random`,
   `kavach_query`, `kavach_config`, `kavach_emit`. Handlers must use these
   instead of `clock_gettime`, `getrandom` or direct I/O.
-* **Gateways** are registered on the recorder (and the host, for `live`
-  answers) as `{name, callback, user, scope}`. The name `"*"` matches any
+* **Gateways** are registered on the recorder (and the host, for the scope it
+  reports on gateway requests) as `{name, callback, user, scope}`. The name `"*"` matches any
   gateway without its own entry. **Config** comes from `config`
   (`kavach_config_fn`) with `config_source` recorded as the read's source.
   **Flags** (`flag.*` facts, sent right after `open`) come from `flags`.
@@ -204,6 +210,9 @@ python3 $KAVACH_SPEC_DIR/host/run.py --host build/conformance/kavach-conformance
 
 ## Notes
 
+* **Sandbox mode** (SPEC §6.3) is not supported. A host answers a `hello` with
+  `mode: "sandbox"`, or a gateway answer carrying `live`, with `fatal`
+  (`"sandbox mode not supported"`).
 * **JSON**: `src/json.c` is a small strict RFC 8259 parser written for this
   library (no third-party code). It reads host-protocol messages and the
   recorder's control stream; the conformance programs reuse it. Emitting JSON
