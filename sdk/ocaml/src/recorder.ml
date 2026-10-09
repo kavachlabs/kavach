@@ -206,6 +206,8 @@ let record_env t : Env.t =
         rec_ t (Wire.output ~sink ~local data));
   }
 
+let start_wait = 2.
+
 let create ?recorder_command ?(required = false) ?snapshot ?snapshots ?(deliver = ignore)
     ?(gateways = fun _ -> None) ?config ?config_source ?(flags = fun () -> []) ?handler_id ?dir
     ?compression ?level ?block_bytes ?flush_ms ?segment_bytes ?segment_seconds ?retain_segments
@@ -256,7 +258,11 @@ let create ?recorder_command ?(required = false) ?snapshot ?snapshots ?(deliver 
      write t (Wire.facts (("host.runtime", runtime ()) :: flags ()));
      Option.iter (fun s -> write t (Wire.snapshot s)) snapshot;
      if required && not (wait_until t ~timeout:ready_timeout (fun () -> t.ready) && Atomic.get t.active) then
-       raise (Recorder_error "kavach-recorder did not become ready")
+       raise (Recorder_error "kavach-recorder did not become ready");
+     (* Waiting here, not in a step, keeps a slow-starting recorder from finding a
+        full ring or pipe at its first read (§10.1); on timeout recording goes on. *)
+     if not required then
+       ignore (wait_until t ~timeout:start_wait (fun () -> t.ready || not (Atomic.get t.active)))
    with e ->
      let msg =
        match e with
