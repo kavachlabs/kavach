@@ -167,3 +167,22 @@ func TestDeadRecorderEndsTheWait(t *testing.T) {
 	}
 	r.Close()
 }
+
+// A recorder that never says ready delays construction once, by the startup
+// bound, and steps after that do not wait (SPEC.md §10.1).
+func TestSilentRecorderDelaysConstructionOnce(t *testing.T) {
+	start := time.Now()
+	r := kavach.NewRecorder(sink{}, kavach.Options{Service: "silent", Dir: t.TempDir(),
+		RecorderCommand: []string{"sleep", "4"}})
+	if d := time.Since(start); d < time.Second || d > 3*time.Second {
+		t.Fatalf("NewRecorder took %v, want about the startup bound", d)
+	}
+	start = time.Now()
+	for i := 0; i < 100; i++ {
+		r.Step(kavach.Input{Source: "t", Position: "p", Data: []byte("x")})
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("100 steps took %v", d)
+	}
+	r.Close()
+}

@@ -138,6 +138,8 @@ type Recorder struct {
 	cmd       *exec.Cmd
 	stdin     *os.File
 	exited    chan struct{}
+	ready     chan struct{} // closed on the recorder's ready message
+	readyOnce sync.Once
 	closedAck chan struct{}
 	ackOnce   sync.Once
 
@@ -174,7 +176,7 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 		panic("kavach: Start snapshot needs a handler that implements Snapshotter")
 	}
 	r := &Recorder{h: h, opts: opts, snapshots: canSnapshot && !opts.NoSnapshots,
-		exited: make(chan struct{}), closedAck: make(chan struct{})}
+		exited: make(chan struct{}), ready: make(chan struct{}), closedAck: make(chan struct{})}
 	r.cond = sync.NewCond(&r.cmu)
 	r.env.r = r
 	r.enc = recstream.NewEncoder(pipe{r})
@@ -186,9 +188,24 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 		} else {
 			close(r.exited)
 		}
+		return r
+	}
+	// Waiting here, not in a step, keeps a slow-starting recorder from finding
+	// a full ring or pipe at its first read (§10.1).
+	t := time.NewTimer(readyTimeout)
+	defer t.Stop()
+	select {
+	case <-r.ready:
+	case <-r.exited:
+	case <-t.C:
 	}
 	return r
 }
+
+// readyTimeout bounds how long NewRecorder waits for the recorder's ready
+// message. On timeout recording goes on: steps publish and the recorder
+// catches up.
+var readyTimeout = 2 * time.Second
 
 // pipe is the Encoder's writer: it drops frames once recording has stopped.
 type pipe struct{ r *Recorder }
@@ -386,6 +403,7 @@ func (r *Recorder) onControl(m control) {
 		r.cmu.Lock()
 		r.file = m.File
 		r.cmu.Unlock()
+		r.readyOnce.Do(func() { close(r.ready) })
 	case "snapshot_request":
 		r.snapReq.Store(true)
 	case "durable":
