@@ -214,6 +214,9 @@ func (r *Recorder) publish(b []byte) {
 		if n == 0 {
 			// Full: the recorder drains the ring on the doorbell. If it has
 			// exited, the control goroutine stops recording and ends the wait.
+			// TODO: a writer that outruns the recorder (e.g. during a segment
+			// rotation, which stalls the recorder's read loop for ~150 ms under
+			// saturation) blocks the service here; bounding it is deferred.
 			r.bell()
 			for n == 0 && r.active.Load() {
 				time.Sleep(20 * time.Microsecond)

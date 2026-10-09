@@ -44,6 +44,26 @@ func TestRingFramesWrapAround(t *testing.T) {
 	}
 }
 
+// A run that crosses the end of the data area is one copy through the second
+// mapping, and lands at the start of the first.
+func TestRingMirrorWrap(t *testing.T) {
+	g, rr := newTestRing(t)
+	skip := make([]byte, MinRing-10)
+	g.TryPublish(skip)
+	io.ReadFull(rr, make([]byte, len(skip)))
+	p := []byte("0123456789abcdefghij")
+	if n, _ := g.TryPublish(p); n != len(p) {
+		t.Fatalf("published %d of %d", n, len(p))
+	}
+	if got := g.data[:10]; string(got) != "abcdefghij" {
+		t.Fatalf("start of the data area holds %q", got)
+	}
+	got := make([]byte, len(p))
+	if _, err := io.ReadFull(rr, got); err != nil || !bytes.Equal(got, p) {
+		t.Fatalf("read back %q, %v", got, err)
+	}
+}
+
 func TestRingFull(t *testing.T) {
 	g, rr := newTestRing(t)
 	chunk := make([]byte, 20<<10)
