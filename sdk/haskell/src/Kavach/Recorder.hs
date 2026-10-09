@@ -298,9 +298,12 @@ newRecorder opts h = do
     when (roStart opts == FromSnapshot) $ do
       s <- readIORef st
       rawWrite r . frameSnapshot =<< evaluate (maybe BS.empty ($ s) (snapshot h))
-    when (roRequired opts) $ do
-      ok <- timeout (secs (roReadyTimeout opts)) (atomically (readTVar ready >>= check))
-      a <- readTVarIO active
+    -- Waiting here, not in a step, keeps a slow-starting recorder from finding
+    -- a full ring or pipe at its first read (§10.1). Without 'roRequired', a
+    -- silent recorder only delays construction.
+    ok <- timeout (secs (if roRequired opts then roReadyTimeout opts else readyWait)) (atomically (do rd <- readTVar ready; a <- readTVar active; check (rd || not a)))
+    a <- readTVarIO active
+    when (roRequired opts) $
       unless (isJust ok && a) $ throwIO (RecorderError "kavach-recorder did not become ready")
   case startup of
     Right () -> pure ()
@@ -313,6 +316,10 @@ newRecorder opts h = do
             Nothing -> RecorderError ("kavach-recorder could not be started: " ++ displayException e)
       | otherwise -> failRec r ("could not start the recorder: " ++ displayException (e :: SomeException))
   pure r
+
+-- | How long 'newRecorder' waits for @ready@ when recording is not required.
+readyWait :: Double
+readyWait = 2
 
 secs :: Double -> Int
 secs = round . (* 1000000)

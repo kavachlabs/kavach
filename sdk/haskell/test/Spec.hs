@@ -17,6 +17,7 @@ import System.Posix.Process (getProcessID)
 import System.Process
 import Control.Concurrent (threadDelay)
 import System.Timeout (timeout)
+import GHC.Clock (getMonotonicTime)
 
 check :: IORef Int -> String -> Bool -> IO ()
 check failures name ok = do
@@ -149,3 +150,13 @@ smallRing t work = do
   done <- timeout 15000000 (forM_ [1 .. 20 :: Int] $ \_ -> step r2 (Input "t" "p" (BS.replicate (30 * 1024) 120)))
   t "a recorder that is gone ends the wait for ring space" (done == Just ())
   closeRecorder r2
+  -- A recorder that never says ready delays construction once, and steps after
+  -- that do not wait (§10.1).
+  t0 <- getMonotonicTime
+  r3 <- newRecorder (opts {roRecorderCommand = Just ["sleep", "4"]}) sinkHandler
+  t1 <- getMonotonicTime
+  t "a silent recorder delays construction by the startup bound" (t1 - t0 > 1 && t1 - t0 < 3)
+  forM_ [1 .. 100 :: Int] $ \_ -> step r3 (Input "t" "p" "x")
+  t2 <- getMonotonicTime
+  t "steps after a silent start do not wait" (t2 - t1 < 0.5)
+  closeRecorder r3
