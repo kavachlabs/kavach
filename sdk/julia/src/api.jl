@@ -68,7 +68,8 @@ function restore! end
 
 Optional: `Pair{String,Function}`s checked after every step that ended ok. An
 invariant holds when its function returns without throwing and not `false`."""
-invariants(_) = Pair{String,Function}[]
+const NO_INVARIANTS = Pair{String,Function}[]
+invariants(_) = NO_INVARIANTS
 
 can_snapshot(h) = hasmethod(snapshot, Tuple{typeof(h)}) && hasmethod(restore!, Tuple{typeof(h),Vector{UInt8}})
 

@@ -17,14 +17,14 @@ struct StepResult
     outputs::Vector{Output}
 end
 
-mutable struct Recorder{H}
+mutable struct Recorder{H,C,R}
     handler::H
     deliver::Union{Function,Nothing}
     gateways::Any
     config::Function
     config_source::String
-    clock_ns::Function
-    random_bytes::Function
+    clock_ns::C
+    random_bytes::R
     on_fixture::Union{Function,Nothing}
     close_timeout::Float64
     snapshots::Bool
@@ -37,7 +37,8 @@ mutable struct Recorder{H}
     ready::Threads.Atomic{Bool}
     durable_count::Threads.Atomic{Int}
     snapshot_requested::Threads.Atomic{Bool}
-    buf::Union{IOBuffer,Nothing}
+    scratch::Wire.Buf   # the step's frames, encoded in place and reused
+    stepping::Bool
     outputs::Vector{Output}
     ring::Union{Ring,Nothing}
     proc::Any
@@ -79,15 +80,16 @@ function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snap
     start === :snapshot && !cs && throw(ArgumentError("start=:snapshot needs snapshot and restore! methods"))
     snaps = snapshots === nothing ? cs : snapshots
     snaps && !cs && throw(ArgumentError("snapshots=true needs snapshot and restore! methods"))
-    rec = Recorder{typeof(handler)}(
+    clock = clock_ns === nothing ? unix_nanos : clock_ns
+    rand_fn = random_bytes === nothing ? (n -> Random.rand(Random.RandomDevice(), UInt8, n)) : random_bytes
+    rec = Recorder{typeof(handler),typeof(clock),typeof(rand_fn)}(
         handler, deliver, gateways,
         config === nothing ? (k -> get(ENV, k, nothing)) : config,
         something(config_source, config === nothing ? "env" : "config"),
-        clock_ns === nothing ? unix_nanos : clock_ns,
-        random_bytes === nothing ? (n -> Random.rand(Random.RandomDevice(), UInt8, n)) : random_bytes,
+        clock, rand_fn,
         on_fixture, Float64(close_timeout), snaps, ReentrantLock(),
         Threads.Atomic{Bool}(false), false, false, false, Threads.Atomic{Bool}(false), Threads.Atomic{Bool}(false),
-        Threads.Atomic{Int}(0), Threads.Atomic{Bool}(false), nothing, Output[], nothing, nothing, nothing, nothing, nothing)
+        Threads.Atomic{Int}(0), Threads.Atomic{Bool}(false), Wire.Buf(), false, Output[], nothing, nothing, nothing, nothing, nothing)
 
     open_obj = Dict{String,Any}("protocol" => 1, "service" => service, "start" => String(start),
                                 "producer" => PRODUCER, "snapshots" => snaps)
@@ -224,15 +226,17 @@ function on_control(rec::Recorder, t::String, msg::Dict)
     end
 end
 
-function write_frame(rec::Recorder, data::Vector{UInt8}; bell::Bool=false)
-    (rec.active[] && !isempty(data)) || return
+write_frame(rec::Recorder, data::Vector{UInt8}; bell::Bool=false) = write_frame(rec, data, length(data); bell)
+
+function write_frame(rec::Recorder, data::Vector{UInt8}, n::Int; bell::Bool=false)
+    (rec.active[] && n > 0) || return
     try
         g = rec.ring
         if g === nothing
-            write(rec.proc, data)
+            GC.@preserve data unsafe_write(rec.proc, pointer(data), n)
             flush(rec.proc)
         else
-            publish(rec, g, data)
+            publish(rec, g, data, n)
             bell && ring_bell(rec)
         end
     catch e
@@ -240,17 +244,17 @@ function write_frame(rec::Recorder, data::Vector{UInt8}; bell::Bool=false)
     end
 end
 
-function publish(rec::Recorder, g::Ring, data::Vector{UInt8})
+function publish(rec::Recorder, g::Ring, data::Vector{UInt8}, last::Int)
     from = 1
-    while from <= length(data)
-        n, used = try_publish(g, data, from)
+    while from <= last
+        n, used = try_publish(g, data, from, last)
         if n == 0
             # Full: the recorder drains the ring on the doorbell. If it has
             # exited, the control task stops recording and ends the wait.
             ring_bell(rec)
             while n == 0 && rec.active[]
                 sleep(0.0001)
-                n, used = try_publish(g, data, from)
+                n, used = try_publish(g, data, from, last)
             end
             n == 0 && return
         end
@@ -276,7 +280,8 @@ function ring_bell(rec::Recorder)
     end
 end
 
-buffer_frame(rec::Recorder, data::Vector{UInt8}) = (rec.buf !== nothing && rec.active[] && write(rec.buf, data); nothing)
+buffering(rec::Recorder) = rec.stepping && rec.active[]
+buffer_frame(rec::Recorder, data::Vector{UInt8}) = (buffering(rec) && Wire.putraw!(rec.scratch, data); nothing)
 
 """    step!(rec, input::Input)::StepResult
 
@@ -286,11 +291,17 @@ function step!(rec::Recorder, inp::Input)
     lock(rec.lock) do
         rec.closed && error("kavach: step on a closed Recorder")
         answer_snapshot_request(rec)
-        rec.buf = IOBuffer()
+        b = rec.scratch
+        b.n = 0
         empty!(rec.outputs)
         # The input goes in before the handler runs, so that a step that kills
         # the process still leaves it on record (§10.2).
-        write_frame(rec, Wire.input_record(inp.source, inp.position, inp.data))
+        if rec.active[]
+            Wire.put_input!(b, inp.source, inp.position, inp.data)
+            write_frame(rec, b.data, b.n)
+            b.n = 0
+        end
+        rec.stepping = true
         failure = nothing
         interrupted = nothing
         try
@@ -301,11 +312,10 @@ function step!(rec::Recorder, inp::Input)
         end
         failure === nothing && (failure = check_invariants(rec.handler))
         failure === nothing || buffer_frame(rec, Wire.marker_record(failure.kind, failure.message, Vector{UInt8}(codeunits(failure.detail))))
-        buffer_frame(rec, Wire.step_end_frame())
-        data = take!(rec.buf)
-        outputs = copy(rec.outputs)
-        rec.buf = nothing
-        write_frame(rec, data)
+        buffering(rec) && Wire.put_step_end!(b)
+        rec.stepping = false
+        write_frame(rec, b.data, b.n)
+        outputs = isempty(rec.outputs) ? Output[] : copy(rec.outputs)
         if failure === nothing
             rec.deliver === nothing || isempty(outputs) || rec.deliver(outputs)
             result = StepResult(true, "", "", "", outputs)
@@ -376,20 +386,20 @@ end
 """Whether the recorder is still recording."""
 recording(rec::Recorder) = rec.active[]
 
-struct RecordEnv <: Env
-    rec::Recorder
+struct RecordEnv{R<:Recorder} <: Env
+    rec::R
 end
 
 function now_ns(env::RecordEnv)
-    ns = Int64(env.rec.clock_ns())
-    buffer_frame(env.rec, Wire.clock_record(ns))
+    ns = Int64(env.rec.clock_ns()::Integer)
+    buffering(env.rec) && Wire.put_clock!(env.rec.scratch, ns)
     return ns
 end
 
 function random(env::RecordEnv, n::Integer)
     n <= 0 && return UInt8[]
     data = to_bytes(env.rec.random_bytes(n))
-    buffer_frame(env.rec, Wire.rand_record(data))
+    buffering(env.rec) && Wire.put_rand!(env.rec.scratch, data)
     return data
 end
 
@@ -412,6 +422,6 @@ end
 function emit!(env::RecordEnv, sink::AbstractString, data; islocal::Bool=false)
     data = to_bytes(data)
     push!(env.rec.outputs, Output(sink, data, islocal))
-    buffer_frame(env.rec, Wire.output_record(sink, data, islocal))
+    buffering(env.rec) && Wire.put_output!(env.rec.scratch, sink, data, islocal)
     return nothing
 end

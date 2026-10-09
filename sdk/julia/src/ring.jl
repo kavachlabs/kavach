@@ -37,14 +37,14 @@ ring_dir() = isdir("/dev/shm") ? "/dev/shm" : tempdir()
 
 ring_word(g::Ring, off) = Ptr{UInt64}(pointer(g.mem) + off)
 
-"""Copies the front of `p[from:end]` into the ring and publishes it with one
+"""Copies the front of `p[from:last]` into the ring and publishes it with one
 release store, so the recorder sees all of it or none. Publishes nothing if it
 does not fit, unless it is larger than the whole ring. Returns the bytes
 published and the bytes the recorder has not consumed yet."""
-function try_publish(g::Ring, p::Vector{UInt8}, from::Int)
+function try_publish(g::Ring, p::Vector{UInt8}, from::Int, last::Int)
     w = ltoh(unsafe_load(ring_word(g, 64), :acquire))
     used = w - ltoh(unsafe_load(ring_word(g, 128), :acquire))
-    n = length(p) - from + 1
+    n = last - from + 1
     free = g.cap - used
     if n > free
         n <= g.cap && return 0, used
