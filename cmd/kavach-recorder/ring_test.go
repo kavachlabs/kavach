@@ -117,3 +117,36 @@ func TestRingEndsInsideStep(t *testing.T) {
 		t.Fatalf("control stream:\n%s", out.String())
 	}
 }
+
+func TestRingByPath(t *testing.T) {
+	path := t.TempDir() + "/ring"
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.Truncate(recstream.RingHeader + recstream.MinRing)
+	f.WriteAt(append([]byte("KVRING01"), binary.LittleEndian.AppendUint64(nil, recstream.MinRing)...), 0)
+	g, err := recstream.OpenRing(f, recstream.MinRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	frame, _ := recstream.AppendRecordFrame(nil, journal.Record{Type: journal.TypeInput, Source: "s", Position: "1", Data: []byte("x")})
+	g.TryPublish(frame)
+
+	cmd := exec.Command(buildRecorder(t))
+	open, _ := json.Marshal(map[string]any{"protocol": 1, "service": "ring", "start": "genesis", "dir": t.TempDir(), "ring": recstream.MinRing, "ring_path": path})
+	cmd.Stdin = bytes.NewReader(recstream.AppendFrame(nil, recstream.KindOpen, open))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"failure":"crash"`) {
+		t.Fatalf("control stream:\n%s", out.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the recorder left the ring file in place: %v", err)
+	}
+}

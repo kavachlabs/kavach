@@ -68,6 +68,8 @@ type Open struct {
 	// Ring, if set, is the capacity of the shared-memory ring that carries
 	// every later frame (SPEC.md §10.7).
 	Ring int `json:"ring,omitempty"`
+	// RingPath names the ring file when the SDK could not pass it as fd 3.
+	RingPath string `json:"ring_path,omitempty"`
 }
 
 // Defaults of the open object (SPEC.md §10.2).

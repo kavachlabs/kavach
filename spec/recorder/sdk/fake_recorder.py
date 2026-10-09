@@ -244,7 +244,11 @@ def main():
             f = decode_frame(body[0], body[1:])
             frames.append(f)
             if f["frame"] == "open":
-                if f["open"].get("ring"):
+                if f["open"].get("ring_path"):
+                    fd = os.open(f["open"]["ring_path"], os.O_RDWR)
+                    os.unlink(f["open"]["ring_path"])
+                    stdin = Ring(fd, f["open"]["ring"])
+                elif f["open"].get("ring"):
                     stdin = Ring(3, f["open"]["ring"])
                 say({"t": "ready", "protocol": 1, "recorder": "fake-recorder", "run": "conformance", "file": "/dev/null"})
             elif f["frame"] == "record":

@@ -1093,6 +1093,8 @@ The `open` object:
 | `segment_bytes`, `segment_seconds` | number | 256 MiB, 3600 | When to start a new segment. |
 | `retain_segments` | number | `24` | Segments to keep per service, oldest deleted first. Fixtures are never deleted by the recorder. |
 | `secret_keys` | array of strings | `[]` | Environment variable names to hash (§4.8) besides those the spec requires. |
+| `ring` | number | — | Capacity of the shared-memory ring that carries every later frame (§10.7). |
+| `ring_path` | string | — | Name of the ring file, when the SDK cannot pass it as descriptor 3 (§10.7). |
 
 The frames after `open` follow the shape of the journal (§5). An `input`
 record begins a step; the step's reads, outputs and `marker` follow as
@@ -1198,18 +1200,24 @@ pipe, so that recording a step costs a few memory copies and no system call.
 The frames are those of §10.2; only their transport changes. A recorder MUST
 support both transports, and the SDK chooses.
 
-**Setting up.** Before starting the recorder, the SDK creates a file of
-`256 + capacity` bytes, where `capacity` is a power of two of at least 64 KiB
+**Setting up.** Before starting the recorder, the SDK creates a file of `256 +
+capacity` bytes, where `capacity` is a power of two of at least 64 KiB
 (reference default 8 MiB). It creates it in a memory-backed file system where
 the platform has one (`/dev/shm` on Linux) and in the temporary directory
 otherwise, unlinks it at once, and maps it shared. It passes the open file to
 the recorder as file descriptor 3; standard input, output and error are
-connected as in §10.1. Because the file has no name once unlinked, nothing
-can remove it from under the two processes, and nothing is left behind when
-they exit. The SDK writes the `open` frame on standard input as before, with
-the key `ring` set to `capacity`. Every later frame goes into the ring. A
-recorder that cannot map the ring, or finds the header invalid, MUST report a
-fatal error (§10.3).
+connected as in §10.1. Because the file has no name once unlinked, nothing can
+remove it from under the two processes, and nothing is left behind when they
+exit. The SDK writes the `open` frame on standard input as before, with the
+key `ring` set to `capacity`. Every later frame goes into the ring. A recorder
+that cannot map the ring, or finds the header invalid, MUST report a fatal
+error (§10.3).
+
+An SDK whose runtime cannot pass a descriptor to a child process instead keeps
+the file's name, creating it readable and writable by its own user only, and
+sends that name in the `open` key `ring_path` besides `ring`. The recorder
+opens the file, unlinks it, and maps it before reading the ring. If the
+recorder never starts, the SDK unlinks the file itself.
 
 **Layout.** Integers are little-endian `u64`s at fixed offsets, `write` and
 `read` on cache lines of their own:
