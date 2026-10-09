@@ -1,0 +1,40 @@
+[package]
+name = "kavach"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Rust SDK for Kavach: flight recorder and replay host for deterministic handlers"
+license = "Apache-2.0"
+build = "build.rs"
+readme = "README.md"
+
+[workspace]
+
+[features]
+# Builds the conformance handler (SPEC.md section 9.6) and the two programs
+# that run the spec's transcripts and recorder cases against it.
+conformance = []
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
+
+[[bin]]
+name = "kavach-conformance-host"
+path = "src/bin/conformance_host.rs"
+required-features = ["conformance"]
+
+[[bin]]
+name = "kavach-conformance-recorder"
+path = "src/bin/conformance_recorder.rs"
+required-features = ["conformance"]
+
+[[example]]
+name = "ledger"
+path = "examples/ledger.rs"
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+required-features = ["conformance"]
