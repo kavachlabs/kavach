@@ -333,6 +333,7 @@ public final class Recorder implements AutoCloseable {
     private volatile boolean closed;
     private volatile boolean snapshotRequested;
     private final CountDownLatch closedAck = new CountDownLatch(1);
+    private static final long START_WAIT_NANOS = TimeUnit.SECONDS.toNanos(2);
     private final CountDownLatch ready = new CountDownLatch(1);
     private ByteArrayOutputStream buf; // the open step's frames, step thread only
     private List<Output> outputs = new ArrayList<>();
@@ -403,6 +404,10 @@ public final class Recorder implements AutoCloseable {
                 if (!ready.await(options.readyTimeout.toNanos(), TimeUnit.NANOSECONDS) || !active) {
                     throw new RecorderException("kavach-recorder did not become ready");
                 }
+            } else {
+                // Waiting here, not in a step, keeps a slow-starting recorder from finding
+                // a full ring or pipe at its first read (SPEC.md §10.1); on timeout recording goes on.
+                ready.await(START_WAIT_NANOS, TimeUnit.NANOSECONDS);
             }
         } catch (Exception e) {
             if (e instanceof InterruptedException) {
