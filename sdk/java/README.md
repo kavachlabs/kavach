@@ -17,6 +17,7 @@ Sandbox replay (SPEC §6.3) is not supported: a host that is told `mode:
 ```bash
 ./build.sh          # build/kavach.jar, build/classes and build/examples
 ./build.sh test     # build, then run every test and conformance suite
+./build.sh bench    # step overhead over the pipe and over the ring
 ./build.sh clean
 ```
 
@@ -24,13 +25,15 @@ Only `javac` and `jar` are used. `build.sh test` runs, in order:
 
 1. the unit tests (`AllTests`, plain `main`, no JUnit);
 2. the seven SDK recorder cases of `spec/recorder/sdk/` through
-   `conformance.RecorderCase` and the fake recorder;
+   `conformance.RecorderCase` and the fake recorder, over the pipe and again
+   over the ring;
 3. the eighteen host transcripts of `spec/host/` through `run.py` and
    `conformance.ConformanceHost`.
 
 `KAVACH_SPEC_DIR` locates the repository's `spec/` directory (default
 the repository's `spec/`). Python 3 is needed for the
-fake recorder and `run.py`, nothing else. To run them by hand:
+fake recorder and `run.py`; the ring tests and `bench` also need `go`, to build
+the real `kavach-recorder` from the repository. To run them by hand:
 
 ```bash
 python3 $KAVACH_SPEC_DIR/host/run.py \
@@ -152,6 +155,18 @@ rec.close();       // orderly shutdown; also run from a JVM shutdown hook
 - A handler that implements `Snapshotter` answers the recorder's snapshot
   requests at the next step boundary, on the step's thread. `snapshots(false)`
   turns segments off.
+- On Unix the record stream goes over a shared-memory ring (SPEC §10.7), so a
+  step costs memory copies and no system call. The SDK creates the file in
+  `/dev/shm` (else `java.io.tmpdir`), owner-only, maps it with
+  `FileChannel.map`, and names it to the recorder in `ring_path`, since a JVM
+  cannot pass descriptor 3; the recorder unlinks it, and the SDK deletes it
+  itself if the recorder never starts. `ringBytes(n)` sets the capacity (power
+  of two, at least 64 KiB, default 8 MiB). `noRing(true)` forces the pipe, which
+  is also what the SDK falls back to, with a WARNING, when the ring cannot be
+  set up. The mapping is released by the garbage collector.
+- Median step overhead on the benchmark handler (`./build.sh bench`, a clock
+  read, an 8-byte random read and an emit per step): about 75 ns/event over the
+  ring, about 415 over the pipe (JDK 25, macOS).
 - The pipe's buffer is not enlarged (no `F_SETPIPE_SZ` from pure Java).
 
 ## Replay host
