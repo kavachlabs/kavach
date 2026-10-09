@@ -233,11 +233,22 @@ func AppendPayload(dst []byte, r Record) ([]byte, error) {
 // is the inverse of AppendPayload; the result has Seq 0. Unknown types keep
 // their raw payload in Data.
 func ParsePayload(ty Type, flags uint8, b []byte) (Record, error) {
+	return parsePayload(ty, flags, &payload{b: b})
+}
+
+// ValidatePayload reports the error ParsePayload would, without building the
+// record.
+func ValidatePayload(ty Type, flags uint8, b []byte) error {
+	_, err := parsePayload(ty, flags, &payload{b: b, dry: true})
+	return err
+}
+
+func parsePayload(ty Type, flags uint8, p *payload) (Record, error) {
 	r := Record{Type: ty, Flags: flags}
 	if err := checkRecord(r); err != nil {
 		return r, err
 	}
-	p := &payload{b: b}
+	b := p.b
 	switch r.Type {
 	case TypeInput:
 		r.Source = p.string()
@@ -327,6 +338,7 @@ func appendString(dst []byte, s string) []byte {
 type payload struct {
 	b   []byte
 	err error
+	dry bool // check the encoding only: fields read as empty
 }
 
 func (p *payload) fail(format string, args ...any) {
@@ -374,7 +386,8 @@ func (p *payload) uvarint() uint64 {
 	return n
 }
 
-func (p *payload) bytes() []byte {
+// view reads a length-prefixed field without copying it.
+func (p *payload) view() []byte {
 	n := p.uvarint()
 	if p.err != nil {
 		return nil
@@ -383,21 +396,28 @@ func (p *payload) bytes() []byte {
 		p.fail("field length %d exceeds payload", n)
 		return nil
 	}
-	if n == 0 {
+	v := p.b[:n]
+	p.b = p.b[n:]
+	return v
+}
+
+func (p *payload) bytes() []byte {
+	v := p.view()
+	if len(v) == 0 || p.dry {
 		return nil
 	}
-	out := make([]byte, n)
-	copy(out, p.b[:n])
-	p.b = p.b[n:]
-	return out
+	return append([]byte(nil), v...)
 }
 
 func (p *payload) string() string {
-	b := p.bytes()
-	if p.err == nil && !utf8.Valid(b) {
+	v := p.view()
+	if p.err == nil && !utf8.Valid(v) {
 		p.fail("string field is not valid UTF-8")
 	}
-	return string(b)
+	if p.dry {
+		return ""
+	}
+	return string(v)
 }
 
 // facts reads the body of an environment record: a count and that many facts,

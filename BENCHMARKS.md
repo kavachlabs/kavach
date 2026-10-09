@@ -13,7 +13,7 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 
 | Metric | Target | Measured | Command |
 | --- | --- | --- | --- |
-| Recorder overhead, happy path | < 100 ns/event | **missed:** median 556 ns/event; range 550–561 over 5 runs (Apple M-series, macOS) | `go test -run '^$' -bench RecorderStep -benchtime 2s -count 5 ./replay` |
+| Recorder overhead, happy path | < 100 ns/event | median 81.2 ns/event; range 80.8–82.0 over 5 runs (Apple M3 Pro, macOS, shared-memory ring). Over the pipe: median 493.7 ns/event; range 486.8–497.9 | `go test -run '^$' -bench RecorderStep -benchtime 2s -count 5 ./replay` |
 | Replay of demo crash fixture, in-process | — | median 61.1 µs; range 59.7–67.3 µs over 5 runs | `go test -run '^$' -bench ReplayFixture -benchtime 2s -count 5 ./examples/ledger` |
 | Replay of demo crash fixture, CLI end to end | < 50 ms | median 5.9 ms, p95 9.1 ms (100 runs) | see below |
 | Fix verification of the demo crash, in-process (2 replays + 44 variants old + 41 new) | — | median 5.9 ms; range 5.7–6.2 ms over 5 runs | `go test -run '^$' -bench VerifyFixture -benchtime 2s -count 5 ./examples/ledger` |
@@ -25,20 +25,27 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 | Same ten: narrow fix rejected | — | 10 of 10, all `variant_failed` | same |
 | Demo crash fixture size | < 100 KB | 1,975 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
 | Determinism | 1,000 replays byte-identical | 1,000 / 1,000 | `go test -run Determinism ./examples/ledger` |
-| Test coverage, core packages | ≥ 80% | `sdk/go` with `replay` 79.9% (**missed**), `journal` 86.2% | `go test -coverpkg=./sdk/go,./replay -cover ./replay` and `go test -cover ./journal` |
+| Test coverage, core packages | ≥ 80% | `sdk/go` with `replay` 80.3%, `journal` 86.8% | `go test -coverpkg=./sdk/go,./replay -cover ./replay` and `go test -cover ./journal` |
 
 ## What each number includes
 
 **Recorder overhead.** One `Recorder.Step` journals four events (input, clock
 read, 8-byte random read, output) for a 33-byte input; ns/event is the step time
-divided by four. It includes `time.Now`, encoding the frames, and the two
-writes into the recorder pipe that SPEC.md §10.2 asks for: the `input` frame
-before the handler runs, then the rest of the step with its `step_end`. Those
-two pipe writes are most of the cost; the recorder process, which compresses
-and writes the journal, runs alongside and is not counted. It does not include
-crypto/rand: the benchmark injects a seeded `math/rand` source, so the number
-measures Kavach rather than the kernel's random number generator. The median
-is the number to quote. 16 allocations and 368 bytes per step.
+divided by four. It includes `time.Now`, encoding the frames straight into a
+reused buffer, and publishing them into the shared-memory ring of SPEC.md
+§10.7: the `input` frame before the handler runs, then the rest of the step
+with its `step_end`. Publishing is a copy into the mapped ring and a release
+store; no system call is made unless the ring is more than half full. The
+recorder process, which numbers, compresses and writes the journal, runs
+alongside on other cores and is not counted. The figure is a steady rate, not a
+burst: the 8 MiB ring fills within milliseconds, so it also includes any wait
+for the recorder to make room, and it holds only because the recorder takes
+less than the step's 330 ns to process a step. With `NoRing` the same benchmark uses the pipe, where each of the two
+publishes is a `write` system call; that is the 494 ns/event above. It does not
+include crypto/rand: the benchmark injects a seeded `math/rand` source, so the
+number measures Kavach rather than the kernel's random number generator. The
+median is the number to quote. 1 allocation and 8 bytes per step (the
+handler's own random buffer).
 
 **In-process replay.** `replay.RunFile` on the demo fixture: read and decode
 the 33-record file, replay 8 steps through the ledger handler, check two

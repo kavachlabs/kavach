@@ -77,8 +77,15 @@ func (a *answers) config(string) ([]byte, string, bool) {
 }
 
 // TestRecorderCases runs every case of spec/recorder/sdk through the Go SDK,
-// with the fake recorder in place of kavach-recorder.
+// with the fake recorder in place of kavach-recorder, over the pipe and over
+// the ring (SPEC.md §10.7).
 func TestRecorderCases(t *testing.T) {
+	for _, transport := range []string{"pipe", "ring"} {
+		t.Run(transport, func(t *testing.T) { recorderCases(t, transport == "pipe") })
+	}
+}
+
+func recorderCases(t *testing.T, noRing bool) {
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not found")
@@ -128,6 +135,7 @@ func TestRecorderCases(t *testing.T) {
 				Service:         c.Open.Service,
 				Start:           c.Open.Start,
 				NoSnapshots:     !c.Open.Snapshots,
+				NoRing:          noRing,
 				RecorderCommand: []string{py, "-I", filepath.Join(specDir, "fake_recorder.py"), path, filepath.Join(t.TempDir(), "result.json")},
 				Clock:           a.clock,
 				Rand:            a,
@@ -164,12 +172,19 @@ func TestRecorderCases(t *testing.T) {
 				t.Fatalf("the fake recorder wrote no result: %v", err)
 			}
 			var res struct {
-				Pass  bool   `json:"pass"`
-				Error string `json:"error"`
+				Pass   bool   `json:"pass"`
+				Error  string `json:"error"`
+				Frames []struct {
+					Open map[string]any `json:"open"`
+				} `json:"frames"`
 			}
 			json.Unmarshal(out, &res)
 			if !res.Pass {
 				t.Fatal(res.Error)
+			}
+			// The fake read the ring only if the open frame named one.
+			if _, ring := res.Frames[0].Open["ring"]; ring == noRing {
+				t.Fatalf("open frame ring = %v with NoRing = %v", ring, noRing)
 			}
 		})
 	}

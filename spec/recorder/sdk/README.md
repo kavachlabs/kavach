@@ -11,6 +11,15 @@ command instead of `kavach-recorder`. The fake answers like the recorder would
 stream closes it compares every frame it received with the case and writes a
 verdict file. It needs Python 3.10+ and nothing else.
 
+An SDK that offers the shared-memory ring (SPEC.md §10.7) runs every case over
+the pipe and again over the ring, and passes both. When the `open` frame has
+`ring`, the fake maps file descriptor 3, checks the header, reads every later
+frame from the ring as §10.7 describes (it polls, treats a byte on standard
+input as a doorbell, and on end of standard input drains the ring up to
+`write`), and compares the frames the same way. The frames a case lists are
+the same for both transports, except that the `open` frame also has `ring`,
+which the cases do not list.
+
 ## What an SDK's runner does, per case
 
 1. Read the case file (`<name>.json`).

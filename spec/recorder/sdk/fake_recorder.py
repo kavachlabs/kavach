@@ -4,7 +4,9 @@
     python3 spec/recorder/sdk/fake_recorder.py <case.json> <result.json>
 
 An SDK under test is started with this as its recorder command instead of
-kavach-recorder. It reads the record stream (§10.2) from standard input,
+kavach-recorder. It reads the record stream (§10.2) from standard input, or,
+when the open frame has `ring`, from the shared-memory ring that is file
+descriptor 3 (§10.7), with standard input as the doorbell,
 answers on standard output as the recorder would (§10.3), sending the control
 messages the case scripts, and when the stream closes compares every frame it
 received with the case's `frames`. It writes {"pass": bool, "error": str,
@@ -14,8 +16,12 @@ Standard library only, Python 3.10 or later.
 
 import base64
 import json
+import mmap
+import os
 import struct
 import sys
+import threading
+import time
 
 RECORD_TYPES = {1: "input", 2: "clock", 3: "rand", 4: "output", 5: "marker", 7: "gateway", 9: "config"}
 SCOPES = {0: "remote", 1: "local"}
@@ -127,6 +133,49 @@ def decode_frame(kind, payload):
     return f
 
 
+class Ring:
+    """The record stream in the ring of SPEC.md §10.7, read like a file."""
+
+    HEADER = 256
+
+    def __init__(self, fd, capacity):
+        self.cap = capacity
+        self.mem = mmap.mmap(fd, self.HEADER + capacity)
+        if self.mem[:8] != b"KVRING01" or struct.unpack_from("<Q", self.mem, 8)[0] != capacity:
+            raise Malformed("bad ring header")
+        self.pos = 0
+        self.ended = threading.Event()
+        # Standard input carries only doorbell bytes; its end means the service ended.
+        threading.Thread(target=self._doorbell, daemon=True).start()
+
+    def _doorbell(self):
+        try:
+            while os.read(0, 4096):
+                pass
+        finally:
+            self.ended.set()
+
+    def read(self, n):
+        out = b""
+        while len(out) < n:
+            ended = self.ended.is_set()
+            write = struct.unpack_from("<Q", self.mem, 64)[0]
+            if write - self.pos > self.cap:
+                raise Malformed("ring holds more bytes than its capacity")
+            take = min(n - len(out), write - self.pos)
+            if take > 0:
+                off = self.HEADER + self.pos % self.cap
+                first = min(take, self.cap - self.pos % self.cap)
+                out += bytes(self.mem[off:off + first]) + bytes(self.mem[self.HEADER:self.HEADER + take - first])
+                self.pos += take
+                struct.pack_into("<Q", self.mem, 128, self.pos)
+            elif ended:
+                break
+            else:
+                time.sleep(0.0005)
+        return out
+
+
 def read_uvarint(stream):
     x = shift = 0
     for n in range(10):
@@ -195,6 +244,8 @@ def main():
             f = decode_frame(body[0], body[1:])
             frames.append(f)
             if f["frame"] == "open":
+                if f["open"].get("ring"):
+                    stdin = Ring(3, f["open"]["ring"])
                 say({"t": "ready", "protocol": 1, "recorder": "fake-recorder", "run": "conformance", "file": "/dev/null"})
             elif f["frame"] == "record":
                 records += 1

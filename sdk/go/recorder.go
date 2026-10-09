@@ -65,6 +65,13 @@ type Options struct {
 	// RecoverPanics makes Step return a *PanicError instead of re-panicking
 	// after the recorder has written the fixture.
 	RecoverPanics bool
+	// NoRing carries the record stream over the recorder's pipe instead of a
+	// shared-memory ring (SPEC.md §10.7). The ring is the default on Unix, and
+	// the pipe is used where it cannot be set up.
+	NoRing bool
+	// RingBytes is the ring's capacity, a power of two of at least 64 KiB.
+	// Zero means 8 MiB.
+	RingBytes int
 	// OnFixture, if set, is called with the path and failure of every fixture
 	// the recorder reports. It runs on the recorder's control goroutine.
 	OnFixture func(file, failure string)
@@ -116,7 +123,7 @@ type Recorder struct {
 	opts      Options
 	snapshots bool
 	enc       *recstream.Encoder
-	recs      []journal.Record
+	buf       []byte // frames of the step in progress, reused
 	outs      []Output
 	env       recordEnv
 	requested int // durable flushes sent
@@ -126,6 +133,8 @@ type Recorder struct {
 	closing atomic.Bool
 	snapReq atomic.Bool
 
+	ring      *recstream.Ring // nil on the pipe transport
+	belled    bool            // the doorbell rang since the ring was last under half full
 	cmd       *exec.Cmd
 	stdin     *os.File
 	exited    chan struct{}
@@ -185,13 +194,53 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 type pipe struct{ r *Recorder }
 
 func (p pipe) Write(b []byte) (int, error) {
-	if !p.r.active.Load() {
-		return len(b), nil
-	}
-	if _, err := p.r.stdin.Write(b); err != nil {
-		p.r.fail("could not write to the recorder: %v", err)
-	}
+	p.r.publish(b)
 	return len(b), nil
+}
+
+// publish hands whole frames to the recorder, through the ring or the pipe.
+func (r *Recorder) publish(b []byte) {
+	if !r.active.Load() {
+		return
+	}
+	if r.ring == nil {
+		if _, err := r.stdin.Write(b); err != nil {
+			r.fail("could not write to the recorder: %v", err)
+		}
+		return
+	}
+	for len(b) > 0 {
+		n, used := r.ring.TryPublish(b)
+		if n == 0 {
+			// Full: the recorder drains the ring on the doorbell. If it has
+			// exited, the control goroutine stops recording and ends the wait.
+			r.bell()
+			for n == 0 && r.active.Load() {
+				time.Sleep(20 * time.Microsecond)
+				n, used = r.ring.TryPublish(b)
+			}
+			if n == 0 {
+				return
+			}
+		}
+		b = b[n:]
+		if half := r.ring.Capacity() / 2; used > half && !r.belled {
+			r.belled = true
+			r.bell()
+		} else if used <= half {
+			r.belled = false
+		}
+	}
+}
+
+// bell wakes a recorder that reads the ring (SPEC.md §10.7).
+func (r *Recorder) bell() {
+	if r.ring == nil || !r.active.Load() {
+		return
+	}
+	if _, err := r.stdin.Write([]byte{1}); err != nil {
+		r.fail("could not write to the recorder: %v", err)
+	}
 }
 
 func recorderCommand(argv []string) ([]string, error) {
@@ -220,13 +269,23 @@ func (r *Recorder) start() error {
 	// The environment is left unchanged: the recorder reads the env. facts from it (§10.1).
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stderr = pr, os.Stderr
+	ring, ringFile := r.newRing()
+	if ring != nil {
+		cmd.ExtraFiles = []*os.File{ringFile}
+	}
 	out, err := cmd.StdoutPipe()
 	if err == nil {
 		err = cmd.Start()
 	}
 	pr.Close()
+	if ringFile != nil {
+		ringFile.Close()
+	}
 	if err != nil {
 		pw.Close()
+		if ring != nil {
+			ring.Close()
+		}
 		return err
 	}
 	setPipeSize(pw)
@@ -240,7 +299,9 @@ func (r *Recorder) start() error {
 		Snapshots: r.snapshots, Dir: o.Dir, Compression: o.Compression, Level: o.Level,
 		BlockBytes: o.BlockBytes, FlushMS: o.FlushMS, SegmentBytes: o.SegmentBytes,
 		SegmentSeconds: o.SegmentSeconds, RetainSegments: o.RetainSegments, SecretKeys: o.SecretKeys,
+		Ring: ringCapacity(ring),
 	})
+	r.ring = ring
 	facts := []journal.Fact{{Key: "host.runtime", Form: journal.FactValue, Value: []byte(runtime.Version())}}
 	if o.Flags != nil {
 		for k, v := range o.Flags() {
@@ -265,6 +326,35 @@ type control struct {
 	Failure string `json:"failure"`
 	Message string `json:"message"`
 	Fatal   bool   `json:"fatal"`
+}
+
+// newRing sets up the ring unless the application asked for the pipe. When it
+// cannot be set up, recording goes on over the pipe.
+func (r *Recorder) newRing() (*recstream.Ring, *os.File) {
+	if r.opts.NoRing {
+		return nil, nil
+	}
+	capacity := r.opts.RingBytes
+	if capacity == 0 {
+		capacity = recstream.DefaultRing
+	}
+	dir := os.TempDir()
+	if fi, err := os.Stat("/dev/shm"); err == nil && fi.IsDir() {
+		dir = "/dev/shm"
+	}
+	ring, f, err := recstream.CreateRing(dir, capacity)
+	if err != nil {
+		log.Printf("kavach: no shared-memory ring, recording over the pipe: %v", err)
+		return nil, nil
+	}
+	return ring, f
+}
+
+func ringCapacity(g *recstream.Ring) int {
+	if g == nil {
+		return 0
+	}
+	return int(g.Capacity())
 }
 
 func (r *Recorder) control(out io.Reader) {
@@ -337,7 +427,9 @@ func (r *Recorder) File() string {
 	return r.file
 }
 
-func (r *Recorder) add(rec journal.Record) { r.recs = append(r.recs, rec) }
+func (r *Recorder) add(rec journal.Record) {
+	r.buf, _ = recstream.AppendRecordFrame(r.buf, rec)
+}
 
 // Step runs the handler on one input.
 //
@@ -352,10 +444,13 @@ func (r *Recorder) Step(in Input) error {
 	defer r.mu.Unlock()
 
 	r.answerSnapshotRequest()
-	r.recs, r.outs = r.recs[:0], r.outs[:0]
+	r.outs = r.outs[:0]
 	// The input goes in before the handler runs, so that a step that kills the
 	// process still leaves it on record (§10.2).
-	r.enc.Record(journal.Record{Type: journal.TypeInput, Source: in.Source, Position: in.Position, Data: in.Data})
+	r.buf = r.buf[:0]
+	r.add(journal.Record{Type: journal.TypeInput, Source: in.Source, Position: in.Position, Data: in.Data})
+	r.publish(r.buf)
+	r.buf = r.buf[:0]
 
 	pv, stack, herr := r.run(in)
 	var ierr *InvariantError
@@ -370,7 +465,8 @@ func (r *Recorder) Step(in Input) error {
 			r.add(journal.Record{Type: journal.TypeMarker, Kind: journal.MarkerInvariant, Message: name, Data: []byte(err.Error())})
 		}
 	}
-	r.enc.Records(r.recs, true)
+	r.buf = recstream.AppendFrame(r.buf, recstream.KindStepEnd, nil)
+	r.publish(r.buf)
 
 	switch {
 	case stack != nil:
@@ -426,6 +522,7 @@ func (r *Recorder) sendFlush(durable bool) bool {
 		r.requested++
 	}
 	r.enc.Flush(durable)
+	r.bell()
 	return r.active.Load()
 }
 
@@ -469,6 +566,7 @@ func (r *Recorder) Close() {
 	if r.active.Load() {
 		r.closing.Store(true)
 		r.enc.Close()
+		r.bell()
 		select {
 		case <-r.closedAck:
 		case <-time.After(closeTimeout):
@@ -482,6 +580,10 @@ func (r *Recorder) Close() {
 	}
 	select {
 	case <-r.exited:
+		if r.ring != nil {
+			r.ring.Close()
+			r.ring = nil
+		}
 	case <-time.After(2 * time.Second):
 		log.Printf("kavach: the recorder is still running after close")
 	}
@@ -502,7 +604,7 @@ func (e *recordEnv) Read(p []byte) (int, error) {
 	if _, err := io.ReadFull(e.r.opts.Rand, p); err != nil {
 		return 0, err
 	}
-	e.r.add(journal.Record{Type: journal.TypeRand, Data: clone(p)})
+	e.r.add(journal.Record{Type: journal.TypeRand, Data: p})
 	return len(p), nil
 }
 
@@ -512,11 +614,11 @@ func (e *recordEnv) Query(gateway string, request []byte) ([]byte, error) {
 	if e.r.opts.Gateway != nil {
 		resp, err = e.r.opts.Gateway(gateway, request)
 	}
-	rec := journal.Record{Type: journal.TypeGateway, Flags: journal.FlagCritical, Gateway: gateway, Request: clone(request), Scope: journal.ScopeRemote}
+	rec := journal.Record{Type: journal.TypeGateway, Flags: journal.FlagCritical, Gateway: gateway, Request: request, Scope: journal.ScopeRemote}
 	if err != nil {
 		rec.Error = err.Error()
 	} else {
-		rec.Response = clone(resp)
+		rec.Response = resp
 	}
 	e.r.add(rec)
 	return resp, err
@@ -527,14 +629,15 @@ func (e *recordEnv) Config(key string) ([]byte, bool) {
 	if !ok {
 		v = nil
 	}
-	e.r.add(journal.Record{Type: journal.TypeConfig, Flags: journal.FlagCritical, Key: key, Present: ok, Value: clone(v), Source: source})
+	e.r.add(journal.Record{Type: journal.TypeConfig, Flags: journal.FlagCritical, Key: key, Present: ok, Value: v, Source: source})
 	return v, ok
 }
 
 func (e *recordEnv) Emit(sink string, data []byte) {
-	data = clone(data)
 	e.r.add(journal.Record{Type: journal.TypeOutput, Sink: sink, Data: data, Scope: journal.ScopeRemote})
-	e.r.outs = append(e.r.outs, Output{Sink: sink, Data: data})
+	if e.r.opts.Deliver != nil {
+		e.r.outs = append(e.r.outs, Output{Sink: sink, Data: clone(data)})
+	}
 }
 
 func clone(b []byte) []byte {

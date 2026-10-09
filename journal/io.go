@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // Start values for Meta.Start (SPEC.md §3.2).
@@ -121,7 +122,7 @@ type order struct {
 	sawEnv  bool
 }
 
-func (o *order) check(r Record) error {
+func (o *order) check(r *Record) error {
 	if o.started {
 		if r.Seq != o.next {
 			return fmt.Errorf("sequence gap: expected seq %d, got %d", o.next, r.Seq)
@@ -176,6 +177,11 @@ type WriterOptions struct {
 	// BlockBytes is the raw size at which a block is closed. Defaults to
 	// DefaultBlockSz.
 	BlockBytes int
+	// Async compresses and writes the blocks that fill up on a goroutine of
+	// the Writer's own, so that Write does not wait for them. Flush and Close
+	// wait for everything to be written. Close must be called to stop the
+	// goroutine.
+	Async bool
 }
 
 // Writer writes a journal to an io.Writer. Records are gathered into a block,
@@ -189,6 +195,21 @@ type Writer struct {
 	count int
 	first uint64
 	out   []byte
+	body  []byte // scratch for one record
+
+	// Async state: filled blocks go to the writer goroutine, which hands the
+	// buffers back.
+	jobs    chan blockJob
+	free    chan []byte
+	wg      sync.WaitGroup // blocks handed over and not yet written
+	errMu   sync.Mutex
+	asyncEr error
+}
+
+type blockJob struct {
+	first uint64
+	count int
+	raw   []byte
 }
 
 // NewWriter writes the header for meta to w and returns a Writer for its
@@ -222,44 +243,154 @@ func NewWriterOptions(w io.Writer, meta Meta, opts WriterOptions) (*Writer, erro
 }
 
 func newWriter(w io.Writer, meta Meta, opts WriterOptions, ord order) *Writer {
-	return &Writer{w: w, meta: meta, opts: opts, ord: ord}
+	jw := &Writer{w: w, meta: meta, opts: opts, ord: ord}
+	if opts.Async {
+		jw.jobs, jw.free = make(chan blockJob, 1), make(chan []byte, 2)
+		go jw.run()
+	}
+	return jw
+}
+
+// run compresses and writes the blocks handed over, in order.
+func (w *Writer) run() {
+	var out []byte
+	for j := range w.jobs {
+		var err error
+		if w.asyncErr() == nil {
+			out, err = appendBlock(out[:0], j.first, j.count, j.raw, w.meta.Compression, w.opts.Level)
+			if err == nil {
+				_, err = w.w.Write(out)
+			}
+			w.setAsyncErr(err)
+		}
+		select {
+		case w.free <- j.raw[:0]:
+		default:
+		}
+		w.wg.Done()
+	}
+}
+
+func (w *Writer) asyncErr() error {
+	w.errMu.Lock()
+	defer w.errMu.Unlock()
+	return w.asyncEr
+}
+
+func (w *Writer) setAsyncErr(err error) {
+	if err == nil {
+		return
+	}
+	w.errMu.Lock()
+	w.asyncEr = err
+	w.errMu.Unlock()
 }
 
 // Write adds one record to the open block. Sequence numbers must be contiguous,
 // a genesis journal must start at 0, a snapshot journal must start with a
 // snapshot record and the first input must follow the genesis environment.
 func (w *Writer) Write(r Record) error {
-	if err := w.ord.check(r); err != nil {
+	if err := w.ord.check(&r); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
 	// check has advanced the order; a failed encode below leaves the writer
 	// unusable, which is fine for a writer that has seen an invalid record.
-	frame, err := AppendFrame(nil, r)
+	body, err := appendBody(w.body[:0], r)
 	if err != nil {
 		return err
 	}
-	if w.count > 0 && len(w.raw)+len(frame) > MaxBlockLen {
-		if err := w.Flush(); err != nil {
+	w.body = body
+	if len(body) > MaxBodyLen {
+		return fmt.Errorf("journal: record body is %d bytes, limit is %d", len(body), MaxBodyLen)
+	}
+	if err := w.begin(r.Seq, len(body)); err != nil {
+		return err
+	}
+	w.raw = append(w.raw, body...)
+	return w.end()
+}
+
+// begin starts a record body of n bytes in the open block: it closes a block
+// the record would overfill and writes the length.
+func (w *Writer) begin(seq uint64, n int) error {
+	if w.count > 0 && len(w.raw)+n+binary.MaxVarintLen64 > MaxBlockLen {
+		if err := w.flushBlock(); err != nil {
 			return err
 		}
 	}
 	if w.count == 0 {
-		w.first = r.Seq
+		w.first = seq
 	}
-	w.raw = append(w.raw, frame...)
+	w.raw = binary.AppendUvarint(w.raw, uint64(n))
+	return nil
+}
+
+// end counts the record just appended and closes the block once it is full.
+func (w *Writer) end() error {
 	w.count++
 	if len(w.raw) >= w.opts.BlockBytes {
-		return w.Flush()
+		return w.flushBlock()
 	}
 	return nil
+}
+
+// WriteEncoded adds a record whose payload is already encoded, as
+// AppendPayload would write it. It checks the order like Write, but not the
+// payload, which the caller has validated with ValidatePayload.
+func (w *Writer) WriteEncoded(seq uint64, ty Type, flags uint8, payload []byte) error {
+	r := Record{Seq: seq, Type: ty, Flags: flags}
+	if err := w.ord.check(&r); err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	if err := checkRecord(r); err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	n := 10 + len(payload) // type, flags, seq and the payload
+	if n > MaxBodyLen {
+		return fmt.Errorf("journal: record body is %d bytes, limit is %d", n, MaxBodyLen)
+	}
+	if err := w.begin(seq, n); err != nil {
+		return err
+	}
+	w.raw = append(w.raw, byte(ty), flags)
+	w.raw = binary.LittleEndian.AppendUint64(w.raw, seq)
+	w.raw = append(w.raw, payload...)
+	return w.end()
 }
 
 // Pending returns the number of records in the open block.
 func (w *Writer) Pending() int { return w.count }
 
-// Flush writes the open block, if any.
+// Flush writes the open block, if any, and every block handed over before it.
 func (w *Writer) Flush() error {
+	err := w.flushBlock()
+	if w.jobs != nil {
+		w.wg.Wait()
+		if err == nil {
+			err = w.asyncErr()
+		}
+	}
+	return err
+}
+
+// flushBlock closes the open block: it writes it, or hands it to the writer
+// goroutine.
+func (w *Writer) flushBlock() error {
 	if w.count == 0 {
+		return nil
+	}
+	if w.jobs != nil {
+		if err := w.asyncErr(); err != nil {
+			return err
+		}
+		w.wg.Add(1)
+		w.jobs <- blockJob{w.first, w.count, w.raw}
+		select {
+		case w.raw = <-w.free:
+		default:
+			w.raw = make([]byte, 0, cap(w.raw))
+		}
+		w.count = 0
 		return nil
 	}
 	var err error
@@ -273,7 +404,14 @@ func (w *Writer) Flush() error {
 }
 
 // Close writes the open block. It does not close the underlying writer.
-func (w *Writer) Close() error { return w.Flush() }
+func (w *Writer) Close() error {
+	err := w.Flush()
+	if w.jobs != nil {
+		close(w.jobs)
+		w.jobs = nil
+	}
+	return err
+}
 
 // Reader reads a journal from an io.Reader.
 type Reader struct {
@@ -494,7 +632,7 @@ func (r *Reader) records(h blockHeader, raw []byte) ([]Record, error) {
 		if len(recs) == 0 && rec.Seq != h.firstSeq {
 			return nil, corrupt("block header says first_seq %d, its first record has seq %d", h.firstSeq, rec.Seq)
 		}
-		if err := r.ord.check(rec); err != nil {
+		if err := r.ord.check(&rec); err != nil {
 			return nil, corrupt("%v", err)
 		}
 		recs = append(recs, rec)

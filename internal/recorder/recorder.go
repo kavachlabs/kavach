@@ -50,6 +50,9 @@ type Config struct {
 	Test *TestFacts
 	// WatchInterval is the host polling interval; DefaultWatchInterval if zero.
 	WatchInterval time.Duration
+	// Ring is the file the SDK passed as descriptor 3, which an open frame
+	// with "ring" says holds the record stream (SPEC.md §10.7).
+	Ring *os.File
 }
 
 // TestFacts is the content of a --test-facts file.
@@ -89,9 +92,11 @@ type recorder struct {
 	watcher *envfacts.Watcher
 
 	inStep      bool
-	step        []journal.Record
+	step        []stepRecord
 	stepMarker  *journal.Record
 	snapRequest bool
+
+	stepsSinceClock int
 
 	timer *time.Timer
 	armed bool
@@ -123,14 +128,39 @@ type item struct {
 }
 
 func (r *recorder) loop() (code int) {
-	frames := make(chan item, 256)
+	// Frames cross to the loop in batches: a channel operation per frame costs
+	// more than handling it.
+	frames := make(chan []item, 16)
 	go func() {
 		rd := recstream.NewReader(r.cfg.In)
-		for {
+		var batch []item
+		send := func(it item) {
+			batch = append(batch, it)
+			if it.err != nil || len(batch) == 256 || rd.Buffered() == 0 {
+				frames <- batch
+				batch = nil
+			}
+		}
+		for first := true; ; first = false {
 			f, err := rd.Next()
-			frames <- item{f, err}
+			send(item{f, err})
 			if err != nil {
 				return
+			}
+			if first && f.Kind == recstream.KindOpen {
+				// Later frames come from the ring, if the open frame asks
+				// for one; standard input is then only a doorbell.
+				if o, err := recstream.ParseOpen(f.Payload); err == nil && o.Ring > 0 {
+					ring, err := r.mapRing(o.Ring)
+					if err != nil {
+						send(item{err: err})
+						return
+					}
+					defer ring.Close()
+					rr := ring.NewReader()
+					go ringBell(rd.Raw(), rr)
+					rd = recstream.NewReader(rr)
+				}
 			}
 		}
 	}()
@@ -142,19 +172,23 @@ func (r *recorder) loop() (code int) {
 	r.timer = time.NewTimer(time.Hour)
 	r.timer.Stop()
 
+	var batch []item
 	for {
-		var it item
-		select {
-		case it = <-frames:
-		case <-r.timer.C:
-			r.armed = false
-			if r.seg != nil {
-				if err := r.seg.w.Flush(); err != nil {
-					return r.fail(fatalf("writing %s: %v", r.seg.path, err))
+		if len(batch) == 0 {
+			select {
+			case batch = <-frames:
+			case <-r.timer.C:
+				r.armed = false
+				if r.seg != nil {
+					if err := r.seg.w.Flush(); err != nil {
+						return r.fail(fatalf("writing %s: %v", r.seg.path, err))
+					}
 				}
 			}
 			continue
 		}
+		it := batch[0]
+		batch = batch[1:]
 
 		if it.err != nil {
 			if it.err == io.EOF || it.err == io.ErrUnexpectedEOF {
@@ -175,6 +209,29 @@ func (r *recorder) loop() (code int) {
 		if r.seg != nil && r.seg.w.Pending() > 0 && !r.armed {
 			r.timer.Reset(time.Duration(r.open.FlushMS) * time.Millisecond)
 			r.armed = true
+		}
+	}
+}
+
+func (r *recorder) mapRing(capacity int) (*recstream.Ring, error) {
+	if r.cfg.Ring == nil {
+		return nil, errors.New("ring: the open frame asks for one but no file was passed")
+	}
+	return recstream.OpenRing(r.cfg.Ring, capacity)
+}
+
+// ringBell turns every byte on standard input into a wake-up, and its end into
+// the end of the service.
+func ringBell(in io.Reader, rr *recstream.RingReader) {
+	var b [64]byte
+	for {
+		n, err := in.Read(b[:])
+		if n > 0 {
+			rr.Bell()
+		}
+		if err != nil {
+			rr.End()
+			return
 		}
 	}
 }
@@ -207,7 +264,9 @@ func (r *recorder) eof() int {
 	if r.inStep {
 		// The service died during the step: that step is the recorded failure.
 		if r.stepMarker == nil {
-			r.addStepRecord(journal.Record{Type: journal.TypeMarker, Kind: journal.MarkerCrash, Message: "process ended during step"})
+			crash := journal.Record{Type: journal.TypeMarker, Kind: journal.MarkerCrash, Message: "process ended during step"}
+			payload, _ := journal.AppendPayload(nil, crash)
+			r.addStepRecord(journal.TypeMarker, 0, payload, &crash)
 		}
 		if err := r.endStep(true); err != nil {
 			return r.fail(err)
@@ -357,28 +416,38 @@ func isFailureKind(kind string) bool {
 }
 
 func (r *recorder) handleRecord(payload []byte) error {
-	rec, err := recstream.ParseRecord(payload)
-	if err != nil {
+	if len(payload) < 2 {
+		return fatalf("malformed record frame: record frame is shorter than its type and flags")
+	}
+	ty, flags, body := journal.Type(payload[0]), payload[1], payload[2:]
+	// The record goes into the journal as the SDK encoded it, once it is known
+	// to be well formed; only markers are decoded, for what they say.
+	if err := journal.ValidatePayload(ty, flags, body); err != nil {
 		return fatalf("malformed record frame: %v", err)
 	}
-	switch rec.Type {
+	switch ty {
 	case journal.TypeEnvironment, journal.TypeSnapshot:
-		return fatalf("record frame holds a %s record; the recorder writes those", rec.Type)
+		return fatalf("record frame holds a %s record; the recorder writes those", ty)
 	}
 	// The recorder writes these, so it sets the flags the spec requires.
-	switch rec.Type {
+	switch ty {
 	case journal.TypeGateway, journal.TypeConfig:
-		rec.Flags |= journal.FlagCritical
+		flags |= journal.FlagCritical
+	}
+	var marker *journal.Record
+	if ty == journal.TypeMarker {
+		m, _ := journal.ParsePayload(ty, flags, body)
+		marker = &m
 	}
 
 	if r.inStep {
 		switch {
-		case rec.Type == journal.TypeInput:
+		case ty == journal.TypeInput:
 			return fatalf("input record inside a step; the previous step has no step_end")
 		case r.stepMarker != nil:
-			return fatalf("%s record after the step's marker", rec.Type)
+			return fatalf("%s record after the step's marker", ty)
 		}
-		r.addStepRecord(rec)
+		r.addStepRecord(ty, flags, body, marker)
 		return nil
 	}
 
@@ -386,28 +455,34 @@ func (r *recorder) handleRecord(payload []byte) error {
 		return fatalf("the first frame after open must be a snapshot when start is \"snapshot\"")
 	}
 	switch {
-	case rec.Type == journal.TypeInput:
+	case ty == journal.TypeInput:
 		if err := r.ensureStarted(); err != nil {
 			return err
 		}
 		r.inStep = true
-		r.addStepRecord(rec)
+		r.addStepRecord(ty, flags, body, nil)
 		return nil
-	case rec.Type == journal.TypeMarker && (rec.Kind == journal.MarkerTrigger || rec.Kind == journal.MarkerDropped):
+	case marker != nil && (marker.Kind == journal.MarkerTrigger || marker.Kind == journal.MarkerDropped):
 		if err := r.ensureStarted(); err != nil {
 			return err
 		}
-		return r.write(rec)
+		return r.writeEncoded(ty, flags, body)
 	}
-	return fatalf("%s record between steps; only an input or a trigger or dropped marker may start here", rec.Type)
+	return fatalf("%s record between steps; only an input or a trigger or dropped marker may start here", ty)
 }
 
-func (r *recorder) addStepRecord(rec journal.Record) {
-	if rec.Type == journal.TypeMarker {
-		cp := rec
-		r.stepMarker = &cp
+// stepRecord is a record of the step in progress, as the SDK encoded it.
+type stepRecord struct {
+	ty      journal.Type
+	flags   uint8
+	payload []byte
+}
+
+func (r *recorder) addStepRecord(ty journal.Type, flags uint8, payload []byte, marker *journal.Record) {
+	if marker != nil {
+		r.stepMarker = marker
 	}
-	r.step = append(r.step, rec)
+	r.step = append(r.step, stepRecord{ty, flags, payload})
 }
 
 // ensureStarted writes the header and genesis environment of a genesis
@@ -451,7 +526,9 @@ func (r *recorder) mergePending() []journal.Fact {
 			changed = append(changed, f)
 		}
 	}
-	r.pending = map[string]journal.Fact{}
+	if len(r.pending) > 0 {
+		r.pending = map[string]journal.Fact{}
+	}
 	journal.SortFacts(changed)
 	return changed
 }
@@ -515,6 +592,16 @@ func (r *recorder) beginSegment(index int, start string, snapshot []byte) error 
 	return r.write(r.fullEnvironment())
 }
 
+// writeEncoded numbers a record the SDK encoded and adds it to the open block.
+func (r *recorder) writeEncoded(ty journal.Type, flags uint8, payload []byte) error {
+	if err := r.seg.w.WriteEncoded(r.nextSeq, ty, flags, payload); err != nil {
+		return fatalf("writing %s: %v", r.seg.path, err)
+	}
+	r.lastSeq = r.nextSeq
+	r.nextSeq++
+	return nil
+}
+
 // write numbers a record and adds it to the open block.
 func (r *recorder) write(rec journal.Record) error {
 	rec.Seq = r.nextSeq
@@ -532,13 +619,15 @@ func (r *recorder) write(rec journal.Record) error {
 // the failure is written.
 func (r *recorder) endStep(final bool) error {
 	step, marker := r.step, r.stepMarker
-	r.inStep, r.step, r.stepMarker = false, nil, nil
+	r.inStep, r.stepMarker = false, nil
 	inputSeq := r.nextSeq
 	for _, rec := range step {
-		if err := r.write(rec); err != nil {
+		if err := r.writeEncoded(rec.ty, rec.flags, rec.payload); err != nil {
 			return err
 		}
 	}
+	clear(step)
+	r.step = step[:0]
 	if marker != nil && isFailureKind(marker.Kind) {
 		// The failure goes to disk before anything else happens (SPEC.md §3.6).
 		if err := r.seg.sync(); err != nil {
@@ -572,7 +661,9 @@ func (r *recorder) maybeRequestSnapshot() {
 	if !r.open.Snapshots || r.snapRequest || r.seg == nil {
 		return
 	}
-	if r.seg.cw.n >= r.open.SegmentBytes || time.Since(r.seg.started) >= time.Duration(r.open.SegmentSeconds)*time.Second {
+	// The clock is read every 256 steps: the age limit is in seconds.
+	r.stepsSinceClock++
+	if r.seg.cw.n.Load() >= r.open.SegmentBytes || r.stepsSinceClock%256 == 0 && time.Since(r.seg.started) >= time.Duration(r.open.SegmentSeconds)*time.Second {
 		r.snapRequest = true
 		r.send(map[string]any{"t": "snapshot_request"})
 	}
