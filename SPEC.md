@@ -1200,18 +1200,19 @@ pipe, so that recording a step costs a few memory copies and no system call.
 The frames are those of §10.2; only their transport changes. A recorder MUST
 support both transports, and the SDK chooses.
 
-**Setting up.** Before starting the recorder, the SDK creates a file of `256 +
-capacity` bytes, where `capacity` is a power of two of at least 64 KiB
-(reference default 8 MiB). It creates it in a memory-backed file system where
-the platform has one (`/dev/shm` on Linux) and in the temporary directory
-otherwise, unlinks it at once, and maps it shared. It passes the open file to
-the recorder as file descriptor 3; standard input, output and error are
-connected as in §10.1. Because the file has no name once unlinked, nothing can
-remove it from under the two processes, and nothing is left behind when they
-exit. The SDK writes the `open` frame on standard input as before, with the
-key `ring` set to `capacity`. Every later frame goes into the ring. A recorder
-that cannot map the ring, or finds the header invalid, MUST report a fatal
-error (§10.3).
+**Setting up.** Before starting the recorder, the SDK creates a memory-backed
+file of `65536 + capacity` bytes, where `capacity` is a power of two of at
+least 64 KiB (reference default 8 MiB). Where the platform has anonymous
+memory files it uses one (`memfd_create` on Linux), so the file never has a
+name; otherwise it creates the file in a memory-backed file system
+(`/dev/shm`) or the temporary directory and unlinks it at once. It maps the
+file shared and passes it to the recorder as file descriptor 3; standard
+input, output and error are connected as in §10.1. Because the file has no
+name, nothing can remove it from under the two processes, and nothing is left
+behind when they exit. The SDK writes the `open` frame on standard input as
+before, with the key `ring` set to `capacity`. Every later frame goes into the
+ring. A recorder that cannot map the ring, or finds the header invalid, MUST
+report a fatal error (§10.3).
 
 An SDK whose runtime cannot pass a descriptor to a child process instead keeps
 the file's name, creating it readable and writable by its own user only, and
@@ -1220,15 +1221,18 @@ opens the file, unlinks it, and maps it before reading the ring. If the
 recorder never starts, the SDK unlinks the file itself.
 
 **Layout.** Integers are little-endian `u64`s at fixed offsets, `write` and
-`read` on cache lines of their own:
+`read` on cache lines of their own. The data area starts at 65536, a multiple
+of every page size in use, so that a process MAY map it twice, back to back
+(at `d` and at `d + capacity`), and read or write any run of at most
+`capacity` bytes as one contiguous copy however it wraps:
 
 | Offset | Field | Written by | Meaning |
 | --- | --- | --- | --- |
-| 0 | magic | SDK | The 8 ASCII bytes `KVRING01`. |
+| 0 | magic | SDK | The 8 ASCII bytes `KVRING02`. |
 | 8 | capacity | SDK | Size of the data area in bytes. |
 | 64 | write | SDK | Bytes of the record stream published so far. |
 | 128 | read | recorder | Bytes of the record stream consumed so far. |
-| 256 | data | SDK | Byte `i` of the record stream (counting from the first frame after `open`) is at `256 + i mod capacity`. A frame may wrap. |
+| 65536 | data | SDK | Byte `i` of the record stream (counting from the first frame after `open`) is at `65536 + i mod capacity`. A frame may wrap. |
 
 The SDK initializes the header before starting the recorder. Neither process
 writes the other's field.
