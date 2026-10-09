@@ -12,7 +12,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/kavachlabs/kavach"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // step runs one event through the recorder. A panic stops the service (the

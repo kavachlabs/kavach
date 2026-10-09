@@ -1,4 +1,4 @@
-package kavach_test
+package replay_test
 
 import (
 	"bytes"
@@ -14,9 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
-	"github.com/kavachlabs/kavach/kavachtest"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
+	"github.com/kavachlabs/kavach/sdk/go/kavachtest"
 )
 
 // wallet is a test handler. Inputs are "account:amount"; an amount of "null"
@@ -134,19 +135,19 @@ func TestCrashIsReproducedThenFixed(t *testing.T) {
 		t.Fatalf("last record = %+v", last)
 	}
 
-	res, err := kavach.ReplayFile(path, newWallet)
+	res, err := replay.RunFile(path, newWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != kavach.StatusStillFailing || res.Recorded == nil || *res.Seq != res.Recorded.Seq {
+	if res.Status != replay.StatusStillFailing || res.Recorded == nil || *res.Seq != res.Recorded.Seq {
 		t.Fatalf("buggy build: %s (%s)", res, res.Detail)
 	}
 
-	res, err = kavach.ReplayFile(path, fixedWallet)
+	res, err = replay.RunFile(path, fixedWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != kavach.StatusFixed || res.String() != "fixed" || !res.Passed() {
+	if res.Status != replay.StatusFixed || res.String() != "fixed" || !res.Passed() {
 		t.Fatalf("fixed build: %s (%s)", res, res.Detail)
 	}
 	lastStep := res.Steps[len(res.Steps)-1]
@@ -157,7 +158,7 @@ func TestCrashIsReproducedThenFixed(t *testing.T) {
 
 func TestDivergedBeforeFailure(t *testing.T) {
 	path := recordCrash(t)
-	res, err := kavach.ReplayFile(path, func() kavach.Handler {
+	res, err := replay.RunFile(path, func() kavach.Handler {
 		return &wallet{bal: map[string]int64{}, fixed: true, newFormat: true}
 	})
 	if err != nil {
@@ -170,36 +171,36 @@ func TestDivergedBeforeFailure(t *testing.T) {
 
 func TestNondeterminism(t *testing.T) {
 	path := recordCrash(t)
-	res, err := kavach.ReplayFile(path, func() kavach.Handler {
+	res, err := replay.RunFile(path, func() kavach.Handler {
 		return &wallet{bal: map[string]int64{}, extraClock: true}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != kavach.StatusNondeterministic || !strings.Contains(res.Detail, "handler read clock, journal has rand") {
+	if res.Status != replay.StatusNondeterministic || !strings.Contains(res.Detail, "handler read clock, journal has rand") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
 	}
 
 	// A handler that reads less than recorded is also caught.
-	res, err = kavach.ReplayFile(path, func() kavach.Handler {
+	res, err = replay.RunFile(path, func() kavach.Handler {
 		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error { return nil })
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != kavach.StatusNondeterministic || !strings.Contains(res.Detail, "without reading") {
+	if res.Status != replay.StatusNondeterministic || !strings.Contains(res.Detail, "without reading") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
 	}
 
 	// Reading the wrong number of random bytes is caught.
-	res, _ = kavach.ReplayFile(path, func() kavach.Handler {
+	res, _ = replay.RunFile(path, func() kavach.Handler {
 		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
 			env.Now()
 			env.Read(make([]byte, 3))
 			return nil
 		})
 	})
-	if res.Status != kavach.StatusNondeterministic || !strings.Contains(res.Detail, "3 random bytes") {
+	if res.Status != replay.StatusNondeterministic || !strings.Contains(res.Detail, "3 random bytes") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
 	}
 }
@@ -211,7 +212,7 @@ func TestInvariantViolation(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Name != "balance_non_negative" || ie.Fixture == "" {
 		t.Fatalf("got %v", err)
 	}
-	res, err := kavach.ReplayFile(ie.Fixture, newWallet)
+	res, err := replay.RunFile(ie.Fixture, newWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +233,8 @@ func TestHandlerErrorWritesFixture(t *testing.T) {
 	if len(flushed) != 1 || !strings.HasSuffix(flushed[0], "-error.kavach") {
 		t.Fatalf("flushed = %v", flushed)
 	}
-	res, _ := kavach.ReplayFile(flushed[0], func() kavach.Handler { return &wallet{bal: map[string]int64{}, failOn: "carol"} })
-	if res.Status != kavach.StatusStillFailing || !strings.Contains(res.Detail, "error: account carol is frozen") {
+	res, _ := replay.RunFile(flushed[0], func() kavach.Handler { return &wallet{bal: map[string]int64{}, failOn: "carol"} })
+	if res.Status != replay.StatusStillFailing || !strings.Contains(res.Detail, "error: account carol is frozen") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
 	}
 
@@ -281,16 +282,16 @@ func TestSnapshotWindow(t *testing.T) {
 	if j.Header.Meta.Start != journal.StartSnapshot || j.Records[0].Type != journal.TypeSnapshot {
 		t.Fatalf("fixture does not start from a snapshot: %+v", j.Header.Meta)
 	}
-	res, err := kavach.Replay(j, fixedWallet)
+	res, err := replay.Run(j, fixedWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != kavach.StatusFixed || len(res.Steps) != 2 {
+	if res.Status != replay.StatusFixed || len(res.Steps) != 2 {
 		t.Fatalf("got %s with %d steps (%s)", res, len(res.Steps), res.Detail)
 	}
 
 	// A handler that cannot restore cannot replay a snapshot fixture.
-	if _, err := kavach.Replay(j, func() kavach.Handler { return kavach.HandlerFunc(nil) }); err == nil {
+	if _, err := replay.Run(j, func() kavach.Handler { return kavach.HandlerFunc(nil) }); err == nil {
 		t.Fatal("expected error for non-Snapshotter")
 	}
 }
@@ -305,8 +306,8 @@ func TestWindowRestartsAfterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := kavach.ReplayFile(path, newWallet)
-	if err != nil || res.Status != kavach.StatusOK || len(res.Steps) != 2 {
+	res, err := replay.RunFile(path, newWallet)
+	if err != nil || res.Status != replay.StatusOK || len(res.Steps) != 2 {
 		t.Fatalf("got %v (%v), err %v", res, res.Detail, err)
 	}
 }
@@ -338,8 +339,8 @@ func TestManualFlushReplaysOK(t *testing.T) {
 	if len(delivered) != 2 {
 		t.Fatalf("delivered %d outputs", len(delivered))
 	}
-	res, err := kavach.ReplayFile(path, newWallet)
-	if err != nil || res.Status != kavach.StatusOK || res.Recorded != nil {
+	res, err := replay.RunFile(path, newWallet)
+	if err != nil || res.Status != replay.StatusOK || res.Recorded != nil {
 		t.Fatalf("got %v, %v", res, err)
 	}
 }
@@ -381,7 +382,7 @@ func TestReplayIsDeterministic(t *testing.T) {
 	}
 	var first []byte
 	for i := 0; i < 1000; i++ {
-		res, err := kavach.Replay(j, fixedWallet)
+		res, err := replay.Run(j, fixedWallet)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,30 +397,30 @@ func TestReplayIsDeterministic(t *testing.T) {
 
 func TestCompare(t *testing.T) {
 	path := recordCrash(t)
-	old, _ := kavach.ReplayFile(path, newWallet)
-	fix, _ := kavach.ReplayFile(path, fixedWallet)
-	if d := kavach.Compare(old, old); d != nil {
+	old, _ := replay.RunFile(path, newWallet)
+	fix, _ := replay.RunFile(path, fixedWallet)
+	if d := replay.Compare(old, old); d != nil {
 		t.Fatalf("self-compare diverged: %+v", d)
 	}
-	d := kavach.Compare(old, fix)
+	d := replay.Compare(old, fix)
 	if d == nil || d.Seq != old.Recorded.Seq || d.Old != nil || d.New == nil || d.New.Sink != "rejections" {
 		t.Fatalf("divergence = %+v", d)
 	}
-	reformatted, _ := kavach.ReplayFile(path, func() kavach.Handler {
+	reformatted, _ := replay.RunFile(path, func() kavach.Handler {
 		return &wallet{bal: map[string]int64{}, fixed: true, newFormat: true}
 	})
-	if d := kavach.Compare(fix, reformatted); d == nil || d.Seq != 1 || d.Output != 0 {
+	if d := replay.Compare(fix, reformatted); d == nil || d.Seq != 1 || d.Output != 0 {
 		t.Fatalf("divergence = %+v", d)
 	}
 }
 
 func TestCompareFailureOnly(t *testing.T) {
-	a := &kavach.Result{Steps: []kavach.StepResult{{Seq: 0, Panic: "x"}}}
-	b := &kavach.Result{Steps: []kavach.StepResult{{Seq: 0, Error: "y"}, {Seq: 3}}}
-	if d := kavach.Compare(a, b); d == nil || d.Output != -1 || !strings.Contains(d.Detail, "old: panic: x; new: error: y") {
+	a := &replay.Result{Steps: []replay.StepResult{{Seq: 0, Panic: "x"}}}
+	b := &replay.Result{Steps: []replay.StepResult{{Seq: 0, Error: "y"}, {Seq: 3}}}
+	if d := replay.Compare(a, b); d == nil || d.Output != -1 || !strings.Contains(d.Detail, "old: panic: x; new: error: y") {
 		t.Fatalf("divergence = %+v", d)
 	}
-	if d := kavach.Compare(&kavach.Result{Steps: a.Steps[:0]}, b); d == nil || !strings.Contains(d.Detail, "old build stopped") {
+	if d := replay.Compare(&replay.Result{Steps: a.Steps[:0]}, b); d == nil || !strings.Contains(d.Detail, "old build stopped") {
 		t.Fatalf("divergence = %+v", d)
 	}
 }
@@ -428,7 +429,7 @@ func TestLenientRandSynthesisIsDeterministic(t *testing.T) {
 	path := recordCrash(t)
 	read := func() []byte {
 		var got []byte
-		kavach.ReplayFile(path, func() kavach.Handler {
+		replay.RunFile(path, func() kavach.Handler {
 			w := &wallet{bal: map[string]int64{}}
 			return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
 				if strings.HasSuffix(string(in.Data), "null") {

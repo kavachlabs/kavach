@@ -19,7 +19,7 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/kavachlabs/kavach"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 func main() {

@@ -9,7 +9,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/kavachlabs/kavach"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // The MCP server speaks JSON-RPC 2.0 over stdio, one message per line
@@ -204,7 +205,7 @@ var mcpTools = []map[string]any{
 			"old":     str("host command for the code that failed"),
 			"new":     str("host command for the candidate fix"),
 			"variants": map[string]any{"type": "integer", "minimum": 0,
-				"description": fmt.Sprintf("variants that must reproduce the incident and pass; default %d, 0 checks only the fixture", kavach.DefaultMinVariants)},
+				"description": fmt.Sprintf("variants that must reproduce the incident and pass; default %d, 0 checks only the fixture", replay.DefaultMinVariants)},
 			"keep": str("directory to save failing variants in; defaults to a new temporary directory"),
 		}, "fixture", "old", "new"),
 	},
@@ -301,7 +302,7 @@ func mcpDiff(raw json.RawMessage) (map[string]any, error) {
 	if a.Fixture == "" || a.Old == "" || a.New == "" {
 		return nil, errors.New("fixture, old and new are required")
 	}
-	min := kavach.DefaultMinVariants
+	min := replay.DefaultMinVariants
 	if a.Variants != nil {
 		if *a.Variants < 0 {
 			return nil, errors.New("variants must not be negative")

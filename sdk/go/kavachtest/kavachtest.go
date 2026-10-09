@@ -5,7 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Run replays every fixture matching pattern (e.g. "testdata/*.kavach") as a
@@ -21,7 +22,7 @@ func Run(t *testing.T, pattern string, newHandler func() kavach.Handler) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			res, err := kavach.ReplayFile(path, newHandler)
+			res, err := replay.RunFile(path, newHandler)
 			if err != nil {
 				t.Fatal(err)
 			}

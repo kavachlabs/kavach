@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kavachlabs/kavach"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 func main() {

@@ -1,10 +1,11 @@
-package kavach
+package replay
 
 import (
 	"fmt"
 	"sync"
 
 	"github.com/kavachlabs/kavach/journal"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 const (
@@ -76,10 +77,10 @@ func (v *Verification) String() string { return v.Verdict }
 func (v *Verification) Passed() bool { return v.Status == StatusFixed || v.Status == StatusOK }
 
 // Verify checks a candidate fix in process. See VerifyWith.
-func Verify(j *journal.Journal, oldHandler, newHandler func() Handler, opts VerifyOptions) (*Verification, error) {
+func Verify(j *journal.Journal, oldHandler, newHandler func() kavach.Handler, opts VerifyOptions) (*Verification, error) {
 	return VerifyWith(j,
-		func(j *journal.Journal) (*Result, error) { return Replay(j, oldHandler) },
-		func(j *journal.Journal) (*Result, error) { return Replay(j, newHandler) },
+		func(j *journal.Journal) (*Result, error) { return Run(j, oldHandler) },
+		func(j *journal.Journal) (*Result, error) { return Run(j, newHandler) },
 		opts)
 }
 

@@ -5,12 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // TestBenchmark records each planted bug, then checks three builds against the
-// fixture with kavach.Verify: the buggy build must reproduce the recorded
+// fixture with replay.Verify: the buggy build must reproduce the recorded
 // failure, the correct fix must be verified as fixed, and the narrow fix is
 // run to see whether variants reject it. Run with -v for the table.
 func TestBenchmark(t *testing.T) {
@@ -27,18 +28,18 @@ func TestBenchmark(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			old, err := kavach.Replay(j, func() kavach.Handler { return b.New(Buggy) })
+			old, err := replay.Run(j, func() kavach.Handler { return b.New(Buggy) })
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantKind := map[string]kavach.Status{"panic": kavach.StatusStillFailing, "error": kavach.StatusStillFailing, "invariant": kavach.StatusInvariantViolated}[b.Class]
+			wantKind := map[string]replay.Status{"panic": replay.StatusStillFailing, "error": replay.StatusStillFailing, "invariant": replay.StatusInvariantViolated}[b.Class]
 			if old.Status != wantKind {
 				t.Fatalf("buggy build: %s (%s), want %s", old, old.Detail, wantKind)
 			}
 			reproduced++
 
-			verify := func(m Mode) *kavach.Verification {
-				v, err := kavach.Verify(j, func() kavach.Handler { return b.New(Buggy) }, func() kavach.Handler { return b.New(m) }, kavach.VerifyOptions{})
+			verify := func(m Mode) *replay.Verification {
+				v, err := replay.Verify(j, func() kavach.Handler { return b.New(Buggy) }, func() kavach.Handler { return b.New(m) }, replay.VerifyOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -47,7 +48,7 @@ func TestBenchmark(t *testing.T) {
 			fixed, narrow := verify(Fixed), verify(Narrow)
 			variants += fixed.Candidates
 			reproducing += fixed.Reproducing
-			if fixed.Status == kavach.StatusFixed {
+			if fixed.Status == replay.StatusFixed {
 				correct++
 			}
 			if !narrow.Passed() {
@@ -56,10 +57,10 @@ func TestBenchmark(t *testing.T) {
 			rows = append(rows, fmt.Sprintf("%-22s %-9s old=%-34s fixed=%-14s (%2d/%2d variants reproduce) narrow=%s",
 				b.Name, b.Class, old, fixed, fixed.Reproducing, fixed.Candidates, narrow))
 			t.Logf("%s", rows[len(rows)-1])
-			if fixed.Status != kavach.StatusFixed {
+			if fixed.Status != replay.StatusFixed {
 				t.Errorf("correct fix: %s: %s", fixed, fixed.Detail)
 			}
-			if !narrow.Passed() && narrow.Status != kavach.StatusVariantFailed {
+			if !narrow.Passed() && narrow.Status != replay.StatusVariantFailed {
 				t.Errorf("narrow fix: %s, want variant_failed", narrow)
 			}
 		})

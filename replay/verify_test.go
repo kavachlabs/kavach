@@ -1,4 +1,4 @@
-package kavach_test
+package replay_test
 
 import (
 	"bytes"
@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 func crashJournal(t *testing.T) *journal.Journal {
@@ -39,9 +40,9 @@ func wrap(pre func(w *wallet, env kavach.Env, in kavach.Input) (bool, error)) fu
 	return func() kavach.Handler { return wrapped{newWallet().(*wallet), pre} }
 }
 
-func verify(t *testing.T, j *journal.Journal, newHandler func() kavach.Handler, opts kavach.VerifyOptions) *kavach.Verification {
+func verify(t *testing.T, j *journal.Journal, newHandler func() kavach.Handler, opts replay.VerifyOptions) *replay.Verification {
 	t.Helper()
-	v, err := kavach.Verify(j, newWallet, newHandler, opts)
+	v, err := replay.Verify(j, newWallet, newHandler, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func verify(t *testing.T, j *journal.Journal, newHandler func() kavach.Handler, 
 
 func TestVariantsOfPlainInputs(t *testing.T) {
 	j := crashJournal(t)
-	vs, err := kavach.Variants(j)
+	vs, err := replay.Variants(j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestVariantsOfPlainInputs(t *testing.T) {
 		}
 	}
 
-	again, _ := kavach.Variants(j)
+	again, _ := replay.Variants(j)
 	a, _ := json.Marshal(vs)
 	b, _ := json.Marshal(again)
 	if !bytes.Equal(a, b) {
@@ -134,7 +135,7 @@ func TestVariantsOfJSONInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vs, err := kavach.Variants(j)
+	vs, err := replay.Variants(j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestVariantsOfJSONInput(t *testing.T) {
 }
 
 func TestVerifyFixed(t *testing.T) {
-	v := verify(t, crashJournal(t), fixedWallet, kavach.VerifyOptions{})
+	v := verify(t, crashJournal(t), fixedWallet, replay.VerifyOptions{})
 	if v.String() != "fixed" || !v.Passed() || v.Candidates != 14 || v.Reproducing != 14 || v.Passing != 14 {
 		t.Fatalf("got %s: %d candidates, %d reproduce, %d pass; %s", v, v.Candidates, v.Reproducing, v.Passing, v.Detail)
 	}
@@ -180,11 +181,11 @@ func TestVerifyRejectsOverfitFix(t *testing.T) {
 		}
 		return false, nil
 	})
-	v := verify(t, crashJournal(t), overfit, kavach.VerifyOptions{})
+	v := verify(t, crashJournal(t), overfit, replay.VerifyOptions{})
 	if v.New.String() != "fixed" {
 		t.Fatalf("new build on the recording: %s", v.New)
 	}
-	if v.Status != kavach.StatusVariantFailed || v.Passed() {
+	if v.Status != replay.StatusVariantFailed || v.Passed() {
 		t.Fatalf("got %s, want variant_failed", v)
 	}
 	c := v.Variants[v.Variant-1]
@@ -199,8 +200,8 @@ func TestVerifyRejectsOverfitFix(t *testing.T) {
 // A fix that changes behavior before the incident on some variants.
 func TestVerifyRejectsVariantDivergence(t *testing.T) {
 	timeBomb := func() kavach.Handler { return &wallet{bal: map[string]int64{}, fixed: true, lateFormat: true} }
-	v := verify(t, crashJournal(t), timeBomb, kavach.VerifyOptions{})
-	if v.Status != kavach.StatusVariantFailed {
+	v := verify(t, crashJournal(t), timeBomb, replay.VerifyOptions{})
+	if v.Status != replay.StatusVariantFailed {
 		t.Fatalf("got %s (%s)", v, v.Detail)
 	}
 	c := v.Variants[v.Variant-1]
@@ -211,15 +212,15 @@ func TestVerifyRejectsVariantDivergence(t *testing.T) {
 
 func TestVerifyUnverifiedAndDisabled(t *testing.T) {
 	j := crashJournal(t)
-	v := verify(t, j, fixedWallet, kavach.VerifyOptions{MinVariants: 20})
-	if v.Status != kavach.StatusUnverified || v.Passed() || !strings.Contains(v.Detail, "only 14 of 14 variants") {
+	v := verify(t, j, fixedWallet, replay.VerifyOptions{MinVariants: 20})
+	if v.Status != replay.StatusUnverified || v.Passed() || !strings.Contains(v.Detail, "only 14 of 14 variants") {
 		t.Fatalf("got %s: %s", v, v.Detail)
 	}
-	v = verify(t, j, fixedWallet, kavach.VerifyOptions{MinVariants: -1})
+	v = verify(t, j, fixedWallet, replay.VerifyOptions{MinVariants: -1})
 	if v.String() != "fixed" || v.Candidates != 0 {
 		t.Fatalf("got %s with %d candidates", v, v.Candidates)
 	}
-	v = verify(t, j, newWallet, kavach.VerifyOptions{})
+	v = verify(t, j, newWallet, replay.VerifyOptions{})
 	if v.String() != "still_failing@13" || v.Candidates != 0 {
 		t.Fatalf("got %s with %d candidates", v, v.Candidates)
 	}
@@ -227,15 +228,15 @@ func TestVerifyUnverifiedAndDisabled(t *testing.T) {
 
 func TestVerifyParallelMatchesSerial(t *testing.T) {
 	j := crashJournal(t)
-	a, _ := json.Marshal(verify(t, j, fixedWallet, kavach.VerifyOptions{}))
-	b, _ := json.Marshal(verify(t, j, fixedWallet, kavach.VerifyOptions{Parallel: 8}))
+	a, _ := json.Marshal(verify(t, j, fixedWallet, replay.VerifyOptions{}))
+	b, _ := json.Marshal(verify(t, j, fixedWallet, replay.VerifyOptions{Parallel: 8}))
 	if !bytes.Equal(a, b) {
 		t.Fatal("parallel verification differs from serial")
 	}
 }
 
 func TestVariantFileReplaysLeniently(t *testing.T) {
-	vs, err := kavach.Variants(crashJournal(t))
+	vs, err := replay.Variants(crashJournal(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestVariantFileReplaysLeniently(t *testing.T) {
 	if *back.Header.Meta.Variant != *v.Header.Meta.Variant {
 		t.Fatalf("variant meta did not round-trip: %+v", back.Header.Meta.Variant)
 	}
-	res, err := kavach.ReplayFile(path, fixedWallet)
+	res, err := replay.RunFile(path, fixedWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +276,7 @@ func TestVerifyErrorIncident(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err := kavach.Verify(j, frozen, newWallet, kavach.VerifyOptions{MinVariants: 5})
+	v, err := replay.Verify(j, frozen, newWallet, replay.VerifyOptions{MinVariants: 5})
 	if err != nil {
 		t.Fatal(err)
 	}

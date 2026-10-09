@@ -39,7 +39,7 @@ large; the median is the number to quote, and the target is not yet met with
 margin. The window is bounded by snapshots every 1,000
 steps, as in production. 4 allocations and 80 bytes per step.
 
-**In-process replay.** `kavach.ReplayFile` on the demo fixture: read and decode
+**In-process replay.** `replay.RunFile` on the demo fixture: read and decode
 the 33-record file, replay 8 steps through the ledger handler, check two
 invariants per step, compare outputs.
 
@@ -63,7 +63,7 @@ print(f"median {statistics.median(ts):.1f} ms  p95 {ts[94]:.1f} ms")
 EOF
 ```
 
-**Fix verification.** In process, `kavach.Verify` with the planted-bug ledger as
+**Fix verification.** In process, `replay.Verify` with the planted-bug ledger as
 the old build and the correct nil check as the new one, run serially. End to
 end, wall time of `kavach diff` from process start to exit, which starts a
 host process for each of the 87 replays, at most one per CPU at a time:
@@ -86,7 +86,7 @@ type assertion, an oversold capacity invariant, an update delivered before its
 create, a redelivered charge, a leap-day array index, and an exhausted random
 pool. For each, `bench.Record` runs a short event stream through the flight
 recorder with a stepped clock and seeded randomness until the last event fails,
-and `kavach.Verify` then checks two candidate fixes against that fixture: a
+and `replay.Verify` then checks two candidate fixes against that fixture: a
 correct one that handles every input of the failing kind, and a narrow one that
 handles the recorded incident but not its siblings (for example, guarding only
 `signup` events when `update` events carry the same null). `-v` prints one row

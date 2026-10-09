@@ -1,4 +1,4 @@
-package kavach
+package replay
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/journal"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Status is the outcome of replaying a fixture.
@@ -42,10 +43,10 @@ type Failure struct {
 
 // StepResult is what one step produced during replay.
 type StepResult struct {
-	Seq     uint64   `json:"seq"` // seq of the step's input
-	Outputs []Output `json:"outputs"`
-	Panic   string   `json:"panic,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	Seq     uint64          `json:"seq"` // seq of the step's input
+	Outputs []kavach.Output `json:"outputs"`
+	Panic   string          `json:"panic,omitempty"`
+	Error   string          `json:"error,omitempty"`
 	// Crash is set when the host process running the step exited during it
 	// (SPEC.md §9.5); it holds what happened.
 	Crash string `json:"crash,omitempty"`
@@ -94,19 +95,19 @@ func (r *Result) String() string {
 // Passed reports whether the status is ok or fixed.
 func (r *Result) Passed() bool { return r.Status == StatusOK || r.Status == StatusFixed }
 
-// ReplayFile replays the fixture at path against a fresh handler from newHandler.
-func ReplayFile(path string, newHandler func() Handler) (*Result, error) {
+// RunFile replays the fixture at path against a fresh handler from newHandler.
+func RunFile(path string, newHandler func() kavach.Handler) (*Result, error) {
 	j, err := journal.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return Replay(j, newHandler)
+	return Run(j, newHandler)
 }
 
 type step struct {
 	input    journal.Record
 	reads    []journal.Record // clock, rand, gateway and config, in order
-	outputs  []Output
+	outputs  []kavach.Output
 	marker   *journal.Record  // failure marker, if any
 	envAfter []journal.Record // environment records written after the step
 }
@@ -114,13 +115,13 @@ type step struct {
 // Replay re-runs every step of j against a fresh handler from newHandler,
 // serving reads from the journal and capturing outputs. It returns an error
 // only if the journal cannot be replayed at all.
-func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
-	return replayJournal(j, func(snapshot []byte) (Handler, error) {
+func Run(j *journal.Journal, newHandler func() kavach.Handler) (*Result, error) {
+	return replayJournal(j, func(snapshot []byte) (kavach.Handler, error) {
 		h := newHandler()
 		if snapshot == nil {
 			return h, nil
 		}
-		s, ok := h.(Snapshotter)
+		s, ok := h.(kavach.Snapshotter)
 		if !ok {
 			return nil, errors.New("kavach: fixture starts from a snapshot but the handler does not implement Snapshotter")
 		}
@@ -133,7 +134,7 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 
 // replayJournal is the replay engine. open creates the handler the journal
 // starts from; snapshot is nil unless the journal starts from one.
-func replayJournal(j *journal.Journal, open func(snapshot []byte) (Handler, error)) (*Result, error) {
+func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handler, error)) (*Result, error) {
 	res := &Result{Service: j.Header.Meta.Service, Start: j.Header.Meta.Start, Records: len(j.Records), Steps: []StepResult{}}
 	// A variant never happened, so it has no recorded outputs to match and its
 	// recorded reads are only a source of plausible values: every step is lenient.
@@ -184,8 +185,8 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (Handler, erro
 		seq := st.input.Seq
 		env.reset(st, variant || st.marker != nil)
 		sr := StepResult{Seq: seq}
-		pv, panicked, herr := runReplayStep(h, env, Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
-		sr.Outputs = append([]Output{}, env.outs...)
+		pv, panicked, herr := runReplayStep(h, env, kavach.Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
+		sr.Outputs = append([]kavach.Output{}, env.outs...)
 		sr.Synthesized = env.synthesized
 
 		if nd, ok := pv.(nondeterminism); ok && panicked {
@@ -215,7 +216,7 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (Handler, erro
 			r := env.reads[env.pos]
 			return res.set(StatusNondeterministic, r.Seq, fmt.Sprintf("step finished without reading the recorded %s at seq %d", r.Type, r.Seq)), nil
 		}
-		if name, ierr := checkInvariants(h); ierr != nil {
+		if name, ierr := kavach.CheckInvariants(h); ierr != nil {
 			res.Invariant = name
 			return res.set(StatusInvariantViolated, seq, ierr.Error()), nil
 		}
@@ -257,7 +258,7 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 			if cur == nil {
 				return nil, fmt.Errorf("kavach: output record at seq %d precedes the first input", rec.Seq)
 			}
-			cur.outputs = append(cur.outputs, Output{Sink: rec.Sink, Data: rec.Data})
+			cur.outputs = append(cur.outputs, kavach.Output{Sink: rec.Sink, Data: rec.Data})
 		case journal.TypeEnvironment:
 			if cur != nil {
 				cur.envAfter = append(cur.envAfter, rec)
@@ -288,7 +289,7 @@ func isFailure(kind string) bool {
 	return kind == journal.MarkerPanic || kind == journal.MarkerError || kind == journal.MarkerInvariant || kind == journal.MarkerCrash
 }
 
-func diffOutputs(want, got []Output) string {
+func diffOutputs(want, got []kavach.Output) string {
 	for i := 0; i < len(want) || i < len(got); i++ {
 		switch {
 		case i >= len(got):
@@ -302,7 +303,7 @@ func diffOutputs(want, got []Output) string {
 	return ""
 }
 
-func describe(o Output) string {
+func describe(o kavach.Output) string {
 	const max = 120
 	d := o.Data
 	suffix := ""
@@ -312,7 +313,7 @@ func describe(o Output) string {
 	return fmt.Sprintf("%s %q%s", o.Sink, d, suffix)
 }
 
-func runReplayStep(h Handler, env *replayEnv, in Input) (pv any, panicked bool, err error) {
+func runReplayStep(h kavach.Handler, env *replayEnv, in kavach.Input) (pv any, panicked bool, err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			pv, panicked = v, true
@@ -399,7 +400,7 @@ type replayEnv struct {
 	input       uint64
 	reads       []journal.Record
 	pos         int
-	outs        []Output
+	outs        []kavach.Output
 	lenient     bool
 	clockPos    int
 	randPos     int
@@ -538,16 +539,16 @@ func (e *replayEnv) Config(key string) ([]byte, bool) {
 }
 
 func (e *replayEnv) Emit(sink string, data []byte) {
-	e.outs = append(e.outs, Output{Sink: sink, Data: clone(data)})
+	e.outs = append(e.outs, kavach.Output{Sink: sink, Data: clone(data)})
 }
 
 // Divergence is the first point where two replays of the same journal differ.
 type Divergence struct {
-	Seq    uint64  `json:"seq"`    // seq of the step's input
-	Output int     `json:"output"` // index of the differing output in the step, or -1 for a failure difference
-	Old    *Output `json:"old,omitempty"`
-	New    *Output `json:"new,omitempty"`
-	Detail string  `json:"detail"`
+	Seq    uint64         `json:"seq"`    // seq of the step's input
+	Output int            `json:"output"` // index of the differing output in the step, or -1 for a failure difference
+	Old    *kavach.Output `json:"old,omitempty"`
+	New    *kavach.Output `json:"new,omitempty"`
+	Detail string         `json:"detail"`
 }
 
 // Compare returns the first output where two replay results differ, or nil if
@@ -591,4 +592,11 @@ func failure(s StepResult) string {
 		return "error: " + s.Error
 	}
 	return "no failure"
+}
+
+func clone(b []byte) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return append([]byte(nil), b...)
 }
