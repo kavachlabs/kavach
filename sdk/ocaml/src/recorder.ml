@@ -234,7 +234,7 @@ let create ?recorder_command ?(required = false) ?snapshot ?snapshots ?(deliver 
       buf = Buffer.create 256; outputs = [];
     }
   in
-  if Sys.os_type = "Unix" then Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   let open_obj =
     let opt k f = function Some v -> [ (k, f v) ] | None -> [] in
     let int v = Json.Int v in

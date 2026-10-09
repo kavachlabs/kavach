@@ -30,7 +30,7 @@ let environment () =
   Json.Obj (List.remove_assoc "host.runtime" (recorder_facts ()) @ [ ("host.runtime", value (Recorder.runtime ())) ])
 
 let run (module H : Handler.S) =
-  if Sys.os_type = "Unix" then Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   (* Take the protocol stream for ourselves; whatever the handler prints goes
      to stderr (§9.1). *)
   let oc = Unix.out_channel_of_descr (Unix.dup Unix.stdout) in

@@ -43,7 +43,7 @@ function precompile_workload()
             write(driver, Json.stringify(m), '\n')
         end
         close(driver)
-        run_host(Host(() -> PrecompileProbe(), driver, out, nothing, () -> Dict{String,Any}(), "process", false))
+        run_host(Host(() -> PrecompileProbe(), driver, out, nothing, () -> Dict{String,Any}(), false))
         close(out)
 
         rec = Recorder(PrecompileProbe(); service="p", snapshots=true, gateways=n -> (_ -> UInt8[1]), config=k -> UInt8[1],
