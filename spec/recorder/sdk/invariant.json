@@ -1,0 +1,63 @@
+{
+  "description": "Starting from a snapshot of 999, the first step that ends ok breaks below_limit.",
+  "open": {
+    "service": "conformance",
+    "start": "snapshot",
+    "snapshots": false
+  },
+  "snapshot": "999",
+  "actions": [
+    {
+      "step": {
+        "source": "test",
+        "position": "0",
+        "data": "W10=",
+        "ops": []
+      },
+      "answers": {}
+    }
+  ],
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "protocol": 1,
+        "service": "conformance",
+        "start": "snapshot",
+        "snapshots": false
+      }
+    },
+    {
+      "frame": "facts",
+      "facts": {
+        "host.runtime": "*"
+      }
+    },
+    {
+      "frame": "snapshot",
+      "data": "OTk5"
+    },
+    {
+      "frame": "record",
+      "type": "input",
+      "critical": false,
+      "source": "test",
+      "position": "0",
+      "data": "W10="
+    },
+    {
+      "frame": "record",
+      "type": "marker",
+      "critical": false,
+      "kind": "invariant",
+      "message": "below_limit",
+      "data": "*"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

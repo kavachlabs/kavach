@@ -1,0 +1,8 @@
+{"comment":"A panic ends the step with its exact message; later operations do not run."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJlbWl0Iiwic2luayI6InRyYWNlIiwiZGF0YSI6ImJlZm9yZSJ9LHsib3AiOiJwYW5pYyIsIm1lc3NhZ2UiOiJib29tIn0seyJvcCI6ImVtaXQiLCJzaW5rIjoidHJhY2UiLCJkYXRhIjoiYWZ0ZXIifV0="}}
+{"expect":{"t":"emit","sink":"trace","data":"YmVmb3Jl","scope":"remote"}}
+{"expect":{"t":"done","outcome":"panic","message":"boom"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

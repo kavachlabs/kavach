@@ -1,0 +1,8 @@
+{"comment":"A handler that prints cannot corrupt the protocol stream."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJwcmludCIsInRleHQiOiJoZWxsbyBmcm9tIHRoZSBoYW5kbGVyIn0seyJvcCI6ImVtaXQiLCJzaW5rIjoidHJhY2UiLCJkYXRhIjoieCJ9XQ=="}}
+{"expect":{"t":"emit","sink":"trace","data":"eA==","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

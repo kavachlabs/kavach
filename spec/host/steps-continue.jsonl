@@ -1,0 +1,10 @@
+{"comment":"Steps after a failed step still run, against the same handler."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJwYW5pYyIsIm1lc3NhZ2UiOiJmaXJzdCJ9XQ=="}}
+{"expect":{"t":"done","outcome":"panic","message":"first"}}
+{"send":{"t":"step","seq":"1","source":"test","position":"1","data":"W3sib3AiOiJlbWl0Iiwic2luayI6InRyYWNlIiwiZGF0YSI6InNlY29uZCJ9XQ=="}}
+{"expect":{"t":"emit","sink":"trace","data":"c2Vjb25k","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

@@ -1,0 +1,50 @@
+{
+  "description": "One step with no operations: open, facts, input, step_end, close.",
+  "open": {
+    "service": "conformance",
+    "start": "genesis",
+    "snapshots": false
+  },
+  "actions": [
+    {
+      "step": {
+        "source": "test",
+        "position": "0",
+        "data": "W10=",
+        "ops": []
+      },
+      "answers": {}
+    }
+  ],
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis",
+        "snapshots": false
+      }
+    },
+    {
+      "frame": "facts",
+      "facts": {
+        "host.runtime": "*"
+      }
+    },
+    {
+      "frame": "record",
+      "type": "input",
+      "critical": false,
+      "source": "test",
+      "position": "0",
+      "data": "W10="
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

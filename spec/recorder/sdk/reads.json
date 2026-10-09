@@ -1,0 +1,210 @@
+{
+  "description": "Every kind of read and an output, recorded in program order.",
+  "open": {
+    "service": "conformance",
+    "start": "genesis",
+    "snapshots": false
+  },
+  "actions": [
+    {
+      "step": {
+        "source": "test",
+        "position": "0",
+        "data": "W3sib3AiOiJjbG9jayJ9LHsib3AiOiJyYW5kIiwibiI6M30seyJvcCI6ImdhdGV3YXkiLCJnYXRld2F5IjoiZngtcmF0ZXMiLCJyZXF1ZXN0IjoiRVVSVVNEIn0seyJvcCI6ImdhdGV3YXkiLCJnYXRld2F5IjoiZngtcmF0ZXMiLCJyZXF1ZXN0IjoiR0JQVVNEIn0seyJvcCI6ImNvbmZpZyIsImtleSI6ImZsYWcuYmV0YSJ9LHsib3AiOiJjb25maWciLCJrZXkiOiJNQVhfVFJBTlNGRVIifSx7Im9wIjoiZW1pdCIsInNpbmsiOiJwb3N0Z3JlczpiYWxhbmNlcyIsImRhdGEiOiJhbGljZT0xMCJ9XQ==",
+        "ops": [
+          {
+            "op": "clock"
+          },
+          {
+            "op": "rand",
+            "n": 3
+          },
+          {
+            "op": "gateway",
+            "gateway": "fx-rates",
+            "request": "EURUSD"
+          },
+          {
+            "op": "gateway",
+            "gateway": "fx-rates",
+            "request": "GBPUSD"
+          },
+          {
+            "op": "config",
+            "key": "flag.beta"
+          },
+          {
+            "op": "config",
+            "key": "MAX_TRANSFER"
+          },
+          {
+            "op": "emit",
+            "sink": "postgres:balances",
+            "data": "alice=10"
+          }
+        ]
+      },
+      "answers": {
+        "clock": [
+          "1759752000000000000"
+        ],
+        "rand": [
+          "AQL/"
+        ],
+        "gateway": [
+          {
+            "response": "MS4wNw=="
+          },
+          {
+            "error": "timeout"
+          }
+        ],
+        "config": [
+          {
+            "value": "b24="
+          },
+          {
+            "unset": true
+          }
+        ]
+      }
+    }
+  ],
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis",
+        "snapshots": false
+      }
+    },
+    {
+      "frame": "facts",
+      "facts": {
+        "host.runtime": "*"
+      }
+    },
+    {
+      "frame": "record",
+      "type": "input",
+      "critical": false,
+      "source": "test",
+      "position": "0",
+      "data": "W3sib3AiOiJjbG9jayJ9LHsib3AiOiJyYW5kIiwibiI6M30seyJvcCI6ImdhdGV3YXkiLCJnYXRld2F5IjoiZngtcmF0ZXMiLCJyZXF1ZXN0IjoiRVVSVVNEIn0seyJvcCI6ImdhdGV3YXkiLCJnYXRld2F5IjoiZngtcmF0ZXMiLCJyZXF1ZXN0IjoiR0JQVVNEIn0seyJvcCI6ImNvbmZpZyIsImtleSI6ImZsYWcuYmV0YSJ9LHsib3AiOiJjb25maWciLCJrZXkiOiJNQVhfVFJBTlNGRVIifSx7Im9wIjoiZW1pdCIsInNpbmsiOiJwb3N0Z3JlczpiYWxhbmNlcyIsImRhdGEiOiJhbGljZT0xMCJ9XQ=="
+    },
+    {
+      "frame": "record",
+      "type": "clock",
+      "critical": false,
+      "unix_nanos": "1759752000000000000"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "eyJjbG9jayI6IjE3NTk3NTIwMDAwMDAwMDAwMDAifQ==",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "rand",
+      "critical": false,
+      "data": "AQL/"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "AQL/",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "gateway",
+      "critical": true,
+      "gateway": "fx-rates",
+      "request": "RVVSVVNE",
+      "response": "MS4wNw==",
+      "error": "",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "MS4wNw==",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "gateway",
+      "critical": true,
+      "gateway": "fx-rates",
+      "request": "R0JQVVNE",
+      "response": "",
+      "error": "timeout",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "eyJlcnJvciI6InRpbWVvdXQifQ==",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "config",
+      "critical": true,
+      "key": "flag.beta",
+      "present": true,
+      "value": "b24=",
+      "source": "*"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "b24=",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "config",
+      "critical": true,
+      "key": "MAX_TRANSFER",
+      "present": false,
+      "value": "",
+      "source": "*"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "trace",
+      "data": "eyJ1bnNldCI6dHJ1ZX0=",
+      "scope": "remote"
+    },
+    {
+      "frame": "record",
+      "type": "output",
+      "critical": false,
+      "sink": "postgres:balances",
+      "data": "YWxpY2U9MTA=",
+      "scope": "remote"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

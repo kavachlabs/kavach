@@ -1,0 +1,9 @@
+{"comment":"Outputs are reported in order with their sink and scope."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJlbWl0Iiwic2luayI6InBvc3RncmVzOmJhbGFuY2VzIiwiZGF0YSI6ImFsaWNlPTEwIn0seyJvcCI6ImVtaXQiLCJzaW5rIjoia2Fma2E6b3V0IiwiZGF0YSI6IiJ9XQ=="}}
+{"expect":{"t":"emit","sink":"postgres:balances","data":"YWxpY2U9MTA=","scope":"remote"}}
+{"expect":{"t":"emit","sink":"kafka:out","data":"","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

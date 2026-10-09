@@ -9,3 +9,5 @@ coverage.*
 /fixtures/
 /ledger-old
 /ledger-new
+.claude/
+__pycache__/

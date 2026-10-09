@@ -1,0 +1,63 @@
+{
+  "description": "An error is recorded as a marker with its exact message.",
+  "open": {
+    "service": "conformance",
+    "start": "genesis",
+    "snapshots": false
+  },
+  "actions": [
+    {
+      "step": {
+        "source": "test",
+        "position": "0",
+        "data": "W3sib3AiOiJlcnJvciIsIm1lc3NhZ2UiOiJhbW91bnQgaXMgbnVsbCJ9XQ==",
+        "ops": [
+          {
+            "op": "error",
+            "message": "amount is null"
+          }
+        ]
+      },
+      "answers": {}
+    }
+  ],
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis",
+        "snapshots": false
+      }
+    },
+    {
+      "frame": "facts",
+      "facts": {
+        "host.runtime": "*"
+      }
+    },
+    {
+      "frame": "record",
+      "type": "input",
+      "critical": false,
+      "source": "test",
+      "position": "0",
+      "data": "W3sib3AiOiJlcnJvciIsIm1lc3NhZ2UiOiJhbW91bnQgaXMgbnVsbCJ9XQ=="
+    },
+    {
+      "frame": "record",
+      "type": "marker",
+      "critical": false,
+      "kind": "error",
+      "message": "amount is null",
+      "data": "*"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

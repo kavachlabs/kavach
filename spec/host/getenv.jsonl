@@ -1,0 +1,10 @@
+{"comment":"The host runs with the environment variables it is started with (\u00a79.1)."}
+{"env":{"KAVACH_CONF_VAR":"prod-value"}}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJnZXRlbnYiLCJuYW1lIjoiS0FWQUNIX0NPTkZfVkFSIn0seyJvcCI6ImdldGVudiIsIm5hbWUiOiJLQVZBQ0hfQ09ORl9NSVNTSU5HIn1d"}}
+{"expect":{"t":"emit","sink":"trace","data":"cHJvZC12YWx1ZQ==","scope":"remote"}}
+{"expect":{"t":"emit","sink":"trace","data":"eyJ1bnNldCI6dHJ1ZX0=","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

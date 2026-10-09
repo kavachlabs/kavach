@@ -1,0 +1,10 @@
+{"comment":"Emitted JSON escapes only quote, backslash and control characters."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJnYXRld2F5IiwiZ2F0ZXdheSI6ImciLCJyZXF1ZXN0IjoiciJ9XQ=="}}
+{"expect":{"t":"gateway","gateway":"g","request":"cg==","scope":"remote"}}
+{"send":{"t":"gateway","error":"a \"q\" \\ <b>&amp; caf\u00e9\nl\tt\r\u0001"}}
+{"expect":{"t":"emit","sink":"trace","data":"eyJlcnJvciI6ImEgXCJxXCIgXFwgPGI+JmFtcDsgY2Fmw6lcbmxcdHRcclx1MDAwMSJ9","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

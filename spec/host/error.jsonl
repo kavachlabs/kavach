@@ -1,0 +1,7 @@
+{"comment":"An error ends the step with its exact message."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJlcnJvciIsIm1lc3NhZ2UiOiJhbW91bnQgaXMgbnVsbCJ9XQ=="}}
+{"expect":{"t":"done","outcome":"error","message":"amount is null"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}

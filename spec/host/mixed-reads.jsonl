@@ -1,0 +1,19 @@
+{"comment":"Reads of every kind are requested in program order."}
+{"send":{"t":"hello","protocol":1,"service":"conformance","start":"genesis","mode":"process"}}
+{"expect":{"t":"ready","protocol":1,"invariants":["below_limit"]}}
+{"send":{"t":"step","seq":"0","source":"test","position":"0","data":"W3sib3AiOiJjb25maWciLCJrZXkiOiJmbGFnLmJldGEifSx7Im9wIjoiY2xvY2sifSx7Im9wIjoiZ2F0ZXdheSIsImdhdGV3YXkiOiJhY2NvdW50cyIsInJlcXVlc3QiOiJhbGljZSJ9LHsib3AiOiJyYW5kIiwibiI6Mn1d"}}
+{"expect":{"t":"config","key":"flag.beta"}}
+{"send":{"t":"config","present":true,"value":"b2Zm"}}
+{"expect":{"t":"emit","sink":"trace","data":"b2Zm","scope":"remote"}}
+{"expect":{"t":"clock"}}
+{"send":{"t":"clock","unix_nanos":"1759752000000000000"}}
+{"expect":{"t":"emit","sink":"trace","data":"eyJjbG9jayI6IjE3NTk3NTIwMDAwMDAwMDAwMDAifQ==","scope":"remote"}}
+{"expect":{"t":"gateway","gateway":"accounts","request":"YWxpY2U=","scope":"remote"}}
+{"send":{"t":"gateway","response":"eyJiYWxhbmNlIjoxMH0="}}
+{"expect":{"t":"emit","sink":"trace","data":"eyJiYWxhbmNlIjoxMH0=","scope":"remote"}}
+{"expect":{"t":"rand","n":2}}
+{"send":{"t":"rand","data":"AAA="}}
+{"expect":{"t":"emit","sink":"trace","data":"AAA=","scope":"remote"}}
+{"expect":{"t":"done","outcome":"ok"}}
+{"send":{"t":"end"}}
+{"expect_exit":0}
