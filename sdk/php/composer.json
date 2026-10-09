@@ -1,0 +1,17 @@
+{
+    "name": "kavachlabs/kavach",
+    "description": "PHP SDK for Kavach: flight recorder and replay host for queue-consumer handlers.",
+    "type": "library",
+    "license": "Apache-2.0",
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Kavach\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    }
+}

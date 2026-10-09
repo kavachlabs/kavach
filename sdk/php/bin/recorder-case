@@ -1,0 +1,40 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Runs SDK recorder cases (spec/recorder/sdk/README.md) through this SDK and
+// the fake recorder.
+//
+//     bin/recorder-case [case.json ...]     # default: every case in $KAVACH_SPEC_DIR/recorder/sdk
+
+require __DIR__ . '/../src/autoload.php';
+
+use Kavach\Conformance\RecorderCase;
+use Kavach\Conformance\Spec;
+
+$cases = array_slice($argv, 1);
+if (!$cases) {
+    $cases = glob(Spec::dir() . '/recorder/sdk/*.json') ?: [];
+    sort($cases);
+}
+if (!$cases) {
+    fwrite(STDERR, "no recorder cases found in " . Spec::dir() . "\n");
+    exit(2);
+}
+$failed = 0;
+foreach ($cases as $path) {
+    try {
+        $result = RecorderCase::run($path);
+    } catch (Throwable $e) {
+        $result = ['pass' => false, 'error' => get_class($e) . ': ' . $e->getMessage()];
+    }
+    $ok = !empty($result['pass']);
+    echo ($ok ? 'PASS' : 'FAIL'), '  ', basename($path), "\n";
+    if (!$ok) {
+        $failed++;
+        echo '  ', str_replace("\n", "\n  ", (string) ($result['error'] ?? '')), "\n";
+    }
+}
+echo count($cases) - $failed, '/', count($cases), " recorder cases passed\n";
+exit($failed ? 1 : 0);
