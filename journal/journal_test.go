@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,14 +15,23 @@ import (
 
 var testMeta = Meta{Service: "test", Start: StartGenesis, Handler: "rev1", Producer: "kavach-go/test"}
 
+// genesisEnv is the environment record every journal starts with.
+func genesisEnv(seq uint64) Record {
+	return Record{Type: TypeEnvironment, Flags: FlagCritical, Seq: seq, Facts: []Fact{
+		{Key: "env.MODE", Form: FactValue, Value: []byte("test")},
+		{Key: "host.os", Form: FactValue, Value: []byte("linux")},
+	}}
+}
+
 func sampleRecords() []Record {
 	return []Record{
-		{Type: TypeInput, Seq: 0, Source: "kafka:wallet", Position: "3:1042", Data: []byte(`{"amount":10}`)},
-		{Type: TypeClock, Seq: 1, UnixNanos: -5},
-		{Type: TypeRand, Seq: 2, Data: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
-		{Type: TypeOutput, Seq: 3, Sink: "postgres:balances", Data: []byte("alice=10")},
-		{Type: TypeMarker, Seq: 4, Kind: MarkerPanic, Message: "boom", Data: []byte("stack")},
-		{Type: TypeInput, Seq: 5, Source: "s", Position: "", Data: nil},
+		genesisEnv(0),
+		{Type: TypeInput, Seq: 1, Source: "kafka:wallet", Position: "3:1042", Data: []byte(`{"amount":10}`)},
+		{Type: TypeClock, Seq: 2, UnixNanos: -5},
+		{Type: TypeRand, Seq: 3, Data: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
+		{Type: TypeOutput, Seq: 4, Sink: "postgres:balances", Data: []byte("alice=10"), Scope: ScopeLocal},
+		{Type: TypeMarker, Seq: 5, Kind: MarkerPanic, Message: "boom", Data: []byte("stack")},
+		{Type: TypeInput, Seq: 6, Source: "s", Position: "", Data: nil},
 	}
 }
 
@@ -52,7 +62,9 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.Header.Meta != testMeta || j.Header.Major != Major || j.Header.Minor != Minor {
+	wantMeta := testMeta
+	wantMeta.Compression = CompressionZstd
+	if !reflect.DeepEqual(j.Header.Meta, wantMeta) || j.Header.Major != Major || j.Header.Minor != Minor {
 		t.Fatalf("header = %+v", j.Header)
 	}
 	if j.Truncated {
@@ -68,30 +80,126 @@ func TestSnapshotStart(t *testing.T) {
 	meta.Start = StartSnapshot
 	recs := []Record{
 		{Type: TypeSnapshot, Flags: FlagCritical, Seq: 41, Data: []byte("state")},
-		{Type: TypeInput, Seq: 42, Source: "s", Data: []byte("x")},
+		genesisEnv(42),
+		{Type: TypeInput, Seq: 43, Source: "s", Data: []byte("x")},
 	}
 	j, err := Decode(bytes.NewReader(encode(t, meta, recs)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(j.Records) != 2 || j.Records[0].Seq != 41 || !j.Records[0].Critical() {
+	if len(j.Records) != 3 || j.Records[0].Seq != 41 || !j.Records[0].Critical() {
 		t.Fatalf("records = %+v", j.Records)
 	}
 }
 
 func TestTruncatedTail(t *testing.T) {
-	b := encode(t, testMeta, sampleRecords())
-	full, _ := Decode(bytes.NewReader(b))
-	for cut := 1; cut < 20; cut++ {
+	var buf bytes.Buffer
+	w, err := NewWriter(&buf, testMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := sampleRecords()
+	for i, r := range recs {
+		if err := w.Write(r); err != nil {
+			t.Fatal(err)
+		}
+		if i == 3 {
+			w.Flush()
+		}
+	}
+	w.Close()
+	b := buf.Bytes()
+	// The second block holds the last three records.
+	for cut := 1; cut < 40; cut++ {
 		j, err := Decode(bytes.NewReader(b[:len(b)-cut]))
 		if err != nil {
 			t.Fatalf("cut %d: %v", cut, err)
 		}
-		if !j.Truncated {
-			t.Fatalf("cut %d: not reported as truncated", cut)
+		if !j.Truncated || j.IgnoredBytes <= 0 {
+			t.Fatalf("cut %d: not reported as truncated (%d bytes ignored)", cut, j.IgnoredBytes)
 		}
-		if len(j.Records) != len(full.Records)-1 {
+		if len(j.Records) != 4 {
 			t.Fatalf("cut %d: got %d records", cut, len(j.Records))
+		}
+	}
+}
+
+func TestBlocksAndCompression(t *testing.T) {
+	for _, comp := range []string{CompressionZstd, CompressionNone} {
+		meta := testMeta
+		meta.Compression = comp
+		var buf bytes.Buffer
+		w, err := NewWriterOptions(&buf, meta, WriterOptions{BlockBytes: 64})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs := []Record{genesisEnv(0)}
+		for i := 1; i < 200; i++ {
+			recs = append(recs, Record{Type: TypeRand, Seq: uint64(i), Data: bytes.Repeat([]byte{byte(i)}, 40)})
+		}
+		for _, r := range recs {
+			if err := w.Write(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w.Close()
+		j, err := Decode(&buf)
+		if err != nil {
+			t.Fatalf("%s: %v", comp, err)
+		}
+		if !reflect.DeepEqual(j.Records, recs) {
+			t.Fatalf("%s: records differ", comp)
+		}
+	}
+}
+
+// TestLargeUncompressed writes a block that needs several raw zstd blocks.
+func TestLargeUncompressed(t *testing.T) {
+	meta := testMeta
+	meta.Compression = CompressionNone
+	recs := []Record{genesisEnv(0), {Type: TypeRand, Seq: 1, Data: bytes.Repeat([]byte("abc"), 200_000)}}
+	var buf bytes.Buffer
+	if err := Encode(&buf, meta, recs); err != nil {
+		t.Fatal(err)
+	}
+	j, err := Decode(&buf)
+	if err != nil || !reflect.DeepEqual(j.Records, recs) {
+		t.Fatalf("round trip: %v", err)
+	}
+}
+
+func TestXXH64(t *testing.T) {
+	// Known values of XXH64 with seed 0.
+	if got := xxh64(nil); got != 0xef46db3751d8e999 {
+		t.Fatalf("xxh64(\"\") = %x", got)
+	}
+	if got := xxh64([]byte("a")); got != 0xd24ec4f1a98c6e5b {
+		t.Fatalf("xxh64(a) = %x", got)
+	}
+}
+
+// TestZstdTool checks every encoding against the reference zstd tool, if installed.
+func TestZstdTool(t *testing.T) {
+	tool, err := exec.LookPath("zstd")
+	if err != nil {
+		t.Skip("zstd is not installed")
+	}
+	for _, comp := range []string{CompressionZstd, CompressionNone} {
+		meta := testMeta
+		meta.Compression = comp
+		recs := append(sampleRecords(), Record{Type: TypeRand, Seq: 7, Data: bytes.Repeat([]byte("xyz"), 100_000)})
+		var buf bytes.Buffer
+		w, _ := NewWriterOptions(&buf, meta, WriterOptions{BlockBytes: 1})
+		for _, r := range recs {
+			if err := w.Write(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w.Close()
+		path := filepath.Join(t.TempDir(), "j.kavach")
+		os.WriteFile(path, buf.Bytes(), 0o644)
+		if out, err := exec.Command(tool, "-t", path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: zstd -t: %v\n%s", comp, err, out)
 		}
 	}
 }
@@ -101,13 +209,18 @@ func TestWriterRejects(t *testing.T) {
 		meta Meta
 		recs []Record
 	}{
-		"gap":              {testMeta, []Record{{Type: TypeClock, Seq: 0}, {Type: TypeClock, Seq: 2}}},
-		"genesis nonzero":  {testMeta, []Record{{Type: TypeClock, Seq: 1}}},
+		"gap":              {testMeta, []Record{genesisEnv(0), {Type: TypeClock, Seq: 2}}},
+		"genesis nonzero":  {testMeta, []Record{genesisEnv(1)}},
+		"input before env": {testMeta, []Record{{Type: TypeInput, Seq: 0}}},
+		"env no critical":  {testMeta, []Record{{Type: TypeEnvironment, Seq: 0}}},
+		"gateway critical": {testMeta, []Record{genesisEnv(0), {Type: TypeGateway, Seq: 1}}},
+		"env repeats key":  {testMeta, []Record{{Type: TypeEnvironment, Flags: FlagCritical, Seq: 0, Facts: []Fact{{Key: "a"}, {Key: "a"}}}}},
+		"compression":      {Meta{Service: "s", Start: StartGenesis, Compression: "gzip"}, nil},
 		"genesis snapshot": {testMeta, []Record{{Type: TypeSnapshot, Seq: 0}}},
 		"late snapshot":    {Meta{Service: "s", Start: StartSnapshot}, []Record{{Type: TypeSnapshot, Seq: 3}, {Type: TypeSnapshot, Seq: 4}}},
 		"snapshot first":   {Meta{Service: "s", Start: StartSnapshot}, []Record{{Type: TypeInput, Seq: 3}}},
 		"type zero":        {testMeta, []Record{{Type: 0, Seq: 0}}},
-		"flags":            {testMeta, []Record{{Type: TypeClock, Flags: 2, Seq: 0}}},
+		"flags":            {testMeta, []Record{genesisEnv(0), {Type: TypeClock, Flags: 2, Seq: 1}}},
 		"no service":       {Meta{Start: StartGenesis}, nil},
 		"bad start":        {Meta{Service: "s", Start: "middle"}, nil},
 	}
@@ -148,7 +261,11 @@ func TestFileAppendReopenRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	env := genesisEnv(0)
+	if seq, err := jf.Append(env); err != nil || seq != 0 {
+		t.Fatalf("append env: seq %d err %v", seq, err)
+	}
+	for i := 1; i < 4; i++ {
 		seq, err := jf.Append(Record{Type: TypeInput, Source: "s", Data: []byte{byte(i)}})
 		if err != nil || seq != uint64(i) {
 			t.Fatalf("append %d: seq %d err %v", i, seq, err)
@@ -161,23 +278,23 @@ func TestFileAppendReopenRepair(t *testing.T) {
 		t.Fatal("append after close should fail")
 	}
 
-	// Simulate a crash mid-write: a partial frame at the end.
+	// Simulate a crash mid-write: a partial block at the end.
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	f.Write([]byte{40, 0, 0, 0, 1, 2})
+	f.Write([]byte{0x5b, 0x2a, 0x4d, 0x18, 24, 0, 0, 0, 1, 2})
 	f.Close()
 
 	jf, err = OpenFile(path, testMeta, FileOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seq, err := jf.Append(Record{Type: TypeClock, UnixNanos: 7}); err != nil || seq != 3 {
+	if seq, err := jf.Append(Record{Type: TypeClock, UnixNanos: 7}); err != nil || seq != 4 {
 		t.Fatalf("append after reopen: seq %d err %v", seq, err)
 	}
 	var seqs []uint64
 	if err := jf.Iterate(func(r Record) error { seqs = append(seqs, r.Seq); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(seqs, []uint64{0, 1, 2, 3}) {
+	if !reflect.DeepEqual(seqs, []uint64{0, 1, 2, 3, 4}) {
 		t.Fatalf("seqs = %v", seqs)
 	}
 	stop := errors.New("stop")
@@ -187,7 +304,7 @@ func TestFileAppendReopenRepair(t *testing.T) {
 	jf.Close()
 
 	j, err := ReadFile(path)
-	if err != nil || j.Truncated || len(j.Records) != 4 {
+	if err != nil || j.Truncated || len(j.Records) != 5 {
 		t.Fatalf("ReadFile: %v truncated=%v n=%d", err, j.Truncated, len(j.Records))
 	}
 }
@@ -217,16 +334,14 @@ func TestReaderErrorsMentionCause(t *testing.T) {
 	b := encode(t, testMeta, sampleRecords())
 	b[len(b)-1] ^= 0xff
 	_, err := Decode(bytes.NewReader(b))
-	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "checksum") {
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "does not decode") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// rawFrame builds a frame around an arbitrary body, for malformed-input tests.
-func rawFrame(body []byte) []byte {
-	out := binary.LittleEndian.AppendUint32(nil, uint32(len(body)))
-	out = append(out, body...)
-	return binary.LittleEndian.AppendUint32(out, checksum(body))
+// recordFrame builds a framed record around an arbitrary body, for malformed-input tests.
+func recordFrame(body []byte) []byte {
+	return append(binary.AppendUvarint(nil, uint64(len(body))), body...)
 }
 
 func rawBody(ty Type, flags uint8, seq uint64, payload []byte) []byte {

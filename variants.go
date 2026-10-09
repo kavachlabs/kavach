@@ -44,6 +44,18 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 		}
 		snap, recs = &recs[0], recs[1:]
 	}
+	// Variants keep the journal's genesis environment: a replay serves it, and a
+	// journal without one is invalid. They never change environment records.
+	var env *journal.Record
+	for i := range recs {
+		if recs[i].Type == journal.TypeEnvironment {
+			env = &recs[i]
+			break
+		}
+		if recs[i].Type == journal.TypeInput {
+			break
+		}
+	}
 	steps, err := splitSteps(recs)
 	if err != nil {
 		return nil, err
@@ -77,7 +89,7 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 		for _, c := range classes {
 			if i < len(c) && len(out) < MaxCandidates {
 				info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure}
-				out = append(out, buildVariant(j.Header.Meta, snap, c[i].steps, info))
+				out = append(out, buildVariant(j.Header.Meta, snap, env, c[i].steps, info))
 				added = true
 			}
 		}
@@ -89,13 +101,16 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 }
 
 func markerFailure(m journal.Record) string {
-	if m.Kind == journal.MarkerInvariant {
+	switch m.Kind {
+	case journal.MarkerInvariant:
 		return "invariant: " + m.Message
+	case journal.MarkerCrash:
+		return "crash" // SPEC.md §3.2: the whole failure string
 	}
 	return m.Kind + ": " + m.Message
 }
 
-func buildVariant(meta journal.Meta, snap *journal.Record, steps []vstep, info journal.Variant) *journal.Journal {
+func buildVariant(meta journal.Meta, snap, env *journal.Record, steps []vstep, info journal.Variant) *journal.Journal {
 	var recs []journal.Record
 	var seq uint64
 	add := func(r journal.Record) {
@@ -105,6 +120,9 @@ func buildVariant(meta journal.Meta, snap *journal.Record, steps []vstep, info j
 	}
 	if snap != nil {
 		add(*snap)
+	}
+	if env != nil {
+		add(*env)
 	}
 	for _, st := range steps {
 		if st.incident {
@@ -117,6 +135,7 @@ func buildVariant(meta journal.Meta, snap *journal.Record, steps []vstep, info j
 	}
 	meta.Producer = "kavach-go/" + Version
 	meta.Variant = &info
+	meta.Run, meta.Segment, meta.CutFrom = "", nil, nil
 	return &journal.Journal{Header: journal.Header{Major: journal.Major, Minor: journal.Minor, Meta: meta}, Records: recs}
 }
 

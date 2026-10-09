@@ -1,16 +1,29 @@
 {
   "major": 0,
-  "minor": 1,
+  "minor": 2,
   "meta": {
     "service": "conformance",
     "start": "genesis",
+    "compression": "zstd",
     "producer": "kavach-go/conformance"
   },
   "records": [
     {
-      "type": "clock",
+      "type": "environment",
+      "flags": 1,
       "seq": 0,
-      "unix_nanos": 1
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
     },
     {
       "type": "clock",

@@ -1,0 +1,14 @@
+{
+  "description": "The stream ends after open, before any record: nothing is written.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    }
+  ]
+}

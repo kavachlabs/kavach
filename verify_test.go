@@ -76,11 +76,11 @@ func TestVariantsOfPlainInputs(t *testing.T) {
 		muts = append(muts, info.Mutation)
 	}
 	for _, want := range []string{
-		"failing input (seq 12) moved 1 input earlier, before seq 8",
-		"failing input (seq 12) moved 3 inputs earlier, before seq 0",
-		"input seq 4 dropped",
+		"failing input (seq 13) moved 1 input earlier, before seq 9",
+		"failing input (seq 13) moved 3 inputs earlier, before seq 1",
+		"input seq 5 dropped",
 		"all 3 inputs before the failing one dropped",
-		"input seq 0 delivered twice",
+		"input seq 1 delivered twice",
 		"clock shifted by -5h30m",
 	} {
 		if !contains(muts, want) {
@@ -144,14 +144,14 @@ func TestVariantsOfJSONInput(t *testing.T) {
 		got[info.Mutation] = string(recordAt(t, v, info.Incident).Data)
 	}
 	for mut, data := range map[string]string{
-		`failing input (seq 4): "id" "c" → "a"`:      `{"id":"a","n":3,"ok":false,"amount":null}`,
-		`failing input (seq 4): "id" "c" → "c-1"`:    `{"id":"c-1","n":3,"ok":false,"amount":null}`,
-		`failing input (seq 4): "n" 3 → 4`:           `{"id":"c","n":4,"ok":false,"amount":null}`,
-		`failing input (seq 4): "n" 3 → -3`:          `{"id":"c","n":-3,"ok":false,"amount":null}`,
-		`failing input (seq 4): "ok" false → true`:   `{"id":"c","n":3,"ok":true,"amount":null}`,
-		`failing input (seq 4): "amount" null → 2.5`: `{"id":"c","n":3,"ok":false,"amount":2.5}`,
-		`failing input (seq 4): "amount" removed`:    `{"id":"c","n":3,"ok":false}`,
-		`failing input (seq 4): "tag": "t" added`:    `{"id":"c","n":3,"ok":false,"amount":null,"tag":"t"}`,
+		`failing input (seq 5): "id" "c" → "a"`:      `{"id":"a","n":3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "id" "c" → "c-1"`:    `{"id":"c-1","n":3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "n" 3 → 4`:           `{"id":"c","n":4,"ok":false,"amount":null}`,
+		`failing input (seq 5): "n" 3 → -3`:          `{"id":"c","n":-3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "ok" false → true`:   `{"id":"c","n":3,"ok":true,"amount":null}`,
+		`failing input (seq 5): "amount" null → 2.5`: `{"id":"c","n":3,"ok":false,"amount":2.5}`,
+		`failing input (seq 5): "amount" removed`:    `{"id":"c","n":3,"ok":false}`,
+		`failing input (seq 5): "tag": "t" added`:    `{"id":"c","n":3,"ok":false,"amount":null,"tag":"t"}`,
 	} {
 		if got[mut] != data {
 			t.Errorf("variant %q: got %q, want %q", mut, got[mut], data)
@@ -164,7 +164,7 @@ func TestVerifyFixed(t *testing.T) {
 	if v.String() != "fixed" || !v.Passed() || v.Candidates != 14 || v.Reproducing != 14 || v.Passing != 14 {
 		t.Fatalf("got %s: %d candidates, %d reproduce, %d pass; %s", v, v.Candidates, v.Reproducing, v.Passing, v.Detail)
 	}
-	if v.Old.String() != "still_failing@12" || v.New.String() != "fixed" {
+	if v.Old.String() != "still_failing@13" || v.New.String() != "fixed" {
 		t.Fatalf("old %s, new %s", v.Old, v.New)
 	}
 }
@@ -220,7 +220,7 @@ func TestVerifyUnverifiedAndDisabled(t *testing.T) {
 		t.Fatalf("got %s with %d candidates", v, v.Candidates)
 	}
 	v = verify(t, j, newWallet, kavach.VerifyOptions{})
-	if v.String() != "still_failing@12" || v.Candidates != 0 {
+	if v.String() != "still_failing@13" || v.Candidates != 0 {
 		t.Fatalf("got %s with %d candidates", v, v.Candidates)
 	}
 }

@@ -171,7 +171,7 @@ func cmdInspect(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("variant %d: %s · expected failure at seq %d: %s", v.ID, v.Mutation, v.Incident, v.Failure), ansiYellow))
 	}
 	if j.Truncated {
-		fmt.Fprintln(stdout, u.paint("warning: file ends inside a record; showing complete records only", ansiYellow))
+		fmt.Fprintln(stdout, u.paint(fmt.Sprintf("warning: file ends inside a block; ignored %d bytes, showing complete blocks only", j.IgnoredBytes), ansiYellow))
 	}
 	fmt.Fprintln(stdout)
 	limit := 96
@@ -198,7 +198,29 @@ func describeRecord(r journal.Record, limit int) string {
 	case journal.TypeRand:
 		return fmt.Sprintf("%d bytes  %x", len(r.Data), r.Data)
 	case journal.TypeOutput:
-		return fmt.Sprintf("%s  %s", r.Sink, showData(r.Data, limit))
+		s := fmt.Sprintf("%s  %s", r.Sink, showData(r.Data, limit))
+		if r.Scope == journal.ScopeLocal {
+			s += "  (local)"
+		}
+		return s
+	case journal.TypeGateway:
+		s := fmt.Sprintf("%s  %s -> ", r.Gateway, showData(r.Request, limit))
+		if r.Error != "" {
+			s += "error " + r.Error
+		} else {
+			s += showData(r.Response, limit)
+		}
+		if r.Scope == journal.ScopeLocal {
+			s += "  (local)"
+		}
+		return s
+	case journal.TypeConfig:
+		if !r.Present {
+			return fmt.Sprintf("%s  (not set)  from %s", r.Key, orDash(r.Source))
+		}
+		return fmt.Sprintf("%s = %s  from %s", r.Key, showData(r.Value, limit), orDash(r.Source))
+	case journal.TypeEnvironment:
+		return describeFacts(r.Facts, limit)
 	case journal.TypeMarker:
 		s := fmt.Sprintf("%s  %s", r.Kind, r.Message)
 		if len(r.Data) > 0 && limit < 0 {
@@ -211,6 +233,28 @@ func describeRecord(r journal.Record, limit int) string {
 		return fmt.Sprintf("%d bytes  %s", len(r.Data), showData(r.Data, limit))
 	}
 	return fmt.Sprintf("%d bytes", len(r.Data))
+}
+
+// describeFacts summarizes an environment record: a count, and with --full
+// (limit < 0) every fact, one per line.
+func describeFacts(facts []journal.Fact, limit int) string {
+	s := fmt.Sprintf("%d facts", len(facts))
+	if limit >= 0 {
+		return s + "  (--full to show)"
+	}
+	for _, f := range facts {
+		var v string
+		switch f.Form {
+		case journal.FactSHA256:
+			v = fmt.Sprintf("sha256:%x", f.Value)
+		case journal.FactUnset:
+			v = "(unset)"
+		default:
+			v = showData(f.Value, -1)
+		}
+		s += "\n" + indent(f.Key+" = "+v)
+	}
+	return s
 }
 
 func showData(b []byte, limit int) string {

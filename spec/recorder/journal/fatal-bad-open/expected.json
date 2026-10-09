@@ -1,0 +1,11 @@
+{
+  "exit": 1,
+  "control": [
+    {
+      "fatal": true,
+      "message": "open: unsupported protocol 2, want 1",
+      "t": "error"
+    }
+  ],
+  "files": {}
+}

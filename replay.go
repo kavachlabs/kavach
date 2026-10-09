@@ -127,6 +127,13 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 		}
 		recs = recs[1:]
 	}
+	// Gateway and config records are reads, which this replayer cannot serve.
+	// Environment records are not reads; splitSteps skips them.
+	for _, r := range recs {
+		if r.Type == journal.TypeGateway || r.Type == journal.TypeConfig {
+			return nil, fmt.Errorf("kavach: the journal holds a %s record at seq %d; replaying %s records is not supported yet", r.Type, r.Seq, r.Type)
+		}
+	}
 	if len(recs) > 0 && recs[0].Type == journal.TypeSnapshot {
 		return nil, errors.New("kavach: genesis journal contains a snapshot record")
 	}
@@ -222,7 +229,7 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 }
 
 func isFailure(kind string) bool {
-	return kind == journal.MarkerPanic || kind == journal.MarkerError || kind == journal.MarkerInvariant
+	return kind == journal.MarkerPanic || kind == journal.MarkerError || kind == journal.MarkerInvariant || kind == journal.MarkerCrash
 }
 
 func diffOutputs(want, got []Output) string {

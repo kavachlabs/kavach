@@ -18,14 +18,32 @@ const (
 
 // Meta is the header metadata of a journal (SPEC.md §3.2).
 type Meta struct {
-	Service    string `json:"service"`
-	Start      string `json:"start"`
-	Handler    string `json:"handler,omitempty"`
-	Producer   string `json:"producer,omitempty"`
-	RecordedAt string `json:"recorded_at,omitempty"`
+	Service string `json:"service"`
+	Start   string `json:"start"`
+	// Compression is "zstd" or "none" (SPEC.md §3.3). Empty means "zstd" when
+	// writing.
+	Compression string `json:"compression"`
+	Handler     string `json:"handler,omitempty"`
+	Producer    string `json:"producer,omitempty"`
+	Recorder    string `json:"recorder,omitempty"`
+	RecordedAt  string `json:"recorded_at,omitempty"`
+	// Run identifies the process run that wrote the journal; the segments of a
+	// run share it and number themselves with Segment from 0.
+	Run     string `json:"run,omitempty"`
+	Segment *int   `json:"segment,omitempty"`
+	// CutFrom is set on a fixture cut from a longer journal (SPEC.md §3.6).
+	CutFrom *CutFrom `json:"cut_from,omitempty"`
 	// Variant is set on journals derived from a recorded one by perturbing it
 	// (SPEC.md §3.2). They are replayed leniently and carry no outputs.
 	Variant *Variant `json:"variant,omitempty"`
+}
+
+// CutFrom names the journal a fixture was cut from.
+type CutFrom struct {
+	Run      string `json:"run"`
+	Segment  int    `json:"segment"`
+	FirstSeq uint64 `json:"first_seq"`
+	LastSeq  uint64 `json:"last_seq"`
 }
 
 // Variant describes how a journal was derived from a recorded incident.
@@ -35,14 +53,21 @@ type Variant struct {
 	// Incident is the seq of the input on which the old build is expected to
 	// fail the way it failed in production.
 	Incident uint64 `json:"incident"`
-	// Failure is the recorded failure: "panic: <message>", "error: <message>"
-	// or "invariant: <name>".
+	// Failure is the recorded failure: "panic: <message>", "error: <message>",
+	// "invariant: <name>" or "crash".
 	Failure string `json:"failure"`
 }
 
 func (m Meta) validate() error {
 	if m.Service == "" {
 		return errors.New("header is missing \"service\"")
+	}
+	switch m.Compression {
+	case CompressionZstd, CompressionNone:
+	case "":
+		return errors.New("header is missing \"compression\"")
+	default:
+		return fmt.Errorf("unsupported compression %q", m.Compression)
 	}
 	switch m.Start {
 	case StartGenesis, StartSnapshot:
@@ -67,143 +92,274 @@ func corrupt(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrCorrupt, fmt.Sprintf(format, args...))
 }
 
-// Writer writes a journal to an io.Writer.
-type Writer struct {
-	w       io.Writer
-	start   string
-	next    uint64
-	started bool
-	buf     []byte
-}
-
-// NewWriter writes the header for meta to w and returns a Writer for its records.
-func NewWriter(w io.Writer, meta Meta) (*Writer, error) {
-	if err := meta.validate(); err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
-	}
+// appendHeader appends the header frame for meta to dst.
+func appendHeader(dst []byte, meta Meta) ([]byte, error) {
 	m, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err
 	}
-	hdr := append([]byte(nil), Magic[:]...)
-	hdr = binary.LittleEndian.AppendUint16(hdr, Major)
-	hdr = binary.LittleEndian.AppendUint16(hdr, Minor)
-	hdr = binary.LittleEndian.AppendUint32(hdr, uint32(len(m)))
-	hdr = append(hdr, m...)
-	hdr = binary.LittleEndian.AppendUint32(hdr, checksum(hdr[len(Magic):]))
-	if _, err := w.Write(hdr); err != nil {
-		return nil, err
+	if len(m) > MaxMetaLen {
+		return nil, fmt.Errorf("journal: header metadata is %d bytes, limit is %d", len(m), MaxMetaLen)
 	}
-	return &Writer{w: w, start: meta.Start}, nil
+	data := append([]byte(nil), Magic[:]...)
+	data = binary.LittleEndian.AppendUint16(data, Major)
+	data = binary.LittleEndian.AppendUint16(data, Minor)
+	data = binary.LittleEndian.AppendUint32(data, uint32(len(m)))
+	data = append(data, m...)
+	data = binary.LittleEndian.AppendUint32(data, checksum(data[len(Magic):]))
+	dst = binary.LittleEndian.AppendUint32(dst, magicHeaderFrame)
+	dst = binary.LittleEndian.AppendUint32(dst, uint32(len(data)))
+	return append(dst, data...), nil
 }
 
-// Write appends one record. Sequence numbers must be contiguous, a genesis journal
-// must start at 0, and a snapshot journal must start with a snapshot record.
-func (w *Writer) Write(r Record) error {
-	if err := checkOrder(w.started, w.next, w.start, r); err != nil {
-		return fmt.Errorf("journal: %w", err)
-	}
-	var err error
-	w.buf, err = AppendFrame(w.buf[:0], r)
-	if err != nil {
-		return err
-	}
-	if _, err := w.w.Write(w.buf); err != nil {
-		return err
-	}
-	w.started = true
-	w.next = r.Seq + 1
-	return nil
+// order checks the order of records (SPEC.md §3.4, §5) and carries what it
+// needs between records.
+type order struct {
+	start   string
+	next    uint64
+	started bool
+	sawEnv  bool
 }
 
-func checkOrder(started bool, next uint64, start string, r Record) error {
-	if started {
-		if r.Seq != next {
-			return fmt.Errorf("sequence gap: expected seq %d, got %d", next, r.Seq)
+func (o *order) check(r Record) error {
+	if o.started {
+		if r.Seq != o.next {
+			return fmt.Errorf("sequence gap: expected seq %d, got %d", o.next, r.Seq)
 		}
 		if r.Type == TypeSnapshot {
 			return fmt.Errorf("snapshot record at seq %d is not the first record", r.Seq)
 		}
-		return nil
+	} else {
+		switch o.start {
+		case StartGenesis:
+			if r.Seq != 0 {
+				return fmt.Errorf("genesis journal must start at seq 0, got %d", r.Seq)
+			}
+			if r.Type == TypeSnapshot {
+				return errors.New("genesis journal must not contain a snapshot record")
+			}
+		case StartSnapshot:
+			if r.Type != TypeSnapshot {
+				return fmt.Errorf("snapshot journal must start with a snapshot record, got %s", r.Type)
+			}
+		}
 	}
-	switch start {
-	case StartGenesis:
-		if r.Seq != 0 {
-			return fmt.Errorf("genesis journal must start at seq 0, got %d", r.Seq)
+	switch r.Type {
+	case TypeGateway, TypeEnvironment, TypeConfig:
+		if !r.Critical() {
+			return fmt.Errorf("%s record at seq %d lacks the critical flag", r.Type, r.Seq)
 		}
-		if r.Type == TypeSnapshot {
-			return errors.New("genesis journal must not contain a snapshot record")
+	case TypeInput:
+		if !o.sawEnv {
+			return fmt.Errorf("input at seq %d comes before the genesis environment", r.Seq)
 		}
-	case StartSnapshot:
-		if r.Type != TypeSnapshot {
-			return fmt.Errorf("snapshot journal must start with a snapshot record, got %s", r.Type)
+	}
+	if r.Type == TypeEnvironment {
+		seen := make(map[string]bool, len(r.Facts))
+		for _, f := range r.Facts {
+			if seen[f.Key] || f.Form > FactUnset {
+				return fmt.Errorf("environment at seq %d has a repeated key or unknown form at %q", r.Seq, f.Key)
+			}
+			seen[f.Key] = true
 		}
+		o.sawEnv = true
+	}
+	o.started = true
+	o.next = r.Seq + 1
+	return nil
+}
+
+// WriterOptions tune how a Writer encodes blocks.
+type WriterOptions struct {
+	// Level is the zstd compression level. Defaults to DefaultLevel.
+	Level int
+	// BlockBytes is the raw size at which a block is closed. Defaults to
+	// DefaultBlockSz.
+	BlockBytes int
+}
+
+// Writer writes a journal to an io.Writer. Records are gathered into a block,
+// which is written when it reaches the target size, on Flush and on Close.
+type Writer struct {
+	w     io.Writer
+	meta  Meta
+	opts  WriterOptions
+	ord   order
+	raw   []byte // records of the open block
+	count int
+	first uint64
+	out   []byte
+}
+
+// NewWriter writes the header for meta to w and returns a Writer for its
+// records. An empty meta.Compression means zstd.
+func NewWriter(w io.Writer, meta Meta) (*Writer, error) {
+	return NewWriterOptions(w, meta, WriterOptions{})
+}
+
+// NewWriterOptions is NewWriter with options.
+func NewWriterOptions(w io.Writer, meta Meta, opts WriterOptions) (*Writer, error) {
+	if meta.Compression == "" {
+		meta.Compression = CompressionZstd
+	}
+	if err := meta.validate(); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if opts.Level == 0 {
+		opts.Level = DefaultLevel
+	}
+	if opts.BlockBytes <= 0 {
+		opts.BlockBytes = DefaultBlockSz
+	}
+	hdr, err := appendHeader(nil, meta)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(hdr); err != nil {
+		return nil, err
+	}
+	return newWriter(w, meta, opts, order{start: meta.Start}), nil
+}
+
+func newWriter(w io.Writer, meta Meta, opts WriterOptions, ord order) *Writer {
+	return &Writer{w: w, meta: meta, opts: opts, ord: ord}
+}
+
+// Write adds one record to the open block. Sequence numbers must be contiguous,
+// a genesis journal must start at 0, a snapshot journal must start with a
+// snapshot record and the first input must follow the genesis environment.
+func (w *Writer) Write(r Record) error {
+	if err := w.ord.check(r); err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	// check has advanced the order; a failed encode below leaves the writer
+	// unusable, which is fine for a writer that has seen an invalid record.
+	frame, err := AppendFrame(nil, r)
+	if err != nil {
+		return err
+	}
+	if w.count > 0 && len(w.raw)+len(frame) > MaxBlockLen {
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	if w.count == 0 {
+		w.first = r.Seq
+	}
+	w.raw = append(w.raw, frame...)
+	w.count++
+	if len(w.raw) >= w.opts.BlockBytes {
+		return w.Flush()
 	}
 	return nil
 }
 
+// Pending returns the number of records in the open block.
+func (w *Writer) Pending() int { return w.count }
+
+// Flush writes the open block, if any.
+func (w *Writer) Flush() error {
+	if w.count == 0 {
+		return nil
+	}
+	var err error
+	w.out, err = appendBlock(w.out[:0], w.first, w.count, w.raw, w.meta.Compression, w.opts.Level)
+	if err != nil {
+		return err
+	}
+	w.raw, w.count = w.raw[:0], 0
+	_, err = w.w.Write(w.out)
+	return err
+}
+
+// Close writes the open block. It does not close the underlying writer.
+func (w *Writer) Close() error { return w.Flush() }
+
 // Reader reads a journal from an io.Reader.
 type Reader struct {
-	r         *bufio.Reader
-	hdr       Header
-	nextSeq   uint64
-	started   bool
-	truncated bool
-	done      bool
-	body      []byte
+	r       *bufio.Reader
+	hdr     Header
+	ord     order
+	pos     int64 // bytes consumed from the stream
+	good    int64 // end of the last complete frame
+	queue   []Record
+	err     error
+	done    bool
+	ignored int64
+	body    []byte
+	dataBuf []byte
 }
 
 // NewReader reads and validates the journal header from r.
 func NewReader(r io.Reader) (*Reader, error) {
-	br := bufio.NewReader(r)
-	fixed := make([]byte, len(Magic)+8)
-	if _, err := io.ReadFull(br, fixed); err != nil {
+	jr := &Reader{r: bufio.NewReader(r)}
+	var fh [8]byte
+	if _, err := jr.readFull(fh[:]); err != nil {
 		return nil, corrupt("short header: %v", err)
 	}
-	if !bytes.Equal(fixed[:len(Magic)], Magic[:]) {
+	if binary.LittleEndian.Uint32(fh[:]) != magicHeaderFrame {
+		return nil, corrupt("not a Kavach journal (bad magic): file does not begin with a header frame")
+	}
+	dataLen := binary.LittleEndian.Uint32(fh[4:])
+	if dataLen < uint32(len(Magic)+8+4) || dataLen > MaxMetaLen+uint32(len(Magic)+8+4) {
+		return nil, corrupt("header frame is %d bytes", dataLen)
+	}
+	data := make([]byte, dataLen)
+	if _, err := jr.readFull(data); err != nil {
+		return nil, corrupt("short header: %v", err)
+	}
+	if !bytes.Equal(data[:len(Magic)], Magic[:]) {
 		return nil, corrupt("not a Kavach journal (bad magic)")
 	}
-	major := binary.LittleEndian.Uint16(fixed[8:])
-	minor := binary.LittleEndian.Uint16(fixed[10:])
-	metaLen := binary.LittleEndian.Uint32(fixed[12:])
-	if major != Major {
-		return nil, fmt.Errorf("journal: unsupported format version %d.%d", major, minor)
+	major := binary.LittleEndian.Uint16(data[8:])
+	minor := binary.LittleEndian.Uint16(data[10:])
+	metaLen := binary.LittleEndian.Uint32(data[12:])
+	if metaLen > MaxMetaLen || uint64(metaLen)+20 != uint64(dataLen) {
+		return nil, corrupt("header metadata is %d bytes in a frame of %d", metaLen, dataLen)
 	}
-	// Before 1.0, a minor newer than ours may have changed anything (SPEC.md §7).
-	if major == 0 && minor > Minor {
-		return nil, fmt.Errorf("journal: format version 0.%d is newer than supported 0.%d", minor, Minor)
-	}
-	if metaLen > MaxMetaLen {
-		return nil, corrupt("header metadata is %d bytes, limit is %d", metaLen, MaxMetaLen)
-	}
-	rest := make([]byte, int(metaLen)+4)
-	if _, err := io.ReadFull(br, rest); err != nil {
-		return nil, corrupt("short header: %v", err)
-	}
-	meta := rest[:metaLen]
-	want := binary.LittleEndian.Uint32(rest[metaLen:])
-	if got := checksum(append(fixed[len(Magic):], meta...)); got != want {
+	if got := checksum(data[len(Magic) : 16+metaLen]); got != binary.LittleEndian.Uint32(data[16+metaLen:]) {
 		return nil, corrupt("header checksum mismatch")
 	}
+	// Before 1.0, every minor version is its own format (SPEC.md §7).
+	if major != Major || minor != Minor {
+		return nil, fmt.Errorf("journal: unsupported format version %d.%d, this reader implements %d.%d", major, minor, Major, Minor)
+	}
 	var m Meta
-	if err := json.Unmarshal(meta, &m); err != nil {
+	if err := json.Unmarshal(data[16:16+metaLen], &m); err != nil {
 		return nil, corrupt("header metadata is not a JSON object: %v", err)
 	}
 	if err := m.validate(); err != nil {
 		return nil, corrupt("%v", err)
 	}
-	return &Reader{r: br, hdr: Header{Major: major, Minor: minor, Meta: m}}, nil
+	jr.hdr = Header{Major: major, Minor: minor, Meta: m}
+	jr.ord = order{start: m.Start}
+	jr.good = jr.pos
+	return jr, nil
+}
+
+func (r *Reader) readFull(p []byte) (int, error) {
+	n, err := io.ReadFull(r.r, p)
+	r.pos += int64(n)
+	return n, err
 }
 
 // Header returns the journal header.
 func (r *Reader) Header() Header { return r.hdr }
 
-// Truncated reports whether the journal ended inside a record. It is meaningful
+// Truncated reports whether the journal ended inside a block. It is meaningful
 // once Next has returned io.EOF.
-func (r *Reader) Truncated() bool { return r.truncated }
+func (r *Reader) Truncated() bool { return r.ignored > 0 }
+
+// IgnoredBytes is the number of bytes after the last complete block that were
+// ignored because the file ended inside one (SPEC.md §3.5).
+func (r *Reader) IgnoredBytes() int64 { return r.ignored }
+
+// Offset is the length of the file up to the end of the last complete frame
+// read so far.
+func (r *Reader) Offset() int64 { return r.good }
 
 // Next returns the next record. It returns io.EOF at the end of the journal,
-// including when the file ends inside a record (see Truncated). Records of an
+// including when the file ends inside a block (see Truncated). Records of an
 // unknown, non-critical type are skipped.
 func (r *Reader) Next() (Record, error) {
 	for {
@@ -222,62 +378,141 @@ func (r *Reader) Next() (Record, error) {
 }
 
 func (r *Reader) read() (Record, error) {
-	if r.done {
-		return Record{}, io.EOF
-	}
-	var lenBuf [4]byte
-	n, err := io.ReadFull(r.r, lenBuf[:])
-	if err != nil {
-		r.done = true
-		if n > 0 {
-			r.truncated = true
+	for len(r.queue) == 0 {
+		if r.err != nil {
+			return Record{}, r.err
 		}
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if r.done {
 			return Record{}, io.EOF
 		}
-		return Record{}, err
-	}
-	bodyLen := binary.LittleEndian.Uint32(lenBuf[:])
-	if bodyLen < minBodyLen || bodyLen > MaxBodyLen {
-		r.done = true
-		return Record{}, corrupt("record after seq %d has invalid length %d", r.nextSeq, bodyLen)
-	}
-	if cap(r.body) < int(bodyLen)+4 {
-		r.body = make([]byte, int(bodyLen)+4)
-	}
-	frame := r.body[:int(bodyLen)+4]
-	if _, err := io.ReadFull(r.r, frame); err != nil {
-		r.done = true
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			r.truncated = true
-			return Record{}, io.EOF
+		if err := r.nextBlock(); err != nil {
+			r.done, r.err = true, err
 		}
-		return Record{}, err
 	}
-	body := frame[:bodyLen]
-	if checksum(body) != binary.LittleEndian.Uint32(frame[bodyLen:]) {
-		r.done = true
-		return Record{}, corrupt("record checksum mismatch after seq %d", r.nextSeq)
-	}
-	rec, err := parseBody(body)
-	if err != nil {
-		r.done = true
-		return Record{}, corrupt("record at seq %d: %v", rec.Seq, err)
-	}
-	if err := checkOrder(r.started, r.nextSeq, r.hdr.Meta.Start, rec); err != nil {
-		r.done = true
-		return Record{}, corrupt("%v", err)
-	}
-	r.started = true
-	r.nextSeq = rec.Seq + 1
+	rec := r.queue[0]
+	r.queue = r.queue[1:]
 	return rec, nil
+}
+
+// cut records that the file ended inside a frame, n bytes after the last
+// complete one.
+func (r *Reader) cut() {
+	r.done = true
+	r.ignored = r.pos - r.good
+}
+
+// nextBlock reads frames up to and including the next block and queues its
+// records. At the end of the file it sets done.
+func (r *Reader) nextBlock() error {
+	for {
+		var fh [8]byte
+		n, err := r.readFull(fh[:])
+		if err == io.EOF {
+			r.done = true
+			return nil
+		}
+		if err != nil {
+			if n > 0 {
+				r.cut()
+				return nil
+			}
+			return err
+		}
+		magic, length := binary.LittleEndian.Uint32(fh[:]), binary.LittleEndian.Uint32(fh[4:])
+		switch {
+		case magic == magicBlockFrame:
+			return r.block(length)
+		case isSkippable(magic):
+			skipped, err := io.CopyN(io.Discard, r.r, int64(length))
+			r.pos += skipped
+			if err != nil {
+				r.cut()
+				return nil
+			}
+			r.good = r.pos
+		case magic == magicZstdFrame:
+			return corrupt("data frame without a block frame")
+		default:
+			return corrupt("unexpected frame with magic 0x%08x", magic)
+		}
+	}
+}
+
+func (r *Reader) block(length uint32) error {
+	if length != blockFrameLen {
+		return corrupt("block frame is %d bytes, want %d", length, blockFrameLen)
+	}
+	var bh [blockFrameLen]byte
+	if _, err := r.readFull(bh[:]); err != nil {
+		r.cut()
+		return nil
+	}
+	h, err := parseBlockHeader(bh[:])
+	if err != nil {
+		return err
+	}
+	if cap(r.dataBuf) < int(h.dataLen) {
+		r.dataBuf = make([]byte, h.dataLen)
+	}
+	frame := r.dataBuf[:h.dataLen]
+	if _, err := r.readFull(frame); err != nil {
+		r.cut()
+		return nil
+	}
+	raw, err := decompressFrame(frame, h.rawLen)
+	if err != nil {
+		return fmt.Errorf("%w (block at seq %d)", err, h.firstSeq)
+	}
+	recs, err := r.records(h, raw)
+	if err != nil {
+		return err
+	}
+	r.queue = recs
+	r.good = r.pos
+	return nil
+}
+
+// records decodes and checks the records of a block.
+func (r *Reader) records(h blockHeader, raw []byte) ([]Record, error) {
+	recs := make([]Record, 0, h.count)
+	for len(raw) > 0 {
+		n, k := binary.Uvarint(raw)
+		if k <= 0 {
+			return nil, corrupt("block at seq %d: invalid record length", h.firstSeq)
+		}
+		if n < minBodyLen || n > MaxBodyLen {
+			return nil, corrupt("block at seq %d: record has invalid length %d", h.firstSeq, n)
+		}
+		if n > uint64(len(raw)-k) {
+			return nil, corrupt("block at seq %d: record of %d bytes runs past the end of the block", h.firstSeq, n)
+		}
+		rec, err := parseBody(raw[k : k+int(n)])
+		if err != nil {
+			return nil, corrupt("record at seq %d: %v", rec.Seq, err)
+		}
+		raw = raw[k+int(n):]
+		if len(recs) == 0 && rec.Seq != h.firstSeq {
+			return nil, corrupt("block header says first_seq %d, its first record has seq %d", h.firstSeq, rec.Seq)
+		}
+		if err := r.ord.check(rec); err != nil {
+			return nil, corrupt("%v", err)
+		}
+		recs = append(recs, rec)
+	}
+	if len(recs) != int(h.count) {
+		return nil, corrupt("block at seq %d holds %d records, block header says %d", h.firstSeq, len(recs), h.count)
+	}
+	return recs, nil
 }
 
 // Journal is a fully decoded journal.
 type Journal struct {
-	Header    Header
-	Records   []Record
-	Truncated bool
+	Header  Header
+	Records []Record
+	// Truncated is set when the file ended inside a block; IgnoredBytes is how
+	// much of it was ignored (SPEC.md §3.5).
+	Truncated    bool
+	IgnoredBytes int64
 }
 
 // Decode reads an entire journal from r.
@@ -297,7 +532,7 @@ func Decode(r io.Reader) (*Journal, error) {
 		}
 		j.Records = append(j.Records, rec)
 	}
-	j.Truncated = jr.Truncated()
+	j.Truncated, j.IgnoredBytes = jr.Truncated(), jr.IgnoredBytes()
 	return j, nil
 }
 
@@ -312,5 +547,5 @@ func Encode(w io.Writer, meta Meta, records []Record) error {
 			return err
 		}
 	}
-	return nil
+	return jw.Close()
 }

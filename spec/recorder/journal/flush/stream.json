@@ -1,0 +1,79 @@
+{
+  "description": "flush frames close the open block; a durable one is answered.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "critical": false,
+      "data": "YQ==",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWE=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "durable": false,
+      "frame": "flush"
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "critical": false,
+      "data": "Yg==",
+      "frame": "record",
+      "position": "1",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWI=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

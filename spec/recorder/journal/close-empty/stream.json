@@ -1,0 +1,17 @@
+{
+  "description": "Closing before any record writes no journal.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

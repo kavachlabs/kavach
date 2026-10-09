@@ -1,0 +1,98 @@
+{
+  "description": "A fixture is cut from the segment that holds the failure, starting at its snapshot.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "segment_bytes": 1,
+        "service": "conformance",
+        "snapshots": true,
+        "start": "genesis"
+      }
+    },
+    {
+      "critical": false,
+      "data": "YQ==",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWE=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "data": "czE=",
+      "frame": "snapshot"
+    },
+    {
+      "critical": false,
+      "data": "Yg==",
+      "frame": "record",
+      "position": "1",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWI=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "dHJhY2U=",
+      "frame": "record",
+      "kind": "panic",
+      "message": "late",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

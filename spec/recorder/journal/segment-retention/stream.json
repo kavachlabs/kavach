@@ -1,0 +1,132 @@
+{
+  "description": "Segments beyond retain_segments are deleted, oldest first; fixtures never are.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "retain_segments": 2,
+        "segment_bytes": 1,
+        "service": "conformance",
+        "snapshots": true,
+        "start": "genesis"
+      }
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "c3RhY2s=",
+      "frame": "record",
+      "kind": "panic",
+      "message": "boom",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "data": "czE=",
+      "frame": "snapshot"
+    },
+    {
+      "critical": false,
+      "data": "Yg==",
+      "frame": "record",
+      "position": "1",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWI=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "data": "czI=",
+      "frame": "snapshot"
+    },
+    {
+      "critical": false,
+      "data": "Yw==",
+      "frame": "record",
+      "position": "2",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWM=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "data": "czM=",
+      "frame": "snapshot"
+    },
+    {
+      "critical": false,
+      "data": "ZA==",
+      "frame": "record",
+      "position": "3",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWQ=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

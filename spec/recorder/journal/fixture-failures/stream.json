@@ -1,0 +1,142 @@
+{
+  "description": "A panic, an error and an invariant each write a fixture after their step_end.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "critical": false,
+      "data": "YQ==",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWE=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "Z29yb3V0aW5lIDEgW3J1bm5pbmdd",
+      "frame": "record",
+      "kind": "panic",
+      "message": "nil pointer",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "Yg==",
+      "frame": "record",
+      "position": "1",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWI=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "",
+      "frame": "record",
+      "kind": "error",
+      "message": "insufficient funds",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "YWxpY2U9LTU=",
+      "frame": "record",
+      "kind": "invariant",
+      "message": "balance_non_negative",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

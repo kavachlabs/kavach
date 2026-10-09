@@ -1,0 +1,11 @@
+{
+  "exit": 1,
+  "control": [
+    {
+      "fatal": true,
+      "message": "the first frame must be open, got step_end",
+      "t": "error"
+    }
+  ],
+  "files": {}
+}

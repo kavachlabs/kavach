@@ -1,0 +1,176 @@
+{
+  "exit": 0,
+  "control": [
+    {
+      "file": "conformance-test-run-000000.kavach",
+      "protocol": 1,
+      "recorder": "kavach-recorder/0.2.0",
+      "run": "test-run",
+      "t": "ready"
+    },
+    {
+      "t": "closed"
+    }
+  ],
+  "files": {
+    "conformance-test-run-000000.kavach": {
+      "major": 0,
+      "minor": 2,
+      "meta": {
+        "service": "conformance",
+        "start": "genesis",
+        "compression": "zstd",
+        "producer": "kavach-go/conformance",
+        "recorder": "kavach-recorder/0.2.0",
+        "recorded_at": "2026-01-01T00:00:00Z",
+        "run": "test-run",
+        "segment": 0
+      },
+      "records": [
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 0,
+          "facts": [
+            {
+              "key": "env.API_TOKEN",
+              "form": 1,
+              "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+            },
+            {
+              "key": "env.MAX_TRANSFER",
+              "form": 0,
+              "value": "MTAwMA=="
+            },
+            {
+              "key": "flag.a",
+              "form": 0,
+              "value": "MQ=="
+            },
+            {
+              "key": "host.arch",
+              "form": 0,
+              "value": "YW1kNjQ="
+            },
+            {
+              "key": "host.kernel",
+              "form": 0,
+              "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+            },
+            {
+              "key": "host.mount./dev/shm",
+              "form": 0,
+              "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+            },
+            {
+              "key": "host.os",
+              "form": 0,
+              "value": "bGludXg="
+            },
+            {
+              "key": "host.runtime",
+              "form": 0,
+              "value": "Z28xLjI0Ljc="
+            },
+            {
+              "key": "host.sessions.wfinfra",
+              "form": 0,
+              "value": "MQ=="
+            },
+            {
+              "key": "host.x.extra",
+              "form": 0,
+              "value": "dg=="
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 1,
+          "source": "test",
+          "position": "0",
+          "data": "YQ=="
+        },
+        {
+          "type": "clock",
+          "seq": 2,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 3,
+          "sink": "sink",
+          "data": "b3V0LWE=",
+          "scope": 0
+        },
+        {
+          "type": "input",
+          "seq": 4,
+          "source": "test",
+          "position": "1",
+          "data": "Yg=="
+        },
+        {
+          "type": "clock",
+          "seq": 5,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 6,
+          "sink": "sink",
+          "data": "b3V0LWI=",
+          "scope": 0
+        },
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 7,
+          "facts": [
+            {
+              "key": "flag.a",
+              "form": 0,
+              "value": "Mg=="
+            },
+            {
+              "key": "host.x.extra",
+              "form": 2
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 8,
+          "source": "test",
+          "position": "2",
+          "data": "Yw=="
+        },
+        {
+          "type": "clock",
+          "seq": 9,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 10,
+          "sink": "sink",
+          "data": "b3V0LWM=",
+          "scope": 0
+        },
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 11,
+          "facts": [
+            {
+              "key": "flag.a",
+              "form": 1,
+              "value": "1HNeOiZeFu7gP1lxi5tdAwGcB9i2xR+Q2jpmbuwTqzU="
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "zstd",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "kafka:wallet",
+      "position": "3:1042",
+      "data": "eyJhbW91bnQiOjEwfQ=="
+    },
+    {
+      "type": "clock",
+      "seq": 2,
+      "unix_nanos": -5
+    }
+  ],
+  "truncated": true
+}
