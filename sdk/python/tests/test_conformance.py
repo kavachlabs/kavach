@@ -1,7 +1,6 @@
 """Runs the shared contract: host transcripts and SDK recorder cases.
 
-The contract lives in `spec/`; set KAVACH_SPEC_DIR to point at it (the default
-is the main checkout this SDK was developed against).
+The contract lives in the repository's `spec/`; KAVACH_SPEC_DIR overrides it.
 """
 
 import os

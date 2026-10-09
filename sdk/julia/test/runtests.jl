@@ -4,7 +4,7 @@ using Kavach: Json, Wire, Failure, Host
 using Logging
 
 const PKG = dirname(@__DIR__)
-const SPEC = get(ENV, "KAVACH_SPEC_DIR", "/Users/koustav/code/kavach-labs/kavach/spec")
+const SPEC = get(ENV, "KAVACH_SPEC_DIR", normpath(joinpath(@__DIR__, "..", "..", "..", "spec")))
 const PYTHON = Sys.which("python3")
 
 include(joinpath(PKG, "conformance", "handler.jl"))

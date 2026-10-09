@@ -10,7 +10,7 @@ dune build && dune test
 
 `dune test` runs the unit tests, the 18 host transcripts and the 7 SDK recorder
 cases (needs `python3`). They read `$KAVACH_SPEC_DIR`, default
-`/Users/koustav/code/kavach-labs/kavach/spec`.
+the repository's `spec/`.
 
 ## A handler
 

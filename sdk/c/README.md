@@ -19,10 +19,10 @@ cmake -S sdk/c -B build && cmake --build build && ctest --test-dir build --outpu
 Compiled with `-Wall -Wextra -Wpedantic -Werror` (turn off with
 `-DKAVACH_WERROR=OFF`). `-DKAVACH_SANITIZE=ON` adds ASan and UBSan.
 
-The conformance tests read the contract from the main checkout; they never copy
+The conformance tests read the contract from the repository's `spec/`; they never copy
 it. Point them elsewhere with `-DKAVACH_SPEC_DIR=/path/to/spec` or the
 `KAVACH_SPEC_DIR` environment variable (default
-`/Users/koustav/code/kavach-labs/kavach/spec`). They need `python3`.
+the repository's `spec/`). They need `python3`.
 
 | Test | What it runs |
 | --- | --- |

@@ -29,7 +29,7 @@ Only `javac` and `jar` are used. `build.sh test` runs, in order:
    `conformance.ConformanceHost`.
 
 `KAVACH_SPEC_DIR` locates the repository's `spec/` directory (default
-`/Users/koustav/code/kavach-labs/kavach/spec`). Python 3 is needed for the
+the repository's `spec/`). Python 3 is needed for the
 fake recorder and `run.py`, nothing else. To run them by hand:
 
 ```bash

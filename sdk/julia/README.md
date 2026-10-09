@@ -105,7 +105,7 @@ started on a cold, never-precompiled depot would spend those 6 s on its first
 | Recorder cases (§10.6) | `julia --project=sdk/julia sdk/julia/conformance/recorder_case.jl` |
 
 `Pkg.test()` runs both. `KAVACH_SPEC_DIR` points at the spec directory
-(default `/Users/koustav/code/kavach-labs/kavach/spec`).
+(default the repository's `spec/`).
 
 ## Example
 

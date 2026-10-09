@@ -24,7 +24,7 @@ import System.Posix.Process (getProcessID)
 
 -- | @$KAVACH_SPEC_DIR@, else the repository's @spec@ directory.
 specDir :: IO FilePath
-specDir = maybe "/Users/koustav/code/kavach-labs/kavach/spec" id <$> lookupEnv "KAVACH_SPEC_DIR"
+specDir = maybe "../../spec" id <$> lookupEnv "KAVACH_SPEC_DIR" -- cabal runs tests from sdk/haskell
 
 die' :: String -> IO a
 die' = ioError . userError

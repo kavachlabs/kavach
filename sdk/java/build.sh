@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SPEC_DIR="${KAVACH_SPEC_DIR:-/Users/koustav/code/kavach-labs/kavach/spec}"
+SPEC_DIR="${KAVACH_SPEC_DIR:-$(cd ../.. && pwd)/spec}"
 export KAVACH_SPEC_DIR="$SPEC_DIR"
 OUT=build
 CLASSES=$OUT/classes

@@ -150,8 +150,8 @@ cd sdk/python
 python3 -m unittest                                 # unit tests + both conformance suites
 ```
 
-The contract lives in `spec/`. Until it is merged into this tree, point at it with
-`KAVACH_SPEC_DIR` (default: the main checkout):
+The contract lives in the repository's `spec/`; point elsewhere with
+`KAVACH_SPEC_DIR`:
 
 ```bash
 export KAVACH_SPEC_DIR=/path/to/kavach/spec

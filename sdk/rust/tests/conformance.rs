@@ -1,6 +1,6 @@
 //! Runs the spec's host transcripts and SDK recorder cases (SPEC.md sections
 //! 9.6 and 10.6) against the conformance programs. The spec is read from
-//! `KAVACH_SPEC_DIR` (default: the main checkout's `spec/`); python3 runs
+//! `KAVACH_SPEC_DIR` (default: the repository's `spec/`); python3 runs
 //! `spec/host/run.py` and the fake recorder.
 
 use std::path::PathBuf;

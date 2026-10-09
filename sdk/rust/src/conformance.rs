@@ -12,11 +12,11 @@ use crate::{
 };
 
 /// Where the spec's transcripts and recorder cases live: `KAVACH_SPEC_DIR`, or
-/// the main checkout's `spec/` directory.
+/// the repository's own `spec/` directory.
 pub fn spec_dir() -> PathBuf {
     std::env::var_os("KAVACH_SPEC_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/Users/koustav/code/kavach-labs/kavach/spec"))
+        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../spec")))
 }
 
 /// The limit at which the `below_limit` invariant fails.

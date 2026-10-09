@@ -190,7 +190,7 @@ sdk/php/bin/test          # unit tests, the recorder cases, the host transcripts
 ```
 
 The contract lives in `spec/`; point at it with `KAVACH_SPEC_DIR` (default: the
-repository's `spec/`, else the main checkout). `python3` is needed for the
+repository's `spec/`). `python3` is needed for the
 spec's own runner and fake recorder.
 
 ```bash

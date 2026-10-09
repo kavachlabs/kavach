@@ -1,15 +1,12 @@
 """Where the Kavach contract (`spec/`) lives.
 
-Set ``KAVACH_SPEC_DIR`` to the repository's ``spec`` directory. The default is
-the main checkout this SDK was developed against.
+``KAVACH_SPEC_DIR``, else the repository's own ``spec`` directory.
 """
 
 import os
 from pathlib import Path
 
-# SPEC: the conformance files live outside this worktree until they are merged;
-# after the merge, point KAVACH_SPEC_DIR at the repo's own spec/ (or change this).
-DEFAULT_SPEC_DIR = "/Users/koustav/code/kavach-labs/kavach/spec"
+DEFAULT_SPEC_DIR = Path(__file__).resolve().parents[4] / "spec"
 
 
 def spec_dir() -> Path:

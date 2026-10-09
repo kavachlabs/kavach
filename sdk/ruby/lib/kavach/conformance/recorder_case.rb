@@ -6,9 +6,9 @@ require_relative "../conformance"
 
 module Kavach
   module Conformance
-    # The spec directory: $KAVACH_SPEC_DIR, else the main checkout's.
+    # The spec directory: $KAVACH_SPEC_DIR, else the repository's own.
     def self.spec_dir
-      ENV.fetch("KAVACH_SPEC_DIR", "/Users/koustav/code/kavach-labs/kavach/spec")
+      ENV.fetch("KAVACH_SPEC_DIR", File.expand_path("../../../../../spec", __dir__))
     end
 
     # Serves one step's scripted answers, in order, per kind.

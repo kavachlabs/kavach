@@ -32,12 +32,12 @@ import java.util.stream.Stream;
  * Starts the SDK's {@link Recorder} for the conformance handler with the fake
  * recorder as its recorder command, performs the case's actions, closes it,
  * and reports the fake's verdict. Exit status 0 if every case passes.
- * {@code KAVACH_SPEC_DIR} (default: the main checkout's spec/) locates the fake.
+ * {@code KAVACH_SPEC_DIR} (default: the repository's spec/, relative to sdk/java) locates the fake.
  */
 public final class RecorderCase {
     private RecorderCase() {}
 
-    static final String DEFAULT_SPEC_DIR = "/Users/koustav/code/kavach-labs/kavach/spec";
+    static final String DEFAULT_SPEC_DIR = "../../spec";
 
     /** The spec directory: {@code $KAVACH_SPEC_DIR}, else the default. */
     public static Path specDir() {

@@ -145,7 +145,7 @@ bin/test                                  # unit tests + both conformance suites
 ```
 
 `bin/test` runs under `/opt/homebrew/opt/ruby/bin/ruby` (or `$RUBY`). It reads
-the spec from `$KAVACH_SPEC_DIR` (default `/Users/koustav/code/kavach-labs/kavach/spec`)
+the spec from `$KAVACH_SPEC_DIR` (default the repository's `spec/`)
 and needs `python3` for the transcript runner and the fake recorder. It also
 exercises the real recorder when `$KAVACH_RECORDER` is set.
 

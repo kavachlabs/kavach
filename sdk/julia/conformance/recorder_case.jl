@@ -7,7 +7,7 @@ using Base64
 isdefined(@__MODULE__, :KavachConformance) || include(joinpath(@__DIR__, "handler.jl"))
 using .KavachConformance
 
-spec_dir() = get(ENV, "KAVACH_SPEC_DIR", "/Users/koustav/code/kavach-labs/kavach/spec")
+spec_dir() = get(ENV, "KAVACH_SPEC_DIR", normpath(joinpath(@__DIR__, "..", "..", "..", "spec")))
 
 # Serves one step's scripted answers, in order, per kind.
 mutable struct Answers

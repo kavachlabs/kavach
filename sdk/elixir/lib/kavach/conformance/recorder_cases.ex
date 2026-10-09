@@ -6,7 +6,7 @@ defmodule Kavach.Conformance.RecorderCases do
   """
   alias Kavach.{Conformance, Input, Recorder}
 
-  def spec_dir, do: System.get_env("KAVACH_SPEC_DIR") || "/Users/koustav/code/kavach-labs/kavach/spec"
+  def spec_dir, do: System.get_env("KAVACH_SPEC_DIR") || Path.expand("../../../../../spec", __DIR__)
 
   def cases, do: Path.wildcard(Path.join(spec_dir(), "recorder/sdk/*.json")) |> Enum.sort()
 

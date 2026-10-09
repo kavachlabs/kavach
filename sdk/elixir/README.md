@@ -103,7 +103,7 @@ mix escript.build
 python3 ../../spec/host/run.py --host "$PWD/kavach_conformance"   # 18/18
 ```
 
-`KAVACH_SPEC_DIR` (default `/Users/koustav/code/kavach-labs/kavach/spec`)
+`KAVACH_SPEC_DIR` (default the repository's `spec/`)
 points at the shared `spec/` directory. The recorder cases need `python3`.
 `Kavach.Conformance.Handler` is the §9.6 handler; `Kavach.Conformance.Host`
 is the escript entry point; `Kavach.Conformance.RecorderCases` runs a

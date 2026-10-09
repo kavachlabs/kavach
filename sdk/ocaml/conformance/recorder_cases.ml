@@ -8,7 +8,15 @@ open Kavach
 let spec_dir =
   match Sys.getenv_opt "KAVACH_SPEC_DIR" with
   | Some d when d <> "" -> d
-  | _ -> "/Users/koustav/code/kavach-labs/kavach/spec"
+  | _ ->
+      (* dune runs this from inside _build, so look upward for the repository's spec/ *)
+      let rec up d =
+        let s = Filename.concat d "spec" in
+        if Sys.file_exists (Filename.concat s "recorder/sdk") then s
+        else if Filename.dirname d = d then failwith "no spec/ found: set KAVACH_SPEC_DIR"
+        else up (Filename.dirname d)
+      in
+      up (Sys.getcwd ())
 
 let read_file p = In_channel.with_open_bin p In_channel.input_all
 let get k j = match Json.member k j with Some v -> v | None -> failwith ("case: missing " ^ k)

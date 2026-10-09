@@ -20,7 +20,7 @@ option(KAVACH_BUILD_EXAMPLES "Build the examples" ON)
 if(DEFINED ENV{KAVACH_SPEC_DIR} AND NOT "$ENV{KAVACH_SPEC_DIR}" STREQUAL "")
   set(_spec_default "$ENV{KAVACH_SPEC_DIR}")
 else()
-  set(_spec_default "/Users/koustav/code/kavach-labs/kavach/spec")
+  get_filename_component(_spec_default "${CMAKE_CURRENT_SOURCE_DIR}/../../spec" ABSOLUTE)
 endif()
 set(KAVACH_SPEC_DIR "${_spec_default}" CACHE PATH "Directory holding host/ and recorder/sdk/ conformance files")
 
