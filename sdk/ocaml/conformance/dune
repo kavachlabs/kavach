@@ -1,0 +1,21 @@
+(executables
+ (names conformance_host recorder_cases)
+ (libraries kavach))
+
+; KAVACH_SPEC_DIR picks the spec directory; the default is the main checkout's.
+(rule
+ (alias runtest)
+ (deps
+  conformance_host.exe
+  (env_var KAVACH_SPEC_DIR))
+ (action
+  (run python3 %{env:KAVACH_SPEC_DIR=/Users/koustav/code/kavach-labs/kavach/spec}/host/run.py --host
+   ./conformance_host.exe)))
+
+(rule
+ (alias runtest)
+ (deps
+  recorder_cases.exe
+  (env_var KAVACH_SPEC_DIR))
+ (action
+  (run ./recorder_cases.exe)))
