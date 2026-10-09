@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kavachlabs/kavach/journal"
@@ -28,12 +29,12 @@ func safeName(s string) string { return unsafeName.ReplaceAllString(s, "_") }
 // countWriter counts the bytes written through it.
 type countWriter struct {
 	f *os.File
-	n int64
+	n atomic.Int64 // read by the loop while the block writer adds to it
 }
 
 func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.f.Write(p)
-	c.n += int64(n)
+	c.n.Add(int64(n))
 	return n, err
 }
 
@@ -75,7 +76,7 @@ func (r *recorder) newSegment(index int, start string) (*segment, error) {
 		return nil, err
 	}
 	s := &segment{path: path, f: f, cw: &countWriter{f: f}, meta: meta, index: index, started: time.Now()}
-	s.w, err = journal.NewWriterOptions(s.cw, meta, journal.WriterOptions{Level: r.open.Level, BlockBytes: r.open.BlockBytes})
+	s.w, err = journal.NewWriterOptions(s.cw, meta, journal.WriterOptions{Level: r.open.Level, BlockBytes: r.open.BlockBytes, Async: true})
 	if err != nil {
 		f.Close()
 		return nil, err
@@ -93,6 +94,9 @@ func (s *segment) sync() error {
 
 func (s *segment) close() error {
 	err := s.sync()
+	if cerr := s.w.Close(); err == nil {
+		err = cerr
+	}
 	if cerr := s.f.Close(); err == nil {
 		err = cerr
 	}

@@ -63,7 +63,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "kavach-recorder: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	cfg := recorder.Config{In: stdin, Out: stdout, Log: stderr, WatchInterval: *watch}
+	cfg := recorder.Config{In: stdin, Out: stdout, Log: stderr, WatchInterval: *watch, Ring: os.NewFile(3, "ring")}
 	if *testFacts != "" {
 		tf, err := loadTestFacts(*testFacts)
 		if err != nil {
