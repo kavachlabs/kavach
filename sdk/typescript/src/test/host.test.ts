@@ -147,6 +147,24 @@ test("an unsupported protocol version is a fatal", async () => {
   assert.equal(await d.exited, 1);
 });
 
+test("sandbox mode is a fatal", async () => {
+  const d = new Driver("throws");
+  d.send({ t: "hello", protocol: 1, service: "x", start: "genesis", mode: "sandbox" });
+  const m = await d.recv();
+  assert.deepEqual(m, { t: "fatal", message: "sandbox mode not supported" });
+  assert.equal(await d.exited, 1);
+});
+
+test("a live gateway answer is a fatal", async () => {
+  const d = new Driver("fanout");
+  await d.start();
+  d.step(0);
+  assert.equal((await d.recv()).t, "gateway");
+  d.send({ t: "gateway", live: true });
+  assert.equal((await d.recv()).t, "fatal");
+  assert.equal(await d.exited, 1);
+});
+
 test("a very large step message round-trips", async () => {
   const d = new Driver("throws");
   await d.start();

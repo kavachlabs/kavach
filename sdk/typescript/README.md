@@ -72,9 +72,10 @@ The same function is used when recording and when hosting a replay.
   therefore records `a` then `b` however the responses arrive. Order of reads
   and queries must not depend on timing.
 - In host mode `query()` does its request/answer exchange inside the call and
-  returns an already settled promise (except a `live` local query in a sandbox:
-  await it before making other reads).
+  returns an already settled promise.
 - Steps are serialized. The `input` frame is written before the handler runs.
+- Sandbox replay (SPEC §6.3) is not supported: a host answers a `sandbox`
+  `hello`, or a gateway answer carrying `live`, with `fatal`.
 - On a driver `abort` the SDK throws `KavachAbort` into the handler. If the
   handler swallows it, the host still reports `done` with outcome `aborted`.
 - In host mode, `console.log`/`info`/`debug` and `process.stdout.write` go to
@@ -82,8 +83,8 @@ The same function is used when recording and when hosting a replay.
 
 ## Conformance
 
-The contract lives in the spec directory, `KAVACH_SPEC_DIR` (default: the main
-checkout's `spec/`). Needs `python3`.
+The contract lives in the spec directory, `KAVACH_SPEC_DIR` (default: the
+repository's own `spec/`). Needs `python3`.
 
 ```bash
 python3 $KAVACH_SPEC_DIR/host/run.py --host "node $PWD/dist/conformance/host.js"
