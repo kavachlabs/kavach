@@ -760,6 +760,8 @@ impl Pipe {
                 if !self.bell() {
                     return false;
                 }
+                // TODO: a writer that outruns the recorder blocks the service here;
+                // handling that (drop and mark, SPEC.md section 3.6) is deferred.
                 while n == 0 {
                     if self.shared.dead.load(Ordering::SeqCst) {
                         self.stopped();

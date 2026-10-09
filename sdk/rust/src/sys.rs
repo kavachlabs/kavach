@@ -3,7 +3,11 @@
 
 use std::fs::File;
 use std::io::{self, Read};
+#[cfg(target_os = "linux")]
+use std::os::raw::{c_char, c_uint};
 use std::os::raw::{c_int, c_void};
+#[cfg(target_os = "linux")]
+use std::os::unix::io::FromRawFd;
 
 #[cfg(target_pointer_width = "64")]
 type Off = i64;
@@ -23,33 +27,79 @@ extern "C" {
         off: Off,
     ) -> *mut c_void;
     fn munmap(addr: *mut c_void, len: usize) -> c_int;
+    #[cfg(target_os = "linux")]
+    fn memfd_create(name: *const c_char, flags: c_uint) -> c_int;
 }
 
-/// Maps `len` bytes of `fd` shared and writable. The same constants on Linux
-/// and macOS.
-pub fn map_shared(fd: c_int, len: usize) -> io::Result<*mut u8> {
-    const PROT_READ_WRITE: c_int = 3;
-    const MAP_SHARED: c_int = 1;
-    // SAFETY: a null hint and a fresh mapping; the caller owns the result.
-    let p = unsafe {
-        mmap(
-            std::ptr::null_mut(),
-            len,
-            PROT_READ_WRITE,
-            MAP_SHARED,
-            fd,
-            0,
-        )
-    };
-    if p as isize == -1 {
+/// An anonymous memory file, so the ring has no name at all (SPEC.md section
+/// 10.7). Linux only; an error there means the caller falls back to a file.
+#[cfg(target_os = "linux")]
+pub fn memfd() -> io::Result<File> {
+    const MFD_CLOEXEC: c_uint = 1;
+    // SAFETY: the name is NUL-terminated; on success the descriptor is new and
+    // owned by the File.
+    let fd = unsafe { memfd_create(b"kavach-ring\0".as_ptr().cast(), MFD_CLOEXEC) };
+    if fd < 0 {
         Err(io::Error::last_os_error())
     } else {
-        Ok(p.cast())
+        Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
 
+/// Maps the first `header + cap` bytes of `fd` shared and writable, then the
+/// `cap` bytes at file offset `header` again right after them, inside one
+/// reserved region so nothing else can land between the two. The returned
+/// mapping is `header + 2 * cap` bytes. The same constants on Linux and macOS,
+/// except `MAP_ANON`.
+pub fn map_ring(fd: c_int, header: usize, cap: usize) -> io::Result<*mut u8> {
+    const PROT_NONE: c_int = 0;
+    const PROT_READ_WRITE: c_int = 3;
+    const MAP_SHARED: c_int = 1;
+    const MAP_PRIVATE: c_int = 2;
+    const MAP_FIXED: c_int = 0x10;
+    #[cfg(target_os = "linux")]
+    const MAP_ANON: c_int = 0x20;
+    #[cfg(not(target_os = "linux"))]
+    const MAP_ANON: c_int = 0x1000;
+    let len = header + cap;
+    // SAFETY: a null hint and a fresh reservation; the caller owns the result.
+    let base = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            len + cap,
+            PROT_NONE,
+            MAP_PRIVATE | MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    if base as isize == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    for (at, n, off) in [(0, len, 0), (len, cap, header)] {
+        // SAFETY: both ranges lie inside the reservation made above.
+        let p = unsafe {
+            mmap(
+                base.cast::<u8>().add(at).cast(),
+                n,
+                PROT_READ_WRITE,
+                MAP_SHARED | MAP_FIXED,
+                fd,
+                off as Off,
+            )
+        };
+        if p as isize == -1 {
+            let e = io::Error::last_os_error();
+            // SAFETY: the reservation is ours and unused.
+            unsafe { munmap(base, len + cap) };
+            return Err(e);
+        }
+    }
+    Ok(base.cast())
+}
+
 /// # Safety
-/// `p` and `len` must be a mapping returned by [`map_shared`], unused afterwards.
+/// `p` and `len` must be a mapping returned by [`map_ring`], unused afterwards.
 pub unsafe fn unmap(p: *mut u8, len: usize) {
     munmap(p.cast(), len);
 }
