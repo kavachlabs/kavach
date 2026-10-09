@@ -246,15 +246,15 @@ func newWriter(w io.Writer, meta Meta, opts WriterOptions, ord order) *Writer {
 	jw := &Writer{w: w, meta: meta, opts: opts, ord: ord}
 	if opts.Async {
 		jw.jobs, jw.free = make(chan blockJob, 1), make(chan []byte, 2)
-		go jw.run()
+		go jw.run(jw.jobs)
 	}
 	return jw
 }
 
 // run compresses and writes the blocks handed over, in order.
-func (w *Writer) run() {
+func (w *Writer) run(jobs <-chan blockJob) {
 	var out []byte
-	for j := range w.jobs {
+	for j := range jobs {
 		var err error
 		if w.asyncErr() == nil {
 			out, err = appendBlock(out[:0], j.first, j.count, j.raw, w.meta.Compression, w.opts.Level)
