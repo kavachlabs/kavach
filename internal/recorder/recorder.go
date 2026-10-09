@@ -151,7 +151,7 @@ func (r *recorder) loop() (code int) {
 				// Later frames come from the ring, if the open frame asks
 				// for one; standard input is then only a doorbell.
 				if o, err := recstream.ParseOpen(f.Payload); err == nil && o.Ring > 0 {
-					ring, err := r.mapRing(o.Ring)
+					ring, err := r.mapRing(o)
 					if err != nil {
 						send(item{err: err})
 						return
@@ -213,11 +213,20 @@ func (r *recorder) loop() (code int) {
 	}
 }
 
-func (r *recorder) mapRing(capacity int) (*recstream.Ring, error) {
+func (r *recorder) mapRing(o recstream.Open) (*recstream.Ring, error) {
+	if p := o.RingPath; p != "" {
+		f, err := os.OpenFile(p, os.O_RDWR, 0)
+		if err != nil {
+			return nil, fmt.Errorf("ring: %w", err)
+		}
+		defer f.Close()
+		os.Remove(p)
+		return recstream.OpenRing(f, o.Ring)
+	}
 	if r.cfg.Ring == nil {
 		return nil, errors.New("ring: the open frame asks for one but no file was passed")
 	}
-	return recstream.OpenRing(r.cfg.Ring, capacity)
+	return recstream.OpenRing(r.cfg.Ring, o.Ring)
 }
 
 // ringBell turns every byte on standard input into a wake-up, and its end into

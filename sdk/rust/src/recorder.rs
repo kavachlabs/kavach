@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::gateway::Gateways;
 use crate::json::{self, Value};
 use crate::panics::{self, Caught};
+use crate::ring::{self, Ring};
 use crate::sys;
 use crate::wire::*;
 use crate::{first_violation, Env, GatewayError, Handler, Input, Output, Scope};
@@ -95,7 +97,6 @@ impl Error for StepError {}
 #[derive(Default)]
 struct Ctl {
     ready: bool,
-    snapshot_requested: bool,
     durables: u64,
     closed: bool,
     fatal: Option<String>,
@@ -106,6 +107,8 @@ struct Shared {
     cv: Condvar,
     /// The recorder reported a fatal error or its output ended: stop recording.
     dead: AtomicBool,
+    /// Kept out of `ctl` so that each step checks it without taking the lock.
+    snapshot_requested: AtomicBool,
 }
 
 impl Shared {
@@ -140,6 +143,8 @@ pub struct RecorderBuilder {
     snapshots: Option<bool>,
     recover_panics: bool,
     capture_backtraces: bool,
+    no_ring: bool,
+    ring_bytes: usize,
     ready_timeout: Duration,
     close_timeout: Duration,
 }
@@ -171,6 +176,8 @@ impl RecorderBuilder {
             snapshots: None,
             recover_panics: false,
             capture_backtraces: false,
+            no_ring: false,
+            ring_bytes: ring::DEFAULT_CAPACITY,
             ready_timeout: Duration::from_secs(5),
             close_timeout: Duration::from_secs(10),
         }
@@ -341,6 +348,21 @@ impl RecorderBuilder {
         self
     }
 
+    /// Carry the record stream over the recorder's pipe instead of a
+    /// shared-memory ring (SPEC.md section 10.7). The ring is the default, and
+    /// the pipe is used where it cannot be set up.
+    pub fn no_ring(mut self, on: bool) -> Self {
+        self.no_ring = on;
+        self
+    }
+
+    /// The ring's capacity, a power of two of at least 64 KiB (default 8 MiB).
+    /// Another value is logged and the pipe is used.
+    pub fn ring_bytes(mut self, n: usize) -> Self {
+        self.ring_bytes = n;
+        self
+    }
+
     /// How long `build` waits for `ready` when `required(true)` (default 5 s).
     pub fn ready_timeout(mut self, d: Duration) -> Self {
         self.ready_timeout = d;
@@ -389,6 +411,7 @@ impl RecorderBuilder {
             ctl: Mutex::new(Ctl::default()),
             cv: Condvar::new(),
             dead: AtomicBool::new(false),
+            snapshot_requested: AtomicBool::new(false),
         });
 
         let argv = self.argv.clone().unwrap_or_else(|| {
@@ -397,7 +420,21 @@ impl RecorderBuilder {
         let mut child = None;
         let mut stdin = None;
         let mut thread = None;
-        match spawn(&argv) {
+        let ring = if self.no_ring {
+            None
+        } else {
+            match Ring::create(self.ring_bytes) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    log.say(&format!(
+                        "no shared-memory ring, recording over the pipe: {e}"
+                    ));
+                    None
+                }
+            }
+        };
+        let (ring, ring_file) = ring.unzip();
+        match spawn(&argv, ring_file.as_ref()) {
             Ok(mut c) => {
                 if let Some(s) = c.stdin.take() {
                     sys::grow_pipe(s.as_raw_fd(), 1 << 20);
@@ -421,14 +458,27 @@ impl RecorderBuilder {
             }
         }
 
+        drop(ring_file);
         let mut pipe = Pipe {
             stdin,
+            ring: None,
+            belled: false,
             log: log.clone(),
             shared: shared.clone(),
         };
 
         let mut buf = Vec::new();
-        put_frame(&mut buf, FRAME_OPEN, self.open_json(snapshots).as_bytes());
+        let ring_capacity = ring.as_ref().map(Ring::capacity);
+        put_frame(
+            &mut buf,
+            FRAME_OPEN,
+            self.open_json(snapshots, ring_capacity).as_bytes(),
+        );
+        // The open frame is the only one on standard input; every later frame
+        // goes into the ring (SPEC.md section 10.7).
+        pipe.write_stdin(&buf);
+        pipe.ring = ring;
+        buf.clear();
         let mut facts: Vec<(String, Vec<u8>)> =
             vec![("host.runtime".into(), crate::runtime().as_bytes().to_vec())];
         let mut flags = self.flags;
@@ -500,10 +550,12 @@ impl RecorderBuilder {
             child,
             thread,
             closed: false,
+            buf: Vec::new(),
+            scratch: Vec::new(),
         })
     }
 
-    fn open_json(&self, snapshots: bool) -> String {
+    fn open_json(&self, snapshots: bool, ring: Option<u64>) -> String {
         let mut o = vec![
             ("protocol", Value::int(1)),
             ("service", Value::str(&self.service)),
@@ -518,6 +570,9 @@ impl RecorderBuilder {
             ("producer", Value::str(crate::producer())),
             ("snapshots", Value::Bool(snapshots)),
         ];
+        if let Some(c) = ring {
+            o.push(("ring", Value::Num(c as f64)));
+        }
         if let Some(h) = &self.handler_id {
             o.push(("handler", Value::str(h)));
         }
@@ -549,19 +604,36 @@ impl RecorderBuilder {
     }
 }
 
-fn spawn(argv: &[String]) -> io::Result<Child> {
+fn spawn(argv: &[String], ring: Option<&std::fs::File>) -> io::Result<Child> {
     let (prog, args) = argv
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty recorder command"))?;
     // The environment is inherited unchanged: the recorder collects `env.` facts
     // from it (SPEC.md section 10.1).
-    Command::new(prog)
-        .args(args)
+    let mut cmd = Command::new(prog);
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
+        .stderr(Stdio::inherit());
+    if let Some(f) = ring {
+        let fd = f.as_raw_fd();
+        // SAFETY: the closure only calls dup2 and fcntl, which are async-signal-safe.
+        unsafe {
+            cmd.pre_exec(move || {
+                if fd == RING_FD {
+                    sys::keep_across_exec(fd);
+                    Ok(())
+                } else {
+                    sys::dup2_fd(fd, RING_FD)
+                }
+            });
+        }
+    }
+    cmd.spawn()
 }
+
+/// The descriptor the recorder finds the ring on (SPEC.md section 10.7).
+const RING_FD: i32 = 3;
 
 fn system_nanos() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -588,7 +660,7 @@ fn control_loop(out: std::process::ChildStdout, sh: &Shared, log: &LogFn) {
         };
         match msg.str_field("t") {
             Some("ready") => sh.lock().ready = true,
-            Some("snapshot_request") => sh.lock().snapshot_requested = true,
+            Some("snapshot_request") => sh.snapshot_requested.store(true, Ordering::Release),
             Some("durable") => sh.lock().durables += 1,
             Some("closed") => sh.lock().closed = true,
             Some("fixture") => {
@@ -627,25 +699,44 @@ fn control_loop(out: std::process::ChildStdout, sh: &Shared, log: &LogFn) {
     sh.cv.notify_all();
 }
 
-/// The write end of the record stream. A failed write ends recording.
+/// The write end of the record stream: the ring if there is one, else the
+/// recorder's standard input. A failed write ends recording.
 struct Pipe {
     stdin: Option<ChildStdin>,
+    ring: Option<Ring>,
+    /// The doorbell rang since the ring was last under half full.
+    belled: bool,
     log: LogFn,
     shared: Arc<Shared>,
 }
 
 impl Pipe {
     fn write(&mut self, buf: &[u8]) -> bool {
+        if self.stdin.is_none() {
+            return false;
+        }
+        if self.shared.dead.load(Ordering::SeqCst) {
+            self.stopped();
+            return false;
+        }
+        if self.ring.is_some() {
+            self.publish(buf)
+        } else {
+            self.write_stdin(buf)
+        }
+    }
+
+    fn stopped(&mut self) {
+        if !self.shared.lock().closed {
+            self.log.say("the recorder stopped; recording is off");
+        }
+        self.stdin = None;
+    }
+
+    fn write_stdin(&mut self, buf: &[u8]) -> bool {
         let Some(w) = self.stdin.as_mut() else {
             return false;
         };
-        if self.shared.dead.load(Ordering::SeqCst) {
-            if !self.shared.lock().closed {
-                self.log.say("the recorder stopped; recording is off");
-            }
-            self.stdin = None;
-            return false;
-        }
         match w.write_all(buf).and_then(|()| w.flush()) {
             Ok(()) => true,
             Err(e) => {
@@ -658,6 +749,47 @@ impl Pipe {
                 false
             }
         }
+    }
+
+    /// Publishes whole frames into the ring, waiting for the recorder to make
+    /// room when it is full (SPEC.md sections 10.1 and 10.7).
+    fn publish(&mut self, mut buf: &[u8]) -> bool {
+        while !buf.is_empty() {
+            let (mut n, mut used) = self.try_publish(buf);
+            if n == 0 {
+                if !self.bell() {
+                    return false;
+                }
+                while n == 0 {
+                    if self.shared.dead.load(Ordering::SeqCst) {
+                        self.stopped();
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_micros(20));
+                    (n, used) = self.try_publish(buf);
+                }
+            }
+            buf = &buf[n..];
+            let half = self.ring.as_ref().map_or(0, Ring::capacity) / 2;
+            if used > half && !self.belled {
+                self.belled = true;
+                if !self.bell() {
+                    return false;
+                }
+            } else if used <= half {
+                self.belled = false;
+            }
+        }
+        true
+    }
+
+    fn try_publish(&self, buf: &[u8]) -> (usize, u64) {
+        self.ring.as_ref().map_or((0, 0), |r| r.try_publish(buf))
+    }
+
+    /// Wakes a recorder that polls the ring: one byte on standard input.
+    fn bell(&mut self) -> bool {
+        self.ring.is_none() || self.write_stdin(&[1])
     }
 
     fn live(&self) -> bool {
@@ -678,7 +810,10 @@ struct Reads {
 struct RecEnv<'a> {
     reads: &'a mut Reads,
     buf: &'a mut Vec<u8>,
-    outs: &'a mut Vec<Output>,
+    /// Reused for encoding a record's fields.
+    scratch: &'a mut Vec<u8>,
+    /// Outputs are kept only when there is a `deliver` to hand them to.
+    outs: Option<&'a mut Vec<Output>>,
 }
 
 impl Env for RecEnv<'_> {
@@ -697,9 +832,9 @@ impl Env for RecEnv<'_> {
             (None, Some(u)) => u.fill(buf).expect("reading /dev/urandom"),
             (None, None) => unreachable!("a recorder always has a random source"),
         }
-        let mut f = Vec::with_capacity(buf.len() + 4);
-        put_bytes(&mut f, buf);
-        put_record(self.buf, REC_RAND, 0, &f);
+        self.scratch.clear();
+        put_bytes(self.scratch, buf);
+        put_record(self.buf, REC_RAND, 0, self.scratch);
     }
 
     fn query(&mut self, gateway: &str, request: &[u8]) -> Result<Vec<u8>, GatewayError> {
@@ -731,16 +866,18 @@ impl Env for RecEnv<'_> {
     }
 
     fn emit(&mut self, sink: &str, data: &[u8], scope: Scope) {
-        let mut f = Vec::new();
-        put_str(&mut f, sink);
-        put_bytes(&mut f, data);
-        f.push(scope.code());
-        put_record(self.buf, REC_OUTPUT, 0, &f);
-        self.outs.push(Output {
-            sink: sink.to_string(),
-            data: data.to_vec(),
-            scope,
-        });
+        self.scratch.clear();
+        put_str(self.scratch, sink);
+        put_bytes(self.scratch, data);
+        self.scratch.push(scope.code());
+        put_record(self.buf, REC_OUTPUT, 0, self.scratch);
+        if let Some(outs) = self.outs.as_deref_mut() {
+            outs.push(Output {
+                sink: sink.to_string(),
+                data: data.to_vec(),
+                scope,
+            });
+        }
     }
 }
 
@@ -768,6 +905,9 @@ pub struct Recorder {
     child: Option<Child>,
     thread: Option<JoinHandle<()>>,
     closed: bool,
+    /// Per-step scratch space, kept to avoid allocating on every step.
+    buf: Vec<u8>,
+    scratch: Vec<u8>,
 }
 
 impl Recorder {
@@ -801,24 +941,27 @@ impl Recorder {
     pub fn step(&mut self, input: &Input) -> Result<(), StepError> {
         self.answer_snapshot_request();
 
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut buf = std::mem::take(&mut self.buf);
         if self.pipe.live() {
-            let mut f = Vec::with_capacity(input.data.len() + 32);
-            put_str(&mut f, &input.source);
-            put_str(&mut f, &input.position);
-            put_bytes(&mut f, &input.data);
-            let mut frame = Vec::with_capacity(f.len() + 8);
-            put_record(&mut frame, REC_INPUT, 0, &f);
-            self.pipe.write(&frame);
+            scratch.clear();
+            put_str(&mut scratch, &input.source);
+            put_str(&mut scratch, &input.position);
+            put_bytes(&mut scratch, &input.data);
+            buf.clear();
+            put_record(&mut buf, REC_INPUT, 0, &scratch);
+            self.pipe.write(&buf);
         }
 
-        let mut buf = Vec::new();
+        buf.clear();
         let mut outs = Vec::new();
         let caught = {
             let handler = &mut self.handler;
             let mut env = RecEnv {
                 reads: &mut self.reads,
                 buf: &mut buf,
-                outs: &mut outs,
+                scratch: &mut scratch,
+                outs: self.deliver.is_some().then_some(&mut outs),
             };
             panics::catch(|| match handler.handle(&mut env, input) {
                 Ok(()) => Ok(first_violation(&**handler)),
@@ -853,6 +996,8 @@ impl Recorder {
         };
         put_frame(&mut buf, FRAME_STEP_END, &[]);
         self.pipe.write(&buf);
+        self.scratch = scratch;
+        self.buf = buf;
 
         if let Some(payload) = resume {
             std::panic::resume_unwind(payload);
@@ -869,7 +1014,10 @@ impl Recorder {
     /// Answers a pending `snapshot_request` at this step boundary (SPEC.md
     /// section 10.4).
     fn answer_snapshot_request(&mut self) {
-        let requested = std::mem::take(&mut self.shared.lock().snapshot_requested);
+        let requested = self
+            .shared
+            .snapshot_requested
+            .swap(false, Ordering::Acquire);
         if !requested || !self.pipe.live() {
             return;
         }
@@ -894,11 +1042,9 @@ impl Recorder {
     /// until the recorder says it is durable, and returns whether it did.
     pub fn flush(&mut self, durable: bool, timeout: Duration) -> bool {
         let before = self.shared.lock().durables;
-        if !self.pipe.write(&{
-            let mut f = Vec::new();
-            put_frame(&mut f, FRAME_FLUSH, &[u8::from(durable)]);
-            f
-        }) {
+        let mut f = Vec::new();
+        put_frame(&mut f, FRAME_FLUSH, &[u8::from(durable)]);
+        if !(self.pipe.write(&f) && self.pipe.bell()) {
             return false;
         }
         if !durable {
@@ -931,7 +1077,9 @@ impl Recorder {
         self.closed = true;
         let mut f = Vec::new();
         put_frame(&mut f, FRAME_CLOSE, &[]);
-        self.pipe.write(&f);
+        if self.pipe.write(&f) {
+            self.pipe.bell();
+        }
         let deadline = Instant::now() + self.close_timeout;
         let mut acked;
         {

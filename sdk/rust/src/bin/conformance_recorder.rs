@@ -1,6 +1,6 @@
 //! Runs one SDK recorder-conformance case (spec/recorder/sdk/README.md):
 //!
-//!     kavach-conformance-recorder <case.json> <result.json>
+//!     kavach-conformance-recorder [--pipe] <case.json> <result.json>
 //!
 //! Starts the SDK's recorder with the spec's fake recorder as its command,
 //! performs the case's actions against the conformance handler, closes the
@@ -55,7 +55,7 @@ fn load(a: &Value) -> Result<Answers, String> {
     Ok(out)
 }
 
-fn run(case_path: &str, result_path: &str) -> Result<(), String> {
+fn run(case_path: &str, result_path: &str, no_ring: bool) -> Result<(), String> {
     let case = json::parse(&std::fs::read_to_string(case_path).map_err(|e| e.to_string())?)?;
     let open = case.get("open").ok_or("case has no open")?;
     let answers = Rc::new(RefCell::new(Answers::default()));
@@ -69,6 +69,7 @@ fn run(case_path: &str, result_path: &str) -> Result<(), String> {
             result_path.to_string(),
         ])
         .required(true)
+        .no_ring(no_ring)
         .snapshots(
             open.get("snapshots")
                 .and_then(Value::as_bool)
@@ -167,12 +168,17 @@ fn run(case_path: &str, result_path: &str) -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    // The ring is the default transport; --pipe forces the pipe.
+    let no_ring = args.get(1).is_some_and(|a| a == "--pipe");
+    if no_ring {
+        args.remove(1);
+    }
     if args.len() != 3 {
-        eprintln!("usage: {} <case.json> <result.json>", args[0]);
+        eprintln!("usage: {} [--pipe] <case.json> <result.json>", args[0]);
         return ExitCode::from(2);
     }
-    match run(&args[1], &args[2]) {
+    match run(&args[1], &args[2], no_ring) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("FAIL {}: {e}", args[1]);

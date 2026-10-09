@@ -1,0 +1,22 @@
+name: bench
+
+# Measures recorder overhead on Linux (BENCHMARKS.md). Run it by hand, or by
+# pushing a branch under bench/.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['bench/**']
+
+jobs:
+  recorder-overhead:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: nproc && cat /proc/cpuinfo | grep -m1 'model name' || true
+      - run: go test -run '^$' -bench RecorderStep -benchtime 2s -count 5 ./replay

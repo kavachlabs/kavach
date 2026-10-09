@@ -9,8 +9,8 @@ extra-doc-files:    README.md
 common shared
   default-language: Haskell2010
   default-extensions: OverloadedStrings
-  ghc-options:      -Wall -Wno-name-shadowing
-  build-depends:    base >=4.17 && <5, bytestring, text
+  ghc-options:      -Wall -Wno-name-shadowing -O2
+  build-depends:    base >=4.17 && <5, bytestring, text >=2.0
 
 library
   import:           shared
@@ -23,6 +23,8 @@ library
                     Kavach.Host
                     Kavach.Internal
                     Kavach.Recorder
+                    Kavach.Ring
+  c-sources:        cbits/kavach_ring.c
   build-depends:    directory, process, stm, time, unix
 
 executable kavach-conformance-host
@@ -38,6 +40,19 @@ executable kavach-recorder-case
   other-modules:    RecorderCase
   build-depends:    kavach, containers, directory, unix
 
+executable kavach-kill-helper
+  import:           shared
+  hs-source-dirs:   conformance
+  main-is:          KillMain.hs
+  build-depends:    kavach, unix
+
+executable kavach-bench
+  import:           shared
+  hs-source-dirs:   bench
+  main-is:          Bench.hs
+  ghc-options:      -O2 -rtsopts
+  build-depends:    kavach, directory, time
+
 executable ledger
   import:           shared
   hs-source-dirs:   examples/ledger
@@ -51,4 +66,4 @@ test-suite spec
   main-is:          Spec.hs
   other-modules:    RecorderCase
   build-depends:    kavach, containers, directory, process, unix
-  build-tool-depends: kavach:kavach-conformance-host
+  build-tool-depends: kavach:kavach-conformance-host, kavach:kavach-kill-helper

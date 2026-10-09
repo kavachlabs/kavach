@@ -38,8 +38,10 @@ file(GLOB _cases ${_rec_dir}/*.json)
 foreach(case ${_cases})
   get_filename_component(name ${case} NAME_WE)
   foreach(lang c cpp)
-    add_test(NAME recorder-${lang}-${name}
-      COMMAND $<TARGET_FILE:kavach-recorder-runner-${lang}> ${case} ${_rec_dir}/fake_recorder.py
-              ${CMAKE_CURRENT_BINARY_DIR}/result-${lang}-${name}.json)
+    foreach(transport pipe ring)
+      add_test(NAME recorder-${lang}-${transport}-${name}
+        COMMAND $<TARGET_FILE:kavach-recorder-runner-${lang}> ${case} ${_rec_dir}/fake_recorder.py
+                ${CMAKE_CURRENT_BINARY_DIR}/result-${lang}-${transport}-${name}.json ${transport})
+    endforeach()
   endforeach()
 endforeach()

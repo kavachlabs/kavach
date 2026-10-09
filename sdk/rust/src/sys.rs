@@ -3,13 +3,64 @@
 
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_void};
+
+#[cfg(target_pointer_width = "64")]
+type Off = i64;
+#[cfg(not(target_pointer_width = "64"))]
+type Off = i32;
 
 extern "C" {
     fn dup(fd: c_int) -> c_int;
     fn dup2(src: c_int, dst: c_int) -> c_int;
-    #[cfg(target_os = "linux")]
     fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
+    fn mmap(
+        addr: *mut c_void,
+        len: usize,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        off: Off,
+    ) -> *mut c_void;
+    fn munmap(addr: *mut c_void, len: usize) -> c_int;
+}
+
+/// Maps `len` bytes of `fd` shared and writable. The same constants on Linux
+/// and macOS.
+pub fn map_shared(fd: c_int, len: usize) -> io::Result<*mut u8> {
+    const PROT_READ_WRITE: c_int = 3;
+    const MAP_SHARED: c_int = 1;
+    // SAFETY: a null hint and a fresh mapping; the caller owns the result.
+    let p = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            len,
+            PROT_READ_WRITE,
+            MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if p as isize == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(p.cast())
+    }
+}
+
+/// # Safety
+/// `p` and `len` must be a mapping returned by [`map_shared`], unused afterwards.
+pub unsafe fn unmap(p: *mut u8, len: usize) {
+    munmap(p.cast(), len);
+}
+
+/// Clears close-on-exec on `fd`. Safe between fork and exec.
+pub fn keep_across_exec(fd: c_int) {
+    const F_SETFD: c_int = 2;
+    // SAFETY: F_SETFD takes an int argument and touches no memory.
+    unsafe {
+        fcntl(fd, F_SETFD, 0);
+    }
 }
 
 /// Duplicates `fd`.

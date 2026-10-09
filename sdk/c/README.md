@@ -33,7 +33,8 @@ the repository's `spec/`). They need `python3`.
 | Test | What it runs |
 | --- | --- |
 | `host-c`, `host-cpp` | `spec/host/run.py` against `kavach-conformance-host-c` / `-cpp` (every transcript) |
-| `recorder-{c,cpp}-<case>` | each `spec/recorder/sdk/*.json` through `kavach-recorder-runner-c` / `-cpp`, with `fake_recorder.py` |
+| `recorder-{c,cpp}-{pipe,ring}-<case>` | each `spec/recorder/sdk/*.json` through `kavach-recorder-runner-c` / `-cpp`, with `fake_recorder.py`, over the pipe and over the ring |
+| `ring` | the real `kavach-recorder` (built with `go`): a process SIGKILLed after its input is published leaves a `crash` fixture, frames larger than the ring, a recorder that stops reading |
 | `api`, `cpp-wrapper` | failure mapping, delivery, recorder failure handling, SIGPIPE, without a recorder |
 | `ledger-*` | the example below |
 
@@ -138,6 +139,19 @@ recording stops, and **no step ever fails because of it**; `required = 1` makes
 raise `SIGPIPE`: `F_SETNOSIGPIPE` where it exists, otherwise `SIGPIPE` is
 blocked in the writing thread around the write and a pending one is consumed.
 On Linux the pipe is enlarged with `F_SETPIPE_SZ` (1 MiB).
+
+### Transport (SPEC §10.7)
+
+The record stream goes over a shared-memory ring by default: a step costs a few
+memory copies and no system call. The SDK creates the ring file in `/dev/shm`
+(else `$TMPDIR`, else `/tmp`), unlinks it at once, maps it, and passes it to the
+recorder as file descriptor 3. `no_ring = 1` (C++: `no_ring = true`) forces the
+pipe; `ring_bytes` sets the capacity (a power of two of at least 64 KiB, default
+8 MiB). If the ring cannot be set up, the SDK logs that and records over the pipe.
+The ring needs a little-endian host.
+
+`tests/bench_step.c` is the step-overhead benchmark (same handler shape as Go's
+`BenchmarkRecorderStep`): `bench_step <kavach-recorder> pipe|ring [steps] [runs]`.
 
 ## C++ API (`kavach/kavach.hpp`, namespace `kavach`)
 

@@ -254,6 +254,10 @@ typedef struct kavach_recorder_options {
   int startup_timeout_ms;   /* with required: wait this long for `ready`; default 5000 */
   int flush_timeout_ms;     /* kavach_recorder_flush(durable) wait; default 10000 */
   int close_timeout_ms;     /* kavach_recorder_close wait for `closed`; default 10000 */
+  /* Transport (SPEC 10.7). The shared-memory ring is the default; if it cannot
+   * be set up the SDK logs that and uses the pipe. no_ring forces the pipe. */
+  int no_ring;
+  uint64_t ring_bytes;      /* ring capacity: a power of two >= 64 KiB; 0 = 8 MiB */
 
   const kavach_gateway* gateways; /* copied */
   size_t n_gateways;

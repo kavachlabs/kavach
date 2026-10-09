@@ -35,9 +35,9 @@ unwrap what = maybe (die' ("bad case: " ++ what)) pure
 b64 :: Maybe Json -> IO BS.ByteString
 b64 j = unwrap "base64" (j >>= asText >>= base64Decode . TE.encodeUtf8)
 
--- | Run a case; Nothing if it passes, else the error.
-runCase :: FilePath -> FilePath -> IO (Maybe String)
-runCase spec casePath = do
+-- | Run a case over the pipe (@noRing@) or the ring; Nothing if it passes, else the error.
+runCase :: Bool -> FilePath -> FilePath -> IO (Maybe String)
+runCase noRing spec casePath = do
   raw <- BS.readFile casePath
   case_ <- either die' pure (parseJson raw)
   tmp <- getTemporaryDirectory
@@ -84,6 +84,7 @@ runCase spec casePath = do
           , roRandom = \n -> do
               d <- pop "rand" >>= b64 . Just
               if BS.length d == n then pure d else die' "case rand answer has the wrong length"
+          , roNoRing = noRing
           , roRequired = True
           }
   r <- newRecorder opts h
