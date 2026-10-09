@@ -98,8 +98,17 @@ connection `ByteString -> IO ByteString` that may throw `GatewayError`.
 - The recorder is started with `System.Process`, with the process's
   environment unchanged. Its command is `roRecorderCommand`, else
   `$KAVACH_RECORDER`, else `kavach-recorder` on `PATH`.
-- The `input` frame is written before the handler runs; the rest of the step
-  is written with `step_end` after it.
+- The `input` frame is published before the handler runs; the rest of the step
+  is published with `step_end` after it.
+- Frames travel over a shared-memory ring (§10.7), by default 8 MiB
+  (`roRingBytes`), created in `/dev/shm` if it exists, else the temporary
+  directory, and mapped with `mmap`; `write` and `read` use C11 acquire and
+  release (`cbits/kavach_ring.c`). `process` cannot pass a child descriptor 3,
+  so the file keeps its name and goes in the `open` frame's `ring_path`; the
+  recorder unlinks it, and the SDK does at close if it never did. A full ring
+  rings the doorbell and waits for space until the recorder exits. `roNoRing =
+  True` forces the pipe, and a ring that cannot be set up falls back to it
+  with a log line.
 - The control stream is read on a `forkIO` thread. A `durable` answer is paired
   with the `flush` that asked for it by counting; `flush r True` waits (ten
   seconds at most). A `snapshot_request` is answered at the next step boundary.
@@ -133,12 +142,13 @@ variable: environment variables are served from the journal on replay.
 | Path | |
 | --- | --- |
 | `src/Kavach.hs` | the public API |
-| `src/Kavach/Recorder.hs`, `Host.hs` | the recorder half (§10) and the host (§9) |
+| `src/Kavach/Recorder.hs`, `Ring.hs`, `Host.hs` | the recorder half (§10), its ring (§10.7) and the host (§9) |
 | `src/Kavach/Conformance.hs` | the conformance handler of §9.6 |
 | `src/Kavach/Json.hs`, `Wire.hs` | JSON and the record stream encoding |
-| `conformance/` | `kavach-conformance-host` and `kavach-recorder-case` |
+| `conformance/` | `kavach-conformance-host`, `kavach-recorder-case` and `kavach-kill-helper` |
+| `bench/` | `kavach-bench`: step overhead over the pipe and the ring |
 | `examples/ledger/` | the demo: `ledger` (buggy) and `ledger --fix` |
-| `test/Spec.hs` | unit tests, the 7 recorder cases, the 18 host transcripts |
+| `test/Spec.hs` | unit tests, the 7 recorder cases over both transports, a killed service, the 18 host transcripts |
 
 ## Conformance
 
@@ -150,6 +160,7 @@ python3 ../../spec/host/run.py --host "$(cabal list-bin kavach-conformance-host)
 
 # one recorder case, through ../../spec/recorder/sdk/fake_recorder.py
 $(cabal list-bin kavach-recorder-case) ../../spec/recorder/sdk/reads.json
+$(cabal list-bin kavach-recorder-case) --pipe ../../spec/recorder/sdk/reads.json
 ```
 
 `KAVACH_SPEC_DIR` overrides the spec directory the runners and tests use.
