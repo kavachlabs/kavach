@@ -597,12 +597,10 @@ class Recorder {
   std::unique_ptr<Impl> impl_;
 };
 
-// Host options (SPEC 9, 6.3).
+// Host options (SPEC 9).
 struct HostOptions {
   std::string sdk;  // default "kavach-cpp/<version>"
-  std::vector<Gateway> gateways;  // answers to `live` queries in sandbox mode
-  std::function<void()> setup;    // local setup in sandbox mode; throw to fail
-  std::function<void(const std::vector<Output>&)> deliver;  // local outputs after a successful step
+  std::vector<Gateway> gateways;  // names and scopes reported on gateway requests
 };
 
 // If the last argument is "kavach-host", runs the host protocol and exits the
@@ -631,31 +629,6 @@ inline void maybe_host(int argc, char** argv, std::function<std::unique_ptr<Hand
         return KAVACH_ERROR;
       }
     }
-    static int setup(void* user, char** err) {
-      auto* self = static_cast<Ctx*>(user);
-      try {
-        self->opts.setup();
-        return KAVACH_OK;
-      } catch (const std::exception& e) {
-        *err = detail::dup_str(e.what());
-      } catch (...) {
-        *err = detail::dup_str("unknown exception");
-      }
-      return KAVACH_ERROR;
-    }
-    static int deliver(void* user, const kavach_output* outs, std::size_t n) {
-      auto* self = static_cast<Ctx*>(user);
-      try {
-        std::vector<Output> v;
-        for (std::size_t i = 0; i < n; i++)
-          v.push_back(Output{outs[i].sink, Bytes(outs[i].data, outs[i].data + outs[i].len),
-                             static_cast<Scope>(outs[i].scope)});
-        self->opts.deliver(v);
-        return KAVACH_OK;
-      } catch (...) {
-        return KAVACH_ERROR;
-      }
-    }
   } ctx{std::move(factory), std::move(opts), {}, {}};
 
   if (ctx.opts.sdk.empty()) ctx.opts.sdk = "kavach-cpp/" KAVACH_VERSION;
@@ -671,14 +644,6 @@ inline void maybe_host(int argc, char** argv, std::function<std::unique_ptr<Hand
   o.runtime = KAVACH_RUNTIME;
   o.gateways = ctx.cgws.data();
   o.n_gateways = ctx.cgws.size();
-  if (ctx.opts.setup) {
-    o.setup = &Ctx::setup;
-    o.setup_user = &ctx;
-  }
-  if (ctx.opts.deliver) {
-    o.deliver = &Ctx::deliver;
-    o.deliver_user = &ctx;
-  }
   kavach_maybe_host(argc, argv, &Ctx::make, &o);
 }
 

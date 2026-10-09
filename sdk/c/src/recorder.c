@@ -333,8 +333,10 @@ static void handle_control(kavach_recorder* r, const char* line, size_t n) {
   }
   const char* t = kj_str(kj_get(m, "t"));
   if (!t) {
-    /* ignore */
-  } else if (strcmp(t, "ready") == 0) {
+    kj_free(m);
+    return;
+  }
+  if (strcmp(t, "ready") == 0) {
     pthread_mutex_lock(&r->mu);
     r->ready = 1;
     pthread_cond_broadcast(&r->cv);
@@ -622,7 +624,6 @@ int kavach_recorder_new(const kavach_handler* h, const kavach_recorder_options* 
       r->n_gws++;
     }
   }
-  /* Pointers we do not keep. */
   r->o.gateways = NULL;
   r->o.recorder_argv = NULL;
   r->o.secret_keys = NULL;

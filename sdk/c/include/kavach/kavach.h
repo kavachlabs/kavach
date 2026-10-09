@@ -317,14 +317,8 @@ typedef struct kavach_host_options {
   void* user;              /* passed to factory */
   const char* sdk;         /* ready.sdk; default "kavach-c/" KAVACH_VERSION */
   const char* runtime;     /* host.runtime; default this library's KAVACH_RUNTIME */
-  const kavach_gateway* gateways; /* for `live` answers in sandbox mode (copied) */
+  const kavach_gateway* gateways; /* names and scopes reported on gateway requests (copied) */
   size_t n_gateways;
-  /* Local setup (SPEC 6.3), run on `hello` in sandbox mode before `ready`. */
-  int (*setup)(void* user, char** err);
-  void* setup_user;
-  /* Delivers local outputs after a step succeeded, in sandbox mode. */
-  kavach_deliver_fn deliver;
-  void* deliver_user;
 } kavach_host_options;
 
 /* If the last argument is "kavach-host", runs the host protocol on stdin and

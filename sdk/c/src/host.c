@@ -15,12 +15,6 @@
 
 extern char** environ;
 
-typedef struct local_out {
-  char* sink;
-  uint8_t* data;
-  size_t len;
-} local_out;
-
 typedef struct host {
   int in_fd, out_fd;
   kbuf rbuf;
@@ -30,10 +24,7 @@ typedef struct host {
   kavach_handler_factory factory;
   kavach_handler h;
   int have_h;
-  int sandbox;
   struct kavach_env env;
-  local_out* locals;
-  size_t n_locals, cap_locals;
   char* environment; /* cached ready.environment JSON */
 } host;
 
@@ -202,45 +193,12 @@ static int op_query(kavach_env* e, const char* name, const void* req, size_t req
   write_line(h);
   kj* m = await(h, "gateway");
   if (!m) return KAVACH_ABORTED;
-  int rc;
   if (kj_is_true(kj_get(m, "live"))) {
-    /* A local query: execute it here and report what came back (SPEC 6.3). */
-    uint8_t* rb = NULL;
-    size_t rl = 0;
-    char* em = NULL;
-    if (!g || !g->fn) {
-      em = k_strdup("no local gateway registered");
-      rc = KAVACH_QUERY_FAILED;
-    } else {
-      rc = g->fn(g->user, name, req, req_len, &rb, &rl, &em);
-      if (rc != KAVACH_OK) {
-        free(rb);
-        rb = NULL;
-        rl = 0;
-        rc = KAVACH_QUERY_FAILED;
-        if (!em || !*em) {
-          free(em);
-          em = k_strdup("query failed");
-        }
-      } else {
-        free(em);
-        em = NULL;
-      }
-    }
-    kb_puts(&h->out, "{\"t\":\"observed\",");
-    if (rc == KAVACH_OK) {
-      kb_puts(&h->out, "\"response\":");
-      kb_json_b64(&h->out, rb, rl);
-    } else {
-      kb_puts(&h->out, "\"error\":");
-      kb_json_cstr(&h->out, em);
-    }
-    kb_putc(&h->out, '}');
-    write_line(h);
-    *resp = rb;
-    *resp_len = rl;
-    *err = em;
-  } else if (kj_is_str(kj_get(m, "error"))) {
+    kj_free(m);
+    fatal(h, "sandbox mode not supported");
+  }
+  int rc;
+  if (kj_is_str(kj_get(m, "error"))) {
     *err = k_strdup(kj_get(m, "error")->s);
     rc = KAVACH_QUERY_FAILED;
   } else {
@@ -277,31 +235,10 @@ static int op_emit(kavach_env* e, const char* sink, const void* data, size_t len
   put_scope(&h->out, scope);
   kb_putc(&h->out, '}');
   write_line(h);
-  if (h->sandbox && scope == KAVACH_LOCAL && h->o.deliver) {
-    if (h->n_locals == h->cap_locals) {
-      size_t nc = h->cap_locals ? h->cap_locals * 2 : 8;
-      local_out* nl = realloc(h->locals, nc * sizeof *nl);
-      if (!nl) return KAVACH_ERROR;
-      h->locals = nl;
-      h->cap_locals = nc;
-    }
-    local_out* l = &h->locals[h->n_locals++];
-    l->sink = k_strdup(sink);
-    l->data = k_memdup(data, len);
-    l->len = len;
-  }
   return KAVACH_OK;
 }
 
 static const env_ops HOST_OPS = {op_now, op_rand, op_query, op_config, op_emit};
-
-static void clear_locals(host* h) {
-  for (size_t i = 0; i < h->n_locals; i++) {
-    free(h->locals[i].sink);
-    free(h->locals[i].data);
-  }
-  h->n_locals = 0;
-}
 
 /* ---------------- ready.environment ---------------- */
 
@@ -403,10 +340,9 @@ static void on_hello(host* h, const kj* m) {
   if (!kj_is_num(proto) || proto->num != 1) fatal(h, "unsupported protocol version");
   const char* start = kj_str(kj_get(m, "start"));
   const char* mode = kj_str(kj_get(m, "mode"));
-  h->sandbox = mode && strcmp(mode, "sandbox") == 0;
+  if (mode && strcmp(mode, "sandbox") == 0) fatal(h, "sandbox mode not supported");
 
   drop_handler(h);
-  memset(&h->h, 0, sizeof h->h);
   if (!h->factory || h->factory(h->o.user, &h->h) != KAVACH_OK || !h->h.handle)
     fatal(h, "the handler could not be created");
   h->have_h = 1;
@@ -419,16 +355,6 @@ static void on_hello(host* h, const kj* m) {
     int rc = h->h.restore(h->h.state, snap, sl);
     free(snap);
     if (rc != KAVACH_OK) fatal(h, "the snapshot could not be restored");
-  }
-  if (h->sandbox && h->o.setup) {
-    char* err = NULL;
-    if (h->o.setup(h->o.setup_user, &err) != KAVACH_OK) {
-      char msg[320];
-      snprintf(msg, sizeof msg, "local setup failed: %s", err ? err : "unknown error");
-      free(err);
-      fatal(h, msg);
-    }
-    free(err);
   }
   k_env_reset(&h->env);
   k_env_init(&h->env, &HOST_OPS, h, !!(h->h.flags & KAVACH_HANDLER_NOJUMP));
@@ -471,7 +397,6 @@ static void on_step(host* h, const kj* m) {
   decode_field(h, m, "data", &data, &dl);
   kavach_input in = {source ? source : "", position ? position : "", data, dl};
 
-  clear_locals(h);
   k_env_reset(&h->env);
   int rc = k_run_handler(&h->h, &h->env, &in);
   free(data);
@@ -487,27 +412,9 @@ static void on_step(host* h, const kj* m) {
       send_done(h, "invariant", name, detail);
       free(detail);
     } else {
-      int delivered = 1;
-      if (h->n_locals > 0 && h->o.deliver) {
-        kavach_output* arr = calloc(h->n_locals, sizeof *arr);
-        if (arr) {
-          for (size_t i = 0; i < h->n_locals; i++) {
-            arr[i].sink = h->locals[i].sink;
-            arr[i].data = h->locals[i].data;
-            arr[i].len = h->locals[i].len;
-            arr[i].scope = KAVACH_LOCAL;
-          }
-          delivered = h->o.deliver(h->o.deliver_user, arr, h->n_locals) == KAVACH_OK;
-          free(arr);
-        }
-      }
-      if (delivered)
-        send_done(h, "ok", NULL, NULL);
-      else
-        send_done(h, "error", "local output delivery failed", NULL);
+      send_done(h, "ok", NULL, NULL);
     }
   }
-  clear_locals(h);
   k_env_reset(&h->env);
 }
 
@@ -536,7 +443,7 @@ static void host_main(kavach_handler_factory factory, const kavach_host_options*
 
   for (;;) {
     kj* m = next_message(h);
-    if (!m) break; /* the driver closed our input without `end` */
+    if (!m) break;
     const char* t = mtype(m);
     if (strcmp(t, "hello") == 0) {
       on_hello(h, m);
