@@ -25,7 +25,12 @@ kavach = { path = "sdk/rust" }   # not yet published
   (else `KAVACH_RECORDER`, else `kavach-recorder` on `PATH`), `required(true)`,
   `gateways(Gateways)`, `clock`, `rand`, `config(source, f)`, `flags(f)`,
   `deliver(f)`, `log(f)`, `start_from_snapshot(bytes)`, `recover_panics`,
-  `capture_backtraces`.
+  `capture_backtraces`, `no_ring(true)`, `ring_bytes(n)`.
+- Recording goes over a shared-memory ring by default (SPEC.md section 10.7):
+  a step costs memory copies and no system call. `no_ring(true)` forces the
+  pipe, which is also the fallback, with a log line, if the ring cannot be
+  set up. `cargo run --release --example bench_step` measures both against
+  the real `kavach-recorder`.
 - `Gateways::new().register(name, Scope, connection)`: name to connection and scope.
 - `kavach::maybe_host(factory, HostOptions::new()...)`: call first in `main`. If the
   last argument is `kavach-host` it serves the host protocol and exits. Sandbox

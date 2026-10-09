@@ -62,10 +62,18 @@ fn recorder_cases() {
     );
 
     let mut failures = Vec::new();
-    for case in &cases {
-        let name = case.file_stem().unwrap().to_string_lossy().into_owned();
+    for (case, transport) in cases.iter().flat_map(|c| [(c, "ring"), (c, "pipe")]) {
+        let name = format!(
+            "{}.{transport}",
+            case.file_stem().unwrap().to_string_lossy()
+        );
         let result = tmp.join(format!("{name}.result.json"));
         let out = Command::new(runner)
+            .args(if transport == "pipe" {
+                &["--pipe"][..]
+            } else {
+                &[]
+            })
             .arg(case)
             .arg(&result)
             .output()

@@ -41,6 +41,7 @@ mod host;
 pub mod json;
 mod panics;
 mod recorder;
+mod ring;
 mod sys;
 mod wire;
 
