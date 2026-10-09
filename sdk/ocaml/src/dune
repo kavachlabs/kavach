@@ -1,0 +1,3 @@
+(library
+ (name kavach)
+ (libraries unix threads.posix))
