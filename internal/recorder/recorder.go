@@ -83,6 +83,8 @@ type recorder struct {
 	run    string
 
 	seg     *segment
+	standby *segment        // the next segment, prepared; nil while work runs or snapshots are off
+	work    chan sealResult // the background seal of the previous segment, nil if none
 	started bool
 	nextSeq uint64
 	lastSeq uint64 // seq of the last record written; meaningful once started
@@ -255,6 +257,9 @@ func (r *recorder) fail(err error) int {
 	r.log.Printf("fatal: %s", fe.msg)
 	r.send(map[string]any{"t": "error", "message": fe.msg, "fatal": true})
 	r.inStep, r.step, r.stepMarker = false, nil, nil
+	if err := r.settle(); err != nil {
+		r.log.Printf("finishing a segment: %v", err)
+	}
 	if r.seg != nil {
 		if err := r.seg.close(); err != nil {
 			r.log.Printf("finishing %s: %v", r.seg.path, err)
@@ -290,13 +295,18 @@ func (r *recorder) eof() int {
 
 // finish writes what remains and makes it durable.
 func (r *recorder) finish() int {
+	err := r.settle()
 	if r.seg != nil {
-		if err := r.seg.close(); err != nil {
-			r.log.Printf("finishing %s: %v", r.seg.path, err)
-			r.send(map[string]any{"t": "error", "message": err.Error(), "fatal": true})
-			return exitFatal
+		if cerr := r.seg.close(); cerr != nil {
+			cerr = fmt.Errorf("finishing %s: %w", r.seg.path, cerr)
+			err = errors.Join(err, cerr)
 		}
 		r.seg = nil
+	}
+	if err != nil {
+		r.log.Print(err)
+		r.send(map[string]any{"t": "error", "message": err.Error(), "fatal": true})
+		return exitFatal
 	}
 	return exitOK
 }
@@ -566,7 +576,11 @@ func (r *recorder) startJournal(snapshot []byte) error {
 	if snapshot != nil {
 		start = journal.StartSnapshot
 	}
-	if err := r.beginSegment(0, start, snapshot); err != nil {
+	first, err := r.newSegment(0, start, false)
+	if err != nil {
+		return fatalf("creating segment 0: %v", err)
+	}
+	if err := r.beginSegment(first, snapshot); err != nil {
 		return err
 	}
 	r.started = true
@@ -578,22 +592,21 @@ func (r *recorder) startJournal(snapshot []byte) error {
 		r.watcher = envfacts.NewWatcher(r.cfg.Collector, interval, r.fullEnvironment().Facts)
 		r.watcher.Start()
 	}
-	if err := r.prune(); err != nil {
+	if err := r.prune(r.seg.path); err != nil {
 		r.warn("deleting old segments: %v", err)
+	}
+	if r.open.Snapshots {
+		r.seal(nil, r.seg)
 	}
 	return nil
 }
 
-// beginSegment opens segment index and writes its first records. snapshot is
-// nil only for the first segment of a genesis journal.
-func (r *recorder) beginSegment(index int, start string, snapshot []byte) error {
-	seg, err := r.newSegment(index, start)
-	if err != nil {
-		return fatalf("creating segment %d: %v", index, err)
-	}
+// beginSegment makes seg the one being written and writes its first records.
+// snapshot is nil only for the first segment of a genesis journal.
+func (r *recorder) beginSegment(seg *segment, snapshot []byte) error {
 	r.seg = seg
 	seg.firstSeq = r.nextSeq
-	if start == journal.StartSnapshot {
+	if seg.meta.Start == journal.StartSnapshot {
 		if err := r.write(journal.Record{Type: journal.TypeSnapshot, Flags: journal.FlagCritical, Data: snapshot}); err != nil {
 			return err
 		}
@@ -662,13 +675,16 @@ func (r *recorder) endStep(final bool) error {
 			return err
 		}
 	}
-	r.maybeRequestSnapshot()
-	return nil
+	return r.maybeRequestSnapshot()
 }
 
-func (r *recorder) maybeRequestSnapshot() {
+func (r *recorder) maybeRequestSnapshot() error {
+	// A failed seal surfaces when it is noticed, not only at the next rotation.
+	if err := r.reap(false); err != nil {
+		return err
+	}
 	if !r.open.Snapshots || r.snapRequest || r.seg == nil {
-		return
+		return nil
 	}
 	// The clock is read every 256 steps: the age limit is in seconds.
 	r.stepsSinceClock++
@@ -676,6 +692,7 @@ func (r *recorder) maybeRequestSnapshot() {
 		r.snapRequest = true
 		r.send(map[string]any{"t": "snapshot_request"})
 	}
+	return nil
 }
 
 // handleSnapshot starts the journal (when start is "snapshot") or the next
@@ -694,22 +711,98 @@ func (r *recorder) handleSnapshot(state []byte) error {
 		return fatalf("snapshot frame without a snapshot_request")
 	}
 	r.snapRequest = false
-	old := r.seg
-	if err := old.close(); err != nil {
-		return fatalf("finishing %s: %v", old.path, err)
-	}
-	r.mergePending() // the new segment starts from the environment as it stands
-	if err := r.beginSegment(old.index+1, journal.StartSnapshot, state); err != nil {
+	// TODO: when a rotation comes while the previous segment is still being
+	// sealed, the loop waits here. A third buffer or a backpressure policy is
+	// deferred.
+	if err := r.reap(true); err != nil {
 		return err
 	}
-	if err := r.prune(); err != nil {
-		r.warn("deleting old segments: %v", err)
+	old, next := r.seg, r.standby
+	if err := r.activate(next); err != nil {
+		return fatalf("starting %s: %v", next.path, err)
+	}
+	r.standby = nil
+	r.mergePending() // the new segment starts from the environment as it stands
+	r.seal(old, next)
+	if err := r.beginSegment(next, state); err != nil {
+		return err
 	}
 	r.send(map[string]any{"t": "segment", "file": r.seg.path, "first_seq": seqString(r.seg.firstSeq)})
 	return nil
 }
 
+// sealResult is what the background work of a rotation hands back: the
+// prepared standby segment, or the error that stopped it.
+type sealResult struct {
+	next *segment
+	err  error
+}
+
+// seal finishes old (nil at the start of the journal) and then prepares the
+// segment after active, on a goroutine, so that the loop reading the stream
+// does not wait on the compressor, fsync or file creation. At most one runs.
+func (r *recorder) seal(old, active *segment) {
+	done := make(chan sealResult, 1)
+	r.work = done
+	path, index := active.path, active.index
+	go func() {
+		if old != nil {
+			if err := old.close(); err != nil {
+				done <- sealResult{err: fatalf("finishing %s: %v", old.path, err)}
+				return
+			}
+			if err := r.prune(path); err != nil {
+				r.warn("deleting old segments: %v", err)
+			}
+		}
+		next, err := r.newSegment(index+1, journal.StartSnapshot, true)
+		if err != nil {
+			err = fatalf("creating segment %d: %v", index+1, err)
+		}
+		done <- sealResult{next, err}
+	}()
+}
+
+// reap takes the result of the background work: it waits for it if wait is
+// set, and otherwise only if it has finished.
+func (r *recorder) reap(wait bool) error {
+	if r.work == nil {
+		return nil
+	}
+	var res sealResult
+	if wait {
+		res = <-r.work
+	} else {
+		select {
+		case res = <-r.work:
+		default:
+			return nil
+		}
+	}
+	r.work, r.standby = nil, res.next
+	return res.err
+}
+
+// settle waits for the background work and discards the standby segment, which
+// is not part of the journal.
+func (r *recorder) settle() error {
+	err := r.reap(true)
+	if s := r.standby; s != nil {
+		r.standby = nil
+		s.w.Close()
+		s.f.Close()
+		os.Remove(s.path)
+	}
+	return err
+}
+
 func (r *recorder) flush(durable bool) error {
+	if durable {
+		// A sealing segment holds records this answer covers.
+		if err := r.reap(true); err != nil {
+			return err
+		}
+	}
 	if r.seg != nil {
 		var err error
 		if durable {

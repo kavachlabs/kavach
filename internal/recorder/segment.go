@@ -54,8 +54,13 @@ func (r *recorder) segmentPath(index int) string {
 	return filepath.Join(r.open.Dir, fmt.Sprintf("%s-%s-%06d.kavach", safeName(r.open.Service), r.run, index))
 }
 
-// newSegment creates the file of segment index and writes its header.
-func (r *recorder) newSegment(index int, start string) (*segment, error) {
+// standbySuffix marks a prepared segment that is not yet part of the journal:
+// readers and prune never see it under a segment's name.
+const standbySuffix = ".standby"
+
+// newSegment creates the file of segment index and writes its header. A
+// standby segment is created under a temporary name; activate gives it its own.
+func (r *recorder) newSegment(index int, start string, standby bool) (*segment, error) {
 	meta := journal.Meta{
 		Service:     r.open.Service,
 		Start:       start,
@@ -71,9 +76,15 @@ func (r *recorder) newSegment(index int, start string) (*segment, error) {
 		meta.RecordedAt = r.test.RecordedAt
 	}
 	path := r.segmentPath(index)
+	if standby {
+		path += standbySuffix
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if standby {
+		preallocate(f, min(r.open.SegmentBytes, maxPrealloc))
 	}
 	s := &segment{path: path, f: f, cw: &countWriter{f: f}, meta: meta, index: index, started: time.Now()}
 	s.w, err = journal.NewWriterOptions(s.cw, meta, journal.WriterOptions{Level: r.open.Level, BlockBytes: r.open.BlockBytes, Async: true})
@@ -82,6 +93,16 @@ func (r *recorder) newSegment(index int, start string) (*segment, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// activate makes a standby segment the one being written.
+func (r *recorder) activate(s *segment) error {
+	path := r.segmentPath(s.index)
+	if err := os.Rename(s.path, path); err != nil {
+		return err
+	}
+	s.path, s.started = path, time.Now()
+	return nil
 }
 
 // sync writes the open block and makes the file durable.
@@ -95,6 +116,9 @@ func (s *segment) sync() error {
 func (s *segment) close() error {
 	err := s.sync()
 	if cerr := s.w.Close(); err == nil {
+		err = cerr
+	}
+	if cerr := trimPrealloc(s.f); err == nil {
 		err = cerr
 	}
 	if cerr := s.f.Close(); err == nil {
@@ -170,8 +194,8 @@ func (r *recorder) writeFixture(inputSeq, last uint64) (string, error) {
 }
 
 // prune deletes the oldest segments of the service beyond retain_segments. It
-// never touches fixtures, nor the segment being written.
-func (r *recorder) prune() error {
+// never touches fixtures, nor the segment being written, active ("" if none).
+func (r *recorder) prune(active string) error {
 	entries, err := os.ReadDir(r.open.Dir)
 	if err != nil {
 		return err
@@ -188,7 +212,7 @@ func (r *recorder) prune() error {
 			continue
 		}
 		path := filepath.Join(r.open.Dir, name)
-		if r.seg != nil && path == r.seg.path {
+		if path == active {
 			continue
 		}
 		// A service name can be a prefix of another's; the header knows.
@@ -203,7 +227,7 @@ func (r *recorder) prune() error {
 	}
 	// The segment being written counts towards the limit.
 	keep := r.open.RetainSegments
-	if r.seg != nil {
+	if active != "" {
 		keep--
 	}
 	if keep < 0 {

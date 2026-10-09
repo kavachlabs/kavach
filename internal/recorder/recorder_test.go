@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"sync"
@@ -260,6 +261,44 @@ func TestControlStreamFailureDoesNotStopRecording(t *testing.T) {
 	}
 	if j, err := journal.ReadFile(files[0]); err != nil || len(j.Records) != 2 {
 		t.Fatalf("journal: %v %+v", err, j)
+	}
+}
+
+func TestRotationSealsInTheBackground(t *testing.T) {
+	s := start(t, Config{}, recstream.Open{Snapshots: true, SegmentBytes: 1})
+	requests := func() int {
+		n := 0
+		for _, m := range s.control() {
+			if m["t"] == "snapshot_request" {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 1; i <= 3; i++ {
+		s.step("a")
+		waitFor(t, "a snapshot request", func() bool { return requests() == i })
+		if err := s.enc.Snapshot([]byte("state")); err != nil {
+			t.Fatal(err)
+		}
+		// A durable answer covers the segment that is being sealed.
+		if err := s.enc.Flush(true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.step("b")
+	if c := s.finish(); c != exitOK {
+		t.Fatalf("exit %d", c)
+	}
+	for i := 0; i < 4; i++ {
+		j, err := journal.ReadFile(filepath.Join(s.dir, fmt.Sprintf("svc-%s-%06d.kavach", s.run(), i)))
+		if err != nil || len(j.Records) == 0 {
+			t.Fatalf("segment %d: %v %+v", i, err, j)
+		}
+	}
+	left, _ := filepath.Glob(filepath.Join(s.dir, "*"+standbySuffix))
+	if len(left) != 0 {
+		t.Fatalf("standby segments left behind: %v", left)
 	}
 }
 
