@@ -51,7 +51,7 @@ module Kavach
 
   # One host session over a pair of binary streams (section 9).
   class Host
-    attr_reader :aborted, :mode, :gateways, :local_outputs
+    attr_reader :aborted, :gateways
 
     # handler_factory:: callable returning a fresh handler.
     # gateways:: registry of gateways (see Kavach.resolve_gateway).
@@ -61,9 +61,7 @@ module Kavach
       @wr = writer
       @gateways = gateways
       @environment = environment || -> { Kavach.collect_environment }
-      @mode = "process"
       @aborted = false
-      @local_outputs = []
     end
 
     def send_msg(msg)
@@ -142,9 +140,8 @@ module Kavach
     def hello(msg)
       raise HostFatal, "unsupported protocol #{msg["protocol"].inspect}" unless msg["protocol"] == PROTOCOL
 
-      @mode = msg["mode"] || "process"
       # SPEC: sandbox mode (section 6.3) is not implemented by this SDK.
-      raise HostFatal, "sandbox mode not supported" if @mode == "sandbox"
+      raise HostFatal, "sandbox mode not supported" if msg["mode"] == "sandbox"
 
       handler = begin
         @factory.call
@@ -169,7 +166,6 @@ module Kavach
       input = Input.new(source: msg["source"].to_s, position: msg["position"].to_s,
                         data: Kavach.unb64(msg["data"] || ""))
       @aborted = false
-      @local_outputs = []
       failure = nil
       begin
         handler.handle(HostEnv.new(self), input)
