@@ -36,9 +36,9 @@ class Ledger:
         if amount <= 0:  # TypeError when amount is None and fix is off
             return self._reject(env, ev, "amount must be positive")
         at = _rfc3339(env)
-        account = ev["account"]
+        account = ev.get("account", "")
 
-        kind = ev["type"]
+        kind = ev.get("type", "")
         if kind == "deposit":
             self.net += amount
             self._post(env, ev, account, amount, at)
@@ -51,7 +51,7 @@ class Ledger:
             if self.balances.get(account, 0) < amount:
                 return self._reject(env, ev, "insufficient funds")
             self._post(env, ev, account, -amount, at)
-            self._post(env, ev, ev["to"], amount, at)
+            self._post(env, ev, ev.get("to", ""), amount, at)
         else:
             self._reject(env, ev, "unknown event type " + str(kind))
 
@@ -59,12 +59,12 @@ class Ledger:
         self.balances[account] = self.balances.get(account, 0) + delta
         txn = env.random(8).hex()
         env.emit("ledger.entries", _dump({
-            "txn": txn, "event": ev["id"], "account": account,
+            "txn": txn, "event": ev.get("id", ""), "account": account,
             "delta": delta, "balance": self.balances[account], "at": at,
         }))
 
     def _reject(self, env: Env, ev: dict, reason: str) -> None:
-        env.emit("ledger.rejections", _dump({"event": ev["id"], "reason": reason}))
+        env.emit("ledger.rejections", _dump({"event": ev.get("id", ""), "reason": reason}))
 
     def invariants(self) -> list[Invariant]:
         def non_negative():

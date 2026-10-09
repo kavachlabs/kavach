@@ -45,9 +45,9 @@ function Kavach.handle!(l::Handler, env::Env, input::Input)
     end
     amount <= 0 && return reject(env, ev, "amount must be positive") # MethodError when amount is null and fix is off
     at = rfc3339nano(now_ns(env))
-    account = ev["account"]
+    account = get(ev, "account", "")
 
-    kind = ev["type"]
+    kind = get(ev, "type", "")
     if kind == "deposit"
         l.net += amount
         post(l, env, ev, account, amount, at)
@@ -58,7 +58,7 @@ function Kavach.handle!(l::Handler, env::Env, input::Input)
     elseif kind == "transfer"
         get(l.balances, account, 0) < amount && return reject(env, ev, "insufficient funds")
         post(l, env, ev, account, -amount, at)
-        post(l, env, ev, ev["to"], amount, at)
+        post(l, env, ev, get(ev, "to", ""), amount, at)
     else
         reject(env, ev, "unknown event type $kind")
     end
@@ -68,11 +68,11 @@ end
 function post(l::Handler, env::Env, ev, account, delta, at)
     l.balances[account] = get(l.balances, account, 0) + delta
     txn = bytes2hex(Kavach.random(env, 8))
-    emit!(env, "ledger.entries", Json.stringify((txn=txn, event=ev["id"], account=account, delta=delta,
+    emit!(env, "ledger.entries", Json.stringify((txn=txn, event=get(ev, "id", ""), account=account, delta=delta,
                                                  balance=l.balances[account], at=at)))
 end
 
-reject(env::Env, ev, reason) = emit!(env, "ledger.rejections", Json.stringify((event=ev["id"], reason=reason)))
+reject(env::Env, ev, reason) = emit!(env, "ledger.rejections", Json.stringify((event=get(ev, "id", ""), reason=reason)))
 
 function Kavach.invariants(l::Handler)
     non_negative() = for a in sort!(collect(keys(l.balances)))
