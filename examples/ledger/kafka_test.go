@@ -11,8 +11,9 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kfake"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 const topic = "wallet-events"
@@ -59,7 +60,7 @@ func TestKafkaCrashFixture(t *testing.T) {
 		}
 		if path, err := rec.Flush("test"); err != nil {
 			t.Fatal(err)
-		} else if res, _ := kavach.ReplayFile(path, newHandler); res.Status != kavach.StatusOK || len(res.Steps) != 9 {
+		} else if res, _ := replay.RunFile(path, newHandler); res.Status != replay.StatusOK || len(res.Steps) != 9 {
 			t.Fatalf("fixed build consumed %v", res)
 		}
 		return
@@ -86,7 +87,7 @@ func TestKafkaCrashFixture(t *testing.T) {
 	}
 
 	// The fixture replays with no Kafka at all.
-	res, err := kavach.Replay(j, newHandler)
+	res, err := replay.Run(j, newHandler)
 	if err != nil || res.String() != "still_failing@32" {
 		t.Fatalf("replay: %v, %v", res, err)
 	}
@@ -118,11 +119,11 @@ func TestKafkaBinary(t *testing.T) {
 		t.Fatalf("fixtures: %v", paths)
 	}
 	// The binary has the bug planted; this test's handler may be the fixed one.
-	want := kavach.StatusStillFailing
+	want := replay.StatusStillFailing
 	if fixNullAmount {
-		want = kavach.StatusFixed
+		want = replay.StatusFixed
 	}
-	res, err := kavach.ReplayFile(paths[0], newHandler)
+	res, err := replay.RunFile(paths[0], newHandler)
 	if err != nil || res.Status != want || res.Recorded == nil {
 		t.Fatalf("replay: %v, %v", res, err)
 	}

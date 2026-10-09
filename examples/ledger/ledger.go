@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kavachlabs/kavach"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Event is one wallet event from upstream.

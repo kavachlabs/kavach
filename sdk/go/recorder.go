@@ -179,7 +179,7 @@ func (r *Recorder) Step(in Input) (err error) {
 		return herr
 	}
 
-	if name, ierr := checkInvariants(r.h); ierr != nil {
+	if name, ierr := CheckInvariants(r.h); ierr != nil {
 		r.add(journal.Record{Type: journal.TypeMarker, Kind: journal.MarkerInvariant, Message: name, Data: []byte(ierr.Error())})
 		path, _ := r.flushLocked(journal.MarkerInvariant)
 		r.checkpoint()

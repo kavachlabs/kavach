@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kavachlabs/kavach"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Mode selects which build of a handler is under test.

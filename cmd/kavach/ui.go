@@ -6,7 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kavachlabs/kavach"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // 256-color palette carried over from the original kavach CLI.
@@ -105,20 +106,20 @@ func (u ui) header(w io.Writer, title string) {
 	fmt.Fprintln(w, u.paint("=== ["+title+"] ===", ansiBold, ansiCyan))
 }
 
-var statusStyle = map[kavach.Status]struct{ bg, fg, text string }{
-	kavach.StatusFixed:             {"\033[48;5;46m", ansiGreen, "FIXED"},
-	kavach.StatusOK:                {"\033[48;5;46m", ansiGreen, "OK"},
-	kavach.StatusStillFailing:      {"\033[48;5;196m", ansiRed, "STILL FAILING"},
-	kavach.StatusDiverged:          {"\033[48;5;208m", ansiOrange, "DIVERGED"},
-	kavach.StatusInvariantViolated: {"\033[48;5;201m", ansiMagenta, "INVARIANT VIOLATED"},
-	kavach.StatusNondeterministic:  {"\033[48;5;220m", ansiYellow, "NONDETERMINISTIC"},
-	kavach.StatusVariantFailed:     {"\033[48;5;196m", ansiRed, "VARIANT FAILED"},
-	kavach.StatusUnverified:        {"\033[48;5;220m", ansiYellow, "UNVERIFIED"},
+var statusStyle = map[replay.Status]struct{ bg, fg, text string }{
+	replay.StatusFixed:             {"\033[48;5;46m", ansiGreen, "FIXED"},
+	replay.StatusOK:                {"\033[48;5;46m", ansiGreen, "OK"},
+	replay.StatusStillFailing:      {"\033[48;5;196m", ansiRed, "STILL FAILING"},
+	replay.StatusDiverged:          {"\033[48;5;208m", ansiOrange, "DIVERGED"},
+	replay.StatusInvariantViolated: {"\033[48;5;201m", ansiMagenta, "INVARIANT VIOLATED"},
+	replay.StatusNondeterministic:  {"\033[48;5;220m", ansiYellow, "NONDETERMINISTIC"},
+	replay.StatusVariantFailed:     {"\033[48;5;196m", ansiRed, "VARIANT FAILED"},
+	replay.StatusUnverified:        {"\033[48;5;220m", ansiYellow, "UNVERIFIED"},
 }
 
 // verdict renders a verdict: a colored badge followed by the exact verdict
 // string when color is on, the verdict string alone when it is off.
-func (u ui) verdict(status kavach.Status, verdict string) string {
+func (u ui) verdict(status replay.Status, verdict string) string {
 	st, ok := statusStyle[status]
 	if !u.color || !ok {
 		return verdict
@@ -128,7 +129,7 @@ func (u ui) verdict(status kavach.Status, verdict string) string {
 }
 
 // verdictColor returns the foreground color for a status.
-func verdictColor(s kavach.Status) string {
+func verdictColor(s replay.Status) string {
 	if st, ok := statusStyle[s]; ok {
 		return st.fg
 	}

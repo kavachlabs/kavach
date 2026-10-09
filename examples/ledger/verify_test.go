@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Candidate fixes for the null-amount incident, as an agent might write them.
@@ -50,7 +51,7 @@ func TestVerifyCandidateFixes(t *testing.T) {
 	}
 	for _, c := range candidates {
 		t.Run(c.name, func(t *testing.T) {
-			v, err := kavach.Verify(j, newHandler, c.new, kavach.VerifyOptions{})
+			v, err := replay.Verify(j, newHandler, c.new, replay.VerifyOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,8 +76,8 @@ func BenchmarkVerifyFixture(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		v, err := kavach.Verify(j, newHandler, candidates[0].new, kavach.VerifyOptions{})
-		if err != nil || (!fixNullAmount && v.Status != kavach.StatusFixed) {
+		v, err := replay.Verify(j, newHandler, candidates[0].new, replay.VerifyOptions{})
+		if err != nil || (!fixNullAmount && v.Status != replay.StatusFixed) {
 			b.Fatal(v, err)
 		}
 	}

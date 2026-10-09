@@ -50,7 +50,7 @@ first offset. With a local broker (for example
 
 The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
 and it still replays with no broker running. The demo is its own Go module, so
-Kafka is not a dependency of the `kavach` library, which depends only on
+Kafka is not a dependency of the Go SDK, which depends only on
 `github.com/klauspost/compress`.
 
 ## With an AI agent
@@ -66,6 +66,9 @@ claude mcp add kavach -- kavach mcp
 [AGENTS.md](AGENTS.md) is the loop an agent should follow.
 
 ## Using it in a service
+
+The Go SDK is `github.com/kavachlabs/kavach/sdk/go` (package `kavach`); the
+other languages are under [sdk](sdk).
 
 ```go
 func main() {
@@ -85,7 +88,7 @@ func (l *Ledger) Handle(env kavach.Env, in kavach.Input) error { ... }
 A handler can also implement `kavach.Snapshotter`, so that fixtures start from
 recent state instead of from the service's first event, and `kavach.Checker` to
 declare invariants that are checked after every step, live and in replay. Use
-[`kavachtest.Run`](kavachtest) to run captured fixtures as Go tests.
+[`kavachtest.Run`](sdk/go/kavachtest) to run captured fixtures as Go tests.
 
 ## How it works
 

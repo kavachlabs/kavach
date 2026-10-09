@@ -1,4 +1,4 @@
-package kavach
+package replay
 
 import (
 	"bufio"
@@ -17,11 +17,8 @@ import (
 
 	"github.com/kavachlabs/kavach/internal/envfacts"
 	"github.com/kavachlabs/kavach/journal"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
-
-// HostCommand is the last argument that makes a program act as a host
-// (SPEC.md §9.1).
-const HostCommand = "kavach-host"
 
 // StepTimeout bounds each step of a replay in a host process (SPEC.md §9.5).
 var StepTimeout = 10 * time.Second
@@ -88,11 +85,11 @@ func SplitCommand(s string) ([]string, error) {
 	return words, nil
 }
 
-// ReplayHost replays j by running the host command (SPEC.md §9.1) and serving
+// RunHost replays j by running the host command (SPEC.md §9.1) and serving
 // its reads from the journal: the driver side of the host protocol. It returns
 // an error if the replay cannot run, including a host that fails to start, exits
 // before it is ready, or breaks the protocol.
-func ReplayHost(j *journal.Journal, command string) (*Result, error) {
+func RunHost(j *journal.Journal, command string) (*Result, error) {
 	words, err := SplitCommand(command)
 	if err != nil {
 		return nil, err
@@ -106,7 +103,7 @@ func ReplayHost(j *journal.Journal, command string) (*Result, error) {
 		genesis = g.Facts
 	}
 	var h *host
-	res, err := replayJournal(j, func(snapshot []byte) (Handler, error) {
+	res, err := replayJournal(j, func(snapshot []byte) (kavach.Handler, error) {
 		var err error
 		if h, err = startHost(words, j.Header.Meta.Service, snapshot, genesis); err != nil {
 			return nil, err
@@ -194,7 +191,7 @@ var (
 )
 
 func startHost(words []string, service string, snapshot []byte, genesis []journal.Fact) (*host, error) {
-	cmd := exec.Command(words[0], append(append([]string{}, words[1:]...), HostCommand)...)
+	cmd := exec.Command(words[0], append(append([]string{}, words[1:]...), kavach.HostCommand)...)
 	cmd.Env = hostEnviron(genesis)
 	h := &host{cmd: cmd, quit: make(chan struct{}), lines: make(chan []byte), stderr: &tail{}}
 	cmd.Stderr = h.stderr
@@ -259,7 +256,7 @@ func (h *host) beforeReady(err error) error {
 		return fmt.Errorf("host did not send ready within %s", StepTimeout)
 	}
 	if errors.Is(err, errHostGone) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed) {
-		return fmt.Errorf("host exited before ready (%s)%s; does the command act as a host when run with %s?", h.exitStatus(), h.stderr.suffix(), HostCommand)
+		return fmt.Errorf("host exited before ready (%s)%s; does the command act as a host when run with %s?", h.exitStatus(), h.stderr.suffix(), kavach.HostCommand)
 	}
 	return err
 }
@@ -329,7 +326,7 @@ func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 // Handle sends the input to the host as a step and serves its requests from
 // env, which must be the replay's. Nondeterminism ends the step with an abort
 // (SPEC.md §9.4) and is re-raised.
-func (h *host) Handle(env Env, in Input) error {
+func (h *host) Handle(env kavach.Env, in kavach.Input) error {
 	h.failedInvariant = ""
 	renv := env.(*replayEnv)
 	deadline := time.Now().Add(StepTimeout)
@@ -457,10 +454,10 @@ func (h *host) crashDetail() string {
 
 // Invariants reports the invariant that failed after the last step, if any,
 // among those the host declared.
-func (h *host) Invariants() []Invariant {
-	var out []Invariant
+func (h *host) Invariants() []kavach.Invariant {
+	var out []kavach.Invariant
 	for _, name := range h.invariants {
-		out = append(out, Invariant{name, func() error {
+		out = append(out, kavach.Invariant{Name: name, Check: func() error {
 			if name != h.failedInvariant {
 				return nil
 			}

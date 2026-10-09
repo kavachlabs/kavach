@@ -2,6 +2,7 @@ package kavach
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,7 +150,7 @@ func (s *session) step(h Handler, m driverMsg) {
 	case herr != nil:
 		fail("error", herr.Error(), nil)
 	default:
-		if name, ierr := checkInvariants(h); ierr != nil {
+		if name, ierr := CheckInvariants(h); ierr != nil {
 			fail("invariant", name, []byte(ierr.Error()))
 		}
 	}
@@ -218,3 +219,9 @@ func (e *hostEnv) Emit(sink string, data []byte) {
 	}
 	e.s.send(map[string]any{"t": "emit", "sink": sink, "data": b64(data), "scope": "remote"})
 }
+
+// HostCommand is the last argument that makes a program act as a host
+// (SPEC.md §9.1).
+const HostCommand = "kavach-host"
+
+func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }

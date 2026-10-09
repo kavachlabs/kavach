@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/bench"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 var bug, mode = "", "buggy"

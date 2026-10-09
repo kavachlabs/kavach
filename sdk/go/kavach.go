@@ -93,7 +93,9 @@ type Journal interface {
 
 var _ Journal = (*journal.File)(nil)
 
-func checkInvariants(h Handler) (name string, err error) {
+// CheckInvariants runs h's invariants, if it is a Checker, and returns the
+// name and error of the first that fails.
+func CheckInvariants(h Handler) (name string, err error) {
 	c, ok := h.(Checker)
 	if !ok {
 		return "", nil

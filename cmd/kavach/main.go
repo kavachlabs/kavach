@@ -15,8 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // Exit codes.
@@ -304,7 +305,7 @@ func writeJSON(stdout, stderr io.Writer, v any) int {
 }
 
 // replayWith replays the fixture at path through the host command bin.
-func replayWith(bin, fixture string) (*kavach.Result, time.Duration, error) {
+func replayWith(bin, fixture string) (*replay.Result, time.Duration, error) {
 	if bin == "" {
 		return nil, 0, errors.New("no host command: pass --bin or set KAVACH_BIN")
 	}
@@ -313,7 +314,7 @@ func replayWith(bin, fixture string) (*kavach.Result, time.Duration, error) {
 		return nil, 0, err
 	}
 	start := time.Now()
-	res, err := kavach.ReplayHost(j, bin)
+	res, err := replay.RunHost(j, bin)
 	return res, time.Since(start), err
 }
 
@@ -361,7 +362,7 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		}
 		printEnvironment(u, stdout, res)
 		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms (including process start)", ms(wall)), ansiYellow))
-		if u.color && res.Status == kavach.StatusStillFailing {
+		if u.color && res.Status == replay.StatusStillFailing {
 			fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: fix the handler, build it, then run kavach diff %s --old %s --new <new-binary>", path, *bin), ansiDim))
 		}
 	}
@@ -373,7 +374,7 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 
 // printEnvironment shows how the replay's environment differs from production's
 // and when production's environment changed (SPEC.md §6.2).
-func printEnvironment(u ui, stdout io.Writer, res *kavach.Result) {
+func printEnvironment(u ui, stdout io.Writer, res *replay.Result) {
 	const shown = 10
 	if n := len(res.Drift); n > 0 {
 		fmt.Fprintf(stdout, "%s%d facts differ from the recorded environment\n", u.label("drift", 10), n)
@@ -392,7 +393,7 @@ func printEnvironment(u ui, stdout io.Writer, res *kavach.Result) {
 	}
 }
 
-func synthesized(res *kavach.Result) int {
+func synthesized(res *replay.Result) int {
 	n := 0
 	for _, s := range res.Steps {
 		n += s.Synthesized
@@ -406,7 +407,7 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("diff", stderr)
 	oldBin := fs.String("old", "", "host command for the code that failed")
 	newBin := fs.String("new", "", "host command for the candidate fix")
-	minVariants := fs.Int("variants", kavach.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
+	minVariants := fs.Int("variants", replay.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
 	keep := fs.String("keep", "", "directory to save failing variants in (default: a new temporary directory)")
 	asJSON := fs.Bool("json", false, "print the verification as JSON")
 	pos, err := parse(fs, args)
@@ -475,11 +476,11 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		fmt.Fprintf(stdout, "%s%s\n", u.label("verdict", 10), u.verdict(v.Status, v.String()))
-		if v.Status == kavach.StatusVariantFailed || v.Status == kavach.StatusUnverified {
+		if v.Status == replay.StatusVariantFailed || v.Status == replay.StatusUnverified {
 			fmt.Fprintf(stdout, "          %s\n", u.paint(v.Detail, verdictColor(v.Status)))
 		}
 		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms for %d replays", ms(wall), replays(v)), ansiYellow))
-		if u.color && v.Status == kavach.StatusVariantFailed {
+		if u.color && v.Status == replay.StatusVariantFailed {
 			if f := saved[v.Variant]; f != "" {
 				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --bin %s", f, *newBin), ansiDim))
 			}
@@ -494,9 +495,9 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 // diffOutcome is a verified fix, as kavach diff and the MCP server report it.
 type diffOutcome struct {
 	fixture    string
-	v          *kavach.Verification
+	v          *replay.Verification
 	saved      map[int]string // failing variants written to disk, by ID
-	divergence *kavach.Divergence
+	divergence *replay.Divergence
 	wall       time.Duration
 }
 
@@ -507,12 +508,12 @@ func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*d
 	if err != nil {
 		return nil, err
 	}
-	opts := kavach.VerifyOptions{MinVariants: minVariants, Parallel: runtime.NumCPU()}
+	opts := replay.VerifyOptions{MinVariants: minVariants, Parallel: runtime.NumCPU()}
 	if minVariants == 0 {
 		opts.MinVariants = -1
 	}
 	start := time.Now()
-	v, err := kavach.VerifyWith(j, hostReplayer(oldBin), hostReplayer(newBin), opts)
+	v, err := replay.VerifyWith(j, hostReplayer(oldBin), hostReplayer(newBin), opts)
 	wall := time.Since(start)
 	if err != nil {
 		return nil, err
@@ -521,7 +522,7 @@ func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*d
 	if err != nil {
 		return nil, fmt.Errorf("saving failing variants: %w", err)
 	}
-	return &diffOutcome{fixture, v, saved, kavach.Compare(v.Old, v.New), wall}, nil
+	return &diffOutcome{fixture, v, saved, replay.Compare(v.Old, v.New), wall}, nil
 }
 
 // report is the JSON form of a diff outcome.
@@ -554,13 +555,13 @@ func (o *diffOutcome) report() map[string]any {
 }
 
 // hostReplayer replays journals through a host command.
-func hostReplayer(bin string) kavach.ReplayFunc {
-	return func(j *journal.Journal) (*kavach.Result, error) { return kavach.ReplayHost(j, bin) }
+func hostReplayer(bin string) replay.ReplayFunc {
+	return func(j *journal.Journal) (*replay.Result, error) { return replay.RunHost(j, bin) }
 }
 
 // saveFailingVariants writes the variants the new build failed to dir (a new
 // temporary directory if empty) and returns their paths by variant ID.
-func saveFailingVariants(v *kavach.Verification, fixture, dir string) (map[int]string, error) {
+func saveFailingVariants(v *replay.Verification, fixture, dir string) (map[int]string, error) {
 	saved := map[int]string{}
 	for _, c := range v.Variants {
 		if !c.Reproduces || c.Passed {
@@ -584,7 +585,7 @@ func saveFailingVariants(v *kavach.Verification, fixture, dir string) (map[int]s
 	return saved, nil
 }
 
-func replays(v *kavach.Verification) int {
+func replays(v *replay.Verification) int {
 	return 2 + v.Candidates + v.Reproducing
 }
 

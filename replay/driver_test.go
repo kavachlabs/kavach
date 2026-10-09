@@ -1,4 +1,4 @@
-package kavach_test
+package replay_test
 
 import (
 	"crypto/sha256"
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
 )
 
 func TestSplitCommand(t *testing.T) {
@@ -26,13 +26,13 @@ func TestSplitCommand(t *testing.T) {
 		`x$HOME 'a\b' "a\b" *`:               {"x$HOME", `a\b`, `a\b`, "*"},
 		`java -jar "/opt/my app/ledger.jar"`: {"java", "-jar", "/opt/my app/ledger.jar"},
 	} {
-		got, err := kavach.SplitCommand(in)
+		got, err := replay.SplitCommand(in)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%q: %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{"", "   ", `a 'b`, `a "b`, `a\`} {
-		if got, err := kavach.SplitCommand(in); err == nil {
+		if got, err := replay.SplitCommand(in); err == nil {
 			t.Errorf("%q: %q, want an error", in, got)
 		}
 	}
@@ -61,7 +61,7 @@ func conformanceHost(t *testing.T) string {
 			return
 		}
 		hostBin = filepath.Join(hostDir, "conformance-host")
-		if out, err := exec.Command("go", "build", "-o", hostBin, "./cmd/kavach-conformance-host").CombinedOutput(); err != nil {
+		if out, err := exec.Command("go", "build", "-o", hostBin, "../cmd/kavach-conformance-host").CombinedOutput(); err != nil {
 			hostErr = fmt.Errorf("go build: %v\n%s", err, out)
 		}
 	})
@@ -113,14 +113,14 @@ func TestReplayHostServesReadsAndEnvironment(t *testing.T) {
 		journal.Record{Type: journal.TypeEnvironment, Facts: []journal.Fact{{Key: "host.sessions.u", Form: journal.FactValue, Value: []byte("0")}}},
 		opsInput(`[{"op":"print","text":"not protocol"}]`),
 	)
-	res, err := kavach.ReplayHost(j, conformanceHost(t))
+	res, err := replay.RunHost(j, conformanceHost(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.String() != "ok" || len(res.Steps) != 2 {
 		t.Fatalf("%v: %s %+v", res, res.Detail, res.Steps)
 	}
-	drift := map[string]kavach.Drift{}
+	drift := map[string]replay.Drift{}
 	for _, d := range res.Drift {
 		drift[d.Key] = d
 	}
@@ -157,7 +157,7 @@ func TestReplayHostStatuses(t *testing.T) {
 		"diverged":      {[]journal.Record{opsInput(`[{"op":"emit","sink":"s","data":"x"}]`), trace("y")}, "diverged@1"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			res, err := kavach.ReplayHost(hostJournal(nil, c.recs...), bin)
+			res, err := replay.RunHost(hostJournal(nil, c.recs...), bin)
 			if err != nil || res.String() != c.want {
 				t.Fatalf("%v, %v; want %s (%s)", res, err, c.want, res.Detail)
 			}
@@ -167,7 +167,7 @@ func TestReplayHostStatuses(t *testing.T) {
 	// A failure recorded for a step is replayed leniently: the fixed handler
 	// reads past the records, and the step passes.
 	j := hostJournal(nil, opsInput(`[{"op":"clock"},{"op":"clock"}]`), journal.Record{Type: journal.TypeClock, UnixNanos: 7}, marker(journal.MarkerPanic, "x"))
-	res, err := kavach.ReplayHost(j, bin)
+	res, err := replay.RunHost(j, bin)
 	if err != nil || res.String() != "fixed" || res.Steps[0].Synthesized != 1 {
 		t.Fatalf("%v, %v", res, err)
 	}
@@ -179,20 +179,20 @@ func script(body string) string { return "sh -c '" + body + "'" }
 const ready = `echo "{\"t\":\"ready\",\"protocol\":1,\"invariants\":[],\"environment\":{}}"`
 
 func TestReplayHostFailures(t *testing.T) {
-	old := kavach.StepTimeout
-	kavach.StepTimeout = 500 * time.Millisecond
-	defer func() { kavach.StepTimeout = old }()
+	old := replay.StepTimeout
+	replay.StepTimeout = 500 * time.Millisecond
+	defer func() { replay.StepTimeout = old }()
 	j := hostJournal(nil, opsInput(`[]`), marker(journal.MarkerCrash, ""))
 
 	// A host that exits during a step crashed.
-	res, err := kavach.ReplayHost(j, script("read hello; "+ready+"; read step; echo oops >&2; exit 3"))
+	res, err := replay.RunHost(j, script("read hello; "+ready+"; read step; echo oops >&2; exit 3"))
 	if err != nil || res.String() != "still_failing@1" || !strings.Contains(res.Steps[0].Crash, "exit status 3): oops") {
 		t.Fatalf("%v, %v: %+v", res, err, res.Steps)
 	}
 
 	// A step that takes too long fails and the host is killed.
 	start := time.Now()
-	res, err = kavach.ReplayHost(j, script("read hello; "+ready+"; read step; sleep 30"))
+	res, err = replay.RunHost(j, script("read hello; "+ready+"; read step; sleep 30"))
 	if err != nil || res.String() != "still_failing@1" || !strings.Contains(res.Detail, "within") || time.Since(start) > 10*time.Second {
 		t.Fatalf("%v, %v: %s", res, err, res.Detail)
 	}
@@ -207,7 +207,7 @@ func TestReplayHostFailures(t *testing.T) {
 		"bad syntax":         {"a 'b", "unterminated"},
 		"bad step message":   {script("read hello; " + ready + "; read step; " + `echo "{\"t\":\"ready\"}"`), `"ready" during a step`},
 	} {
-		if res, err := kavach.ReplayHost(j, c.cmd); err == nil || !strings.Contains(err.Error(), c.want) {
+		if res, err := replay.RunHost(j, c.cmd); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, %v; want an error with %q", name, res, err, c.want)
 		}
 	}

@@ -1,12 +1,13 @@
-package kavach_test
+package replay_test
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // quoter queries a gateway and a config value for every input. For the input
@@ -85,11 +86,11 @@ func TestGatewayAndConfigAreRecordedAndReplayed(t *testing.T) {
 		t.Fatalf("recorded %d gateway and %d config records", gw, cfg)
 	}
 
-	res, err := kavach.Replay(j, func() kavach.Handler { return &quoter{pair: "eur", reject: true} })
+	res, err := replay.Run(j, func() kavach.Handler { return &quoter{pair: "eur", reject: true} })
 	if err != nil || res.String() != "still_failing@9" {
 		t.Fatalf("%v %v", res, err)
 	}
-	res, err = kavach.Replay(j, func() kavach.Handler { return &quoter{pair: "eur"} })
+	res, err = replay.Run(j, func() kavach.Handler { return &quoter{pair: "eur"} })
 	if err != nil || res.String() != "fixed" || res.Steps[2].Synthesized != 0 {
 		t.Fatalf("%v %v %+v", res, err, res.Steps)
 	}
@@ -97,8 +98,8 @@ func TestGatewayAndConfigAreRecordedAndReplayed(t *testing.T) {
 
 func TestChangedRequestIsNondeterministic(t *testing.T) {
 	j := recordQuotes(t, &quoter{pair: "eur"})
-	res, err := kavach.Replay(j, func() kavach.Handler { return &quoter{pair: "gbp"} })
-	if err != nil || res.Status != kavach.StatusNondeterministic || !strings.Contains(res.Detail, "queried fx") {
+	res, err := replay.Run(j, func() kavach.Handler { return &quoter{pair: "gbp"} })
+	if err != nil || res.Status != replay.StatusNondeterministic || !strings.Contains(res.Detail, "queried fx") {
 		t.Fatalf("%v %v", res, err)
 	}
 }
@@ -106,10 +107,10 @@ func TestChangedRequestIsNondeterministic(t *testing.T) {
 func TestLenientStepSynthesizesReads(t *testing.T) {
 	j := recordQuotes(t, &quoter{pair: "eur", reject: true})
 	j.Records[0].Facts = append(j.Records[0].Facts, journal.Fact{Key: "flag.beta", Form: journal.FactValue, Value: []byte("yes")})
-	replay := func(more func(kavach.Env) []byte) kavach.StepResult {
+	replayStep := func(more func(kavach.Env) []byte) replay.StepResult {
 		t.Helper()
-		res, err := kavach.Replay(j, func() kavach.Handler { return &quoter{pair: "eur", more: more} })
-		if err != nil || res.Status != kavach.StatusFixed {
+		res, err := replay.Run(j, func() kavach.Handler { return &quoter{pair: "eur", more: more} })
+		if err != nil || res.Status != replay.StatusFixed {
 			t.Fatalf("%v %v", res, err)
 		}
 		return res.Steps[2]
@@ -117,13 +118,13 @@ func TestLenientStepSynthesizesReads(t *testing.T) {
 
 	// A query whose request differs is served by the step's unread record and
 	// counted.
-	res, err := kavach.Replay(j, func() kavach.Handler { return &quoter{pair: "eur", last: "gbp"} })
+	res, err := replay.Run(j, func() kavach.Handler { return &quoter{pair: "eur", last: "gbp"} })
 	if err != nil || res.String() != "fixed" || res.Steps[2].Synthesized != 1 || string(res.Steps[2].Outputs[0].Data) != "rate:eurcon" {
 		t.Fatalf("%v %v %+v", res, err, res.Steps[2])
 	}
 
 	// With no record left, a query fails.
-	st := replay(func(env kavach.Env) []byte {
+	st := replayStep(func(env kavach.Env) []byte {
 		a, _ := env.Query("fx", []byte("zzz"))
 		_, err := env.Query("fx", []byte("zzz"))
 		return append(a, err.Error()...)
@@ -133,7 +134,7 @@ func TestLenientStepSynthesizesReads(t *testing.T) {
 	}
 
 	// A config key the step has no record of is served from the environment.
-	st = replay(func(env kavach.Env) []byte {
+	st = replayStep(func(env kavach.Env) []byte {
 		v, _ := env.Config("beta")
 		w, ok := env.Config("nothing")
 		return append(append(v, w...), boolByte(ok))

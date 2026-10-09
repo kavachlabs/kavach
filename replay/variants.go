@@ -1,4 +1,4 @@
-package kavach
+package replay
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/journal"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // MaxCandidates bounds the number of variants generated from one incident.
@@ -125,7 +126,7 @@ func buildVariant(meta journal.Meta, snap, env *journal.Record, steps []vstep, i
 			add(r)
 		}
 	}
-	meta.Producer = "kavach-go/" + Version
+	meta.Producer = "kavach-go/" + kavach.Version
 	meta.Variant = &info
 	meta.Run, meta.Segment, meta.CutFrom = "", nil, nil
 	return &journal.Journal{Header: journal.Header{Major: journal.Major, Minor: journal.Minor, Meta: meta}, Records: recs}

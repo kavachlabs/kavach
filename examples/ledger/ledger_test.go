@@ -10,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kavachlabs/kavach"
 	"github.com/kavachlabs/kavach/journal"
-	"github.com/kavachlabs/kavach/kavachtest"
+	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
+	"github.com/kavachlabs/kavach/sdk/go/kavachtest"
 )
 
 const fixture = "testdata/null-amount.kavach"
@@ -22,7 +23,7 @@ func newHandler() kavach.Handler { return NewLedger() }
 // TestNullAmountFixture replays the captured production crash. With the planted
 // bug it must still fail; built with -tags ledgerfix it must be fixed.
 func TestNullAmountFixture(t *testing.T) {
-	res, err := kavach.ReplayFile(fixture, newHandler)
+	res, err := replay.RunFile(fixture, newHandler)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestDeterminism(t *testing.T) {
 	}
 	var first []byte
 	for i := 0; i < 1000; i++ {
-		res, err := kavach.Replay(j, newHandler)
+		res, err := replay.Run(j, newHandler)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +236,7 @@ func TestDeterminism(t *testing.T) {
 func BenchmarkReplayFixture(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := kavach.ReplayFile(fixture, newHandler); err != nil {
+		if _, err := replay.RunFile(fixture, newHandler); err != nil {
 			b.Fatal(err)
 		}
 	}

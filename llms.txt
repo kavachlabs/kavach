@@ -19,7 +19,8 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 
 - [examples/ledger](examples/ledger): the demo service, with a fixture (`testdata/null-amount.kavach`), the planted bug, a correct fix (`-tags ledgerfix`) and a too-narrow one (`-tags ledgerpartialfix`).
 - [bench](bench): ten planted bugs, each with a correct and a too-narrow fix, run with `go test ./bench -v`.
-- [kavachtest](kavachtest): `kavachtest.Run` runs captured fixtures as Go tests.
+- [sdk](sdk): the SDKs, one per language; the Go SDK is [sdk/go](sdk/go), and [sdk/go/kavachtest](sdk/go/kavachtest) runs captured fixtures as Go tests.
+- [replay](replay): the replay engine, host-protocol driver and fix verification behind the CLI.
 - [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`) and the MCP server (`kavach mcp`).
 
 ## Optional
