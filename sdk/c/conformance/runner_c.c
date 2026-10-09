@@ -1,5 +1,5 @@
 /* Recorder-case runner (spec/recorder/sdk/README.md) for the C API.
- *   runner-c <case.json> <fake_recorder.py> <result.json> */
+ *   runner-c <case.json> <fake_recorder.py> <result.json> [pipe|ring] */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,8 +77,8 @@ static size_t flags_fn(void* user, const kavach_flag** out) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    fprintf(stderr, "usage: %s case.json fake_recorder.py result.json\n", argv[0]);
+  if (argc != 4 && argc != 5) {
+    fprintf(stderr, "usage: %s case.json fake_recorder.py result.json [pipe|ring]\n", argv[0]);
     return 2;
   }
   char err[256];
@@ -106,6 +106,7 @@ int main(int argc, char** argv) {
   o.start_from_snapshot = c->start_snapshot;
   o.no_segments = !c->snapshots;
   o.required = 1;
+  o.no_ring = argc == 5 && strcmp(argv[4], "pipe") == 0;
   o.gateways = &gw;
   o.n_gateways = 1;
   o.config = config;

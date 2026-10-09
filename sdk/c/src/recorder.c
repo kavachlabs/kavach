@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -37,6 +39,16 @@ extern char** environ;
 
 #define FLAG_CRITICAL 1
 
+/* The ring's header words are little-endian u64s (SPEC 10.7); the atomics below are host-endian. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "the shared-memory ring needs a little-endian host"
+#endif
+#define RING_HEADER 256
+#define RING_OFF_WRITE 64
+#define RING_OFF_READ 128
+#define RING_MIN (64u << 10)
+#define RING_DEFAULT (8u << 20)
+
 typedef struct out_item {
   char* sink;
   uint8_t* data;
@@ -53,6 +65,14 @@ struct kavach_recorder {
 
   pid_t pid;
   int in_fd, out_fd;
+
+  /* shared-memory ring (SPEC 10.7); ring_mem is NULL on the pipe transport */
+  uint8_t* ring_mem;
+  size_t ring_map_len;
+  uint64_t ring_cap, ring_wpos;
+  _Atomic uint64_t *ring_w, *ring_r;
+  int use_ring; /* set once `open` has gone down the pipe */
+  int belled;   /* the doorbell rang since the ring was last under half full */
   pthread_t thr;
   int thr_started;
 
@@ -150,6 +170,53 @@ static int pipe_write(kavach_recorder* r, const void* p, size_t n) {
   return 0;
 }
 
+/* Wakes a recorder that reads the ring: one byte on its standard input. */
+static void ring_bell(kavach_recorder* r) {
+  static const uint8_t b = 1;
+  pipe_write(r, &b, 1);
+}
+
+/* Publishes whole frames into the ring. A frame larger than the ring goes in
+ * pieces as the recorder frees space; a full ring rings the bell and waits, and
+ * the control thread ends the wait if the recorder exits. */
+static int ring_publish(kavach_recorder* r, const uint8_t* p, size_t n) {
+  while (n > 0) {
+    if (!atomic_load(&r->active)) return -1;
+    uint64_t used = r->ring_wpos - atomic_load_explicit(r->ring_r, memory_order_acquire);
+    uint64_t room = r->ring_cap - used;
+    size_t k = n;
+    if (k > room) k = n <= r->ring_cap ? 0 : (size_t)room;
+    if (k == 0) {
+      ring_bell(r);
+      struct timespec nap = {0, 20 * 1000L};
+      nanosleep(&nap, NULL);
+      continue;
+    }
+    size_t off = (size_t)(r->ring_wpos & (r->ring_cap - 1));
+    size_t first = r->ring_cap - off < k ? (size_t)(r->ring_cap - off) : k;
+    memcpy(r->ring_mem + RING_HEADER + off, p, first);
+    memcpy(r->ring_mem + RING_HEADER, p + first, k - first);
+    r->ring_wpos += k;
+    atomic_store_explicit(r->ring_w, r->ring_wpos, memory_order_release);
+    used += k;
+    if (used > r->ring_cap / 2) {
+      if (!r->belled) {
+        r->belled = 1;
+        ring_bell(r);
+      }
+    } else {
+      r->belled = 0;
+    }
+    p += k;
+    n -= k;
+  }
+  return 0;
+}
+
+static int publish(kavach_recorder* r, const void* p, size_t n) {
+  return r->use_ring ? ring_publish(r, p, n) : pipe_write(r, p, n);
+}
+
 /* Appends frame = uvarint(1+len) kind payload to b. */
 static void put_frame(kbuf* b, uint8_t kind, const void* payload, size_t len) {
   kb_uvarint(b, 1 + len);
@@ -164,7 +231,9 @@ static int send_frame(kavach_recorder* r, uint8_t kind, const void* payload, siz
     stop_recording(r, "out of memory");
     return -1;
   }
-  return pipe_write(r, r->fb.p, r->fb.len);
+  int rc = publish(r, r->fb.p, r->fb.len);
+  if (rc == 0 && r->use_ring && (kind == FRAME_FLUSH || kind == FRAME_CLOSE)) ring_bell(r);
+  return rc;
 }
 
 /* Appends a record frame to the step buffer. r->tmp holds the payload. */
@@ -412,14 +481,65 @@ static void deadline(struct timespec* ts, int ms) {
 
 /* ---------------- starting the recorder ---------------- */
 
+/* Moves fd above 3, which the recorder's ring takes in the child. */
 static int fd_high(int fd) {
-  if (fd > 2) return fd;
-  int n = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+  if (fd > 3) return fd;
+  int n = fcntl(fd, F_DUPFD_CLOEXEC, 4);
   if (n >= 0) close(fd);
   return n;
 }
 
-static int spawn_recorder(kavach_recorder* r, const char* const* argv_opt, char* errbuf, size_t errcap) {
+static void ring_release(kavach_recorder* r) {
+  if (r->ring_mem) munmap(r->ring_mem, r->ring_map_len);
+  r->ring_mem = NULL;
+  r->use_ring = 0;
+}
+
+/* Creates the unlinked, mapped ring file and returns its descriptor (above 3),
+ * or -1 with a reason in why. */
+static int ring_create(kavach_recorder* r, uint64_t cap, char* why, size_t whycap) {
+  if (cap < RING_MIN || (cap & (cap - 1))) {
+    snprintf(why, whycap, "ring_bytes must be a power of two of at least 64 KiB");
+    return -1;
+  }
+  struct stat st;
+  const char* dir = stat("/dev/shm", &st) == 0 && S_ISDIR(st.st_mode) ? "/dev/shm" : getenv("TMPDIR");
+  if (!dir || !*dir) dir = "/tmp";
+  char path[1024];
+  snprintf(path, sizeof path, "%s/kavach-ring-XXXXXX", dir);
+  int fd = mkstemp(path);
+  if (fd < 0) {
+    snprintf(why, whycap, "mkstemp %s: %s", path, strerror(errno));
+    return -1;
+  }
+  unlink(path);
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+  size_t len = RING_HEADER + (size_t)cap;
+  void* mem = ftruncate(fd, (off_t)len) == 0 ? mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+                                              : MAP_FAILED;
+  if (mem == MAP_FAILED) {
+    snprintf(why, whycap, "cannot map the ring: %s", strerror(errno));
+    close(fd);
+    return -1;
+  }
+  fd = fd_high(fd);
+  if (fd < 0) {
+    munmap(mem, len);
+    snprintf(why, whycap, "cannot allocate file descriptors");
+    return -1;
+  }
+  memcpy(mem, "KVRING01", 8);
+  memcpy((char*)mem + 8, &cap, 8);
+  r->ring_mem = mem;
+  r->ring_map_len = len;
+  r->ring_cap = cap;
+  r->ring_w = (_Atomic uint64_t*)((char*)mem + RING_OFF_WRITE);
+  r->ring_r = (_Atomic uint64_t*)((char*)mem + RING_OFF_READ);
+  return fd;
+}
+
+static int spawn_recorder(kavach_recorder* r, const char* const* argv_opt, int ring_fd, char* errbuf,
+                          size_t errcap) {
   const char* const* argv = argv_opt;
   const char* single[2] = {NULL, NULL};
   if (!argv || !argv[0]) {
@@ -459,6 +579,7 @@ static int spawn_recorder(kavach_recorder* r, const char* const* argv_opt, char*
   posix_spawn_file_actions_init(&fa);
   posix_spawn_file_actions_adddup2(&fa, in_p[0], 0);
   posix_spawn_file_actions_adddup2(&fa, out_p[1], 1);
+  if (ring_fd >= 0) posix_spawn_file_actions_adddup2(&fa, ring_fd, 3);
   posix_spawn_file_actions_addclose(&fa, in_p[0]);
   posix_spawn_file_actions_addclose(&fa, out_p[1]);
   pid_t pid;
@@ -512,6 +633,7 @@ static int send_open(kavach_recorder* r, const kavach_recorder_options* o) {
     kb_printf(&j, ",\"segment_seconds\":%llu", (unsigned long long)o->segment_seconds);
   if (o->retain_segments)
     kb_printf(&j, ",\"retain_segments\":%llu", (unsigned long long)o->retain_segments);
+  if (r->ring_mem) kb_printf(&j, ",\"ring\":%llu", (unsigned long long)r->ring_cap);
   if (o->secret_keys && o->secret_keys[0]) {
     kb_puts(&j, ",\"secret_keys\":[");
     for (size_t i = 0; o->secret_keys[i]; i++) {
@@ -523,6 +645,7 @@ static int send_open(kavach_recorder* r, const kavach_recorder_options* o) {
   kb_putc(&j, '}');
   int rc = j.oom ? -1 : send_frame(r, FRAME_OPEN, j.p, j.len);
   kb_free(&j);
+  r->use_ring = rc == 0 && r->ring_mem; /* every later frame goes into the ring */
   return rc;
 }
 
@@ -564,9 +687,11 @@ static void teardown(kavach_recorder* r) {
   }
   if (r->out_fd >= 0) close(r->out_fd);
   r->out_fd = -1;
+  ring_release(r);
 }
 
 static void destroy(kavach_recorder* r) {
+  ring_release(r);
   clear_outs(r);
   free(r->outs);
   kb_free(&r->sb);
@@ -634,7 +759,14 @@ int kavach_recorder_new(const kavach_handler* h, const kavach_recorder_options* 
 
   char why[320];
   why[0] = 0;
-  if (spawn_recorder(r, o->recorder_argv, why, sizeof why) != 0) goto unavailable;
+  int ring_fd = -1;
+  if (!o->no_ring) {
+    ring_fd = ring_create(r, o->ring_bytes ? o->ring_bytes : RING_DEFAULT, why, sizeof why);
+    if (ring_fd < 0) rec_logf(r, "no shared-memory ring, recording over the pipe: %s", why);
+  }
+  int spawned = spawn_recorder(r, o->recorder_argv, ring_fd, why, sizeof why);
+  if (ring_fd >= 0) close(ring_fd);
+  if (spawned != 0) goto unavailable;
   atomic_store(&r->active, 1);
   if (pthread_create(&r->thr, NULL, control_main, r) != 0) {
     snprintf(why, sizeof why, "cannot start the control thread");
@@ -675,6 +807,7 @@ unavailable_started:
   if (r->pid > 0) waitpid(r->pid, NULL, 0);
   r->pid = -1;
 unavailable:
+  ring_release(r);
   if (o->required) {
     char msg[400];
     snprintf(msg, sizeof msg, "kavach: recording is required but unavailable: %s", why);
@@ -724,7 +857,7 @@ int kavach_recorder_step(kavach_recorder* r, const kavach_input* in, kavach_resu
     kb_put(&r->fb, r->tmp.p, r->tmp.len);
     if (r->fb.oom) {
       stop_recording(r, "out of memory");
-    } else if (pipe_write(r, r->fb.p, r->fb.len) == 0) {
+    } else if (publish(r, r->fb.p, r->fb.len) == 0) {
       r->rec_step = 1; /* the input is on record before the handler runs */
     }
   }
@@ -754,7 +887,7 @@ int kavach_recorder_step(kavach_recorder* r, const kavach_input* in, kavach_resu
     if (r->sb.oom)
       stop_recording(r, "out of memory");
     else
-      pipe_write(r, r->sb.p, r->sb.len);
+      publish(r, r->sb.p, r->sb.len);
     r->rec_step = 0;
   }
   k_env_reset(&r->env);
