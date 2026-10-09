@@ -6,8 +6,7 @@
 #                       the 18 host transcripts
 #   ./build.sh clean    remove build/
 #
-# KAVACH_SPEC_DIR points at the repository's spec/ directory (default: the main
-# checkout this SDK was developed against).
+# KAVACH_SPEC_DIR points at the repository's spec/ directory (default: ../../spec).
 set -euo pipefail
 cd "$(dirname "$0")"
 

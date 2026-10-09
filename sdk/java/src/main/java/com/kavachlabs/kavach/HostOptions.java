@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
-/** Options of a replay host. Sandbox mode (SPEC §6.3) is not supported. */
+/** Options of a replay host. */
 public final class HostOptions {
     Gateways gateways = new Gateways();
     List<String> recorderCommand;

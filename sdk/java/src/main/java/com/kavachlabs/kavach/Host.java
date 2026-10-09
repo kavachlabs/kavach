@@ -17,8 +17,8 @@ import java.util.function.Supplier;
 
 /**
  * The host side of the replay protocol (SPEC §9): runs a handler one step at a
- * time while the driver serves every read and captures every output. Sandbox
- * mode (§6.3) is not supported. Most programs use {@link Kavach#maybeHost}.
+ * time while the driver serves every read and captures every output. Most
+ * programs use {@link Kavach#maybeHost}.
  */
 public final class Host {
     private static final int PROTOCOL = 1;
@@ -123,8 +123,6 @@ public final class Host {
         return env;
     }
 
-    // -- transport ----------------------------------------------------------------
-
     private void send(Map<String, Object> msg) {
         byte[] line = (Json.write(msg) + "\n").getBytes(StandardCharsets.UTF_8);
         try {
@@ -185,8 +183,6 @@ public final class Host {
         return m;
     }
 
-    // -- loop ------------------------------------------------------------------------
-
     /** Serves the driver until {@code end} or EOF. Returns the exit status. */
     public int run() {
         Handler handler = null;
@@ -210,9 +206,7 @@ public final class Host {
                     case "end" -> {
                         return 0;
                     }
-                    case "abort" -> {
-                        // a stray abort between steps needs no answer
-                    }
+                    case "abort" -> { } // a stray abort between steps needs no answer
                     default -> throw new Fatal("unexpected message '" + t + "'");
                 }
             }
@@ -232,8 +226,7 @@ public final class Host {
         if (!Long.valueOf(PROTOCOL).equals(m.get("protocol"))) {
             throw new Fatal("unsupported protocol " + m.get("protocol"));
         }
-        Object mode = m.get("mode");
-        if ("sandbox".equals(mode)) {
+        if ("sandbox".equals(m.get("mode"))) {
             throw new Fatal("sandbox mode not supported");
         }
         Handler handler;
@@ -296,8 +289,6 @@ public final class Host {
         send(done);
     }
 
-    // -- the Env handed to the handler ---------------------------------------------------
-
     private final class HostEnv implements Env {
         @Override
         public long nowNanos() {
@@ -322,9 +313,6 @@ public final class Host {
             Gateway gw = options.gateways.lookup(gateway);
             Map<String, Object> ans = request(
                     msg("gateway", "gateway", gateway, "request", b64(request), "scope", gw.scope().wire()), "gateway");
-            if (Boolean.TRUE.equals(ans.get("live"))) {
-                throw new Fatal("live gateway queries (sandbox mode) are not supported");
-            }
             Object err = ans.get("error");
             if (err instanceof String e && !e.isEmpty()) {
                 throw new GatewayException(e);
