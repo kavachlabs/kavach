@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kavach"
+version = "0.1.0"
+description = "Python SDK for Kavach: record production failures of a handler and replay them to verify fixes."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+license = { text = "Apache-2.0" }
+
+[tool.setuptools.packages.find]
+include = ["kavach*"]
