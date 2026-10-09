@@ -58,6 +58,10 @@ public final class AllTests {
         test("recorder: missing recorder does not fail the step", AllTests::recorderMissing);
         test("recorder: required makes construction fail", AllTests::recorderRequired);
         test("recorder: a recorder that dies does not fail the step", AllTests::recorderDies);
+        test("ring: a service killed after its input leaves a crash fixture", AllTests::killedService);
+        test("ring: frames larger than the ring and a ring that keeps filling lose nothing", AllTests::smallRing);
+        test("ring: a recorder that stops reading a full ring does not hang the service", AllTests::deadRecorderFullRing);
+        test("ring: the file is gone once the recorder is", AllTests::ringFileRemoved);
         System.out.println(failures == 0 ? "all tests passed" : failures + " test(s) failed");
         System.exit(failures == 0 ? 0 : 1);
     }
@@ -293,6 +297,117 @@ public final class AllTests {
                 }
             }
             check(!r.recording(), "recording stopped");
+        }
+    }
+
+    /** The records of a journal or fixture, as {@code kavach inspect --json} prints them. */
+    static List<?> inspect(String file) throws Exception {
+        Process p = new ProcessBuilder(Tools.kavach(), "inspect", "--json", file).redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        eq(0, p.waitFor(), "kavach inspect");
+        return (List<?>) ((Map<?, ?>) Json.parse(out)).get("records");
+    }
+
+    static void killedService() throws Exception {
+        for (String transport : new String[] {"ring", "pipe"}) {
+            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("kavach-killed-");
+            ProcessBuilder pb = new ProcessBuilder(Path_of(System.getProperty("java.home"), "bin", "java"),
+                    "-cp", System.getProperty("java.class.path"), "com.kavachlabs.kavach.KilledService", dir.toString(), transport)
+                    .inheritIO();
+            pb.environment().put("KAVACH_RECORDER", Tools.recorder());
+            Process child = pb.start();
+            eq(137, child.waitFor(), transport + ": the child should die of SIGKILL");
+            // The recorder is no child of this process: it finishes on its own.
+            java.nio.file.Path fixture = null;
+            for (long end = System.nanoTime() + 10_000_000_000L; fixture == null && System.nanoTime() < end; Thread.sleep(20)) {
+                java.io.File[] found = dir.resolve("fixtures").toFile().listFiles((d, n) -> n.endsWith(".kavach"));
+                if (found != null && found.length == 1) {
+                    fixture = found[0].toPath();
+                }
+            }
+            check(fixture != null, transport + ": no fixture was written");
+            List<?> records = inspect(fixture.toString());
+            Map<?, ?> last = (Map<?, ?>) records.get(records.size() - 1);
+            eq("marker", last.get("type"), transport + ": last record");
+            eq("crash", last.get("kind"), transport + ": marker kind");
+            Map<?, ?> in = null;
+            for (Object r : records) {
+                if (r instanceof Map<?, ?> m && "input".equals(m.get("type"))) {
+                    in = m;
+                }
+            }
+            eq(b64("die"), in.get("data"), transport + ": the failing input");
+        }
+    }
+
+    static Recorder.Options realRecorder(java.nio.file.Path dir) throws Exception {
+        return new Recorder.Options().service("small").dir(dir.toString()).recorderCommand(List.of(Tools.recorder())).required(true);
+    }
+
+    static void smallRing() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("kavach-small-");
+        byte[] big = new byte[200 << 10];
+        Arrays.fill(big, (byte) 'b');
+        Handler sink = (env, in) -> env.emit("out", in.data());
+        int steps = 400;
+        String file;
+        try (Recorder r = new Recorder(sink, realRecorder(dir).ringBytes(64 << 10))) {
+            for (int i = 0; i < steps; i++) {
+                r.step(new Input("t", "p", i % 100 == 7 ? big : "small".getBytes(StandardCharsets.UTF_8)));
+            }
+            check(r.flush(true), "flush");
+            file = r.file();
+        }
+        int inputs = 0;
+        int bigs = 0;
+        for (Object o : inspect(file)) {
+            if (o instanceof Map<?, ?> m && "input".equals(m.get("type"))) {
+                inputs++;
+                if (java.util.Base64.getDecoder().decode((String) m.get("data")).length == big.length) {
+                    bigs++;
+                }
+            }
+        }
+        eq(steps, inputs, "inputs in the journal");
+        eq(4, bigs, "large inputs in the journal");
+    }
+
+    static void deadRecorderFullRing() throws Exception {
+        java.util.logging.Logger.getLogger("kavach").setLevel(java.util.logging.Level.OFF);
+        Recorder.Options o = new Recorder.Options().service("dead").dir(java.nio.file.Files.createTempDirectory("kavach-dead-").toString())
+                .recorderCommand(List.of("sleep", "1")).ringBytes(64 << 10);
+        Handler sink = (env, in) -> env.emit("out", in.data());
+        byte[] data = new byte[30 << 10];
+        Thread t = new Thread(() -> {
+            try (Recorder r = new Recorder(sink, o)) {
+                for (int i = 0; i < 20; i++) {
+                    r.step(new Input("t", "p", data));
+                }
+            }
+        });
+        t.start();
+        t.join(15_000);
+        check(!t.isAlive(), "the service is stuck waiting for a recorder that is gone");
+    }
+
+    static void ringFileRemoved() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("kavach-gone-");
+        java.util.Set<String> before = ringFiles();
+        try (Recorder r = new Recorder(new ConformanceHandler(), realRecorder(dir))) {
+            check(r.step(input("[]")).ok(), "step");
+        }
+        eq(before, ringFiles(), "ring files left behind");
+        // A recorder that never starts leaves nothing either.
+        java.util.logging.Logger.getLogger("kavach").setLevel(java.util.logging.Level.OFF);
+        new Recorder(new ConformanceHandler(), new Recorder.Options().service("t").recorderCommand(List.of("/nonexistent/kavach-recorder"))).close();
+        eq(before, ringFiles(), "ring files left behind by a recorder that never started");
+    }
+
+    static java.util.Set<String> ringFiles() throws Exception {
+        java.nio.file.Path shm = java.nio.file.Path.of("/dev/shm");
+        java.nio.file.Path dir = java.nio.file.Files.isDirectory(shm) ? shm : java.nio.file.Path.of(System.getProperty("java.io.tmpdir"));
+        try (var files = java.nio.file.Files.list(dir)) {
+            return files.map(f -> f.getFileName().toString()).filter(n -> n.startsWith("kavach-ring-")).collect(java.util.stream.Collectors.toSet());
         }
     }
 }

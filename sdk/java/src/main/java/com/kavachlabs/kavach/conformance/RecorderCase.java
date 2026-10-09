@@ -93,7 +93,7 @@ public final class RecorderCase {
     }
 
     /** Runs a case; returns the fake recorder's {@code result.json} contents. */
-    public static Map<?, ?> run(Path casePath, Path fakeRecorder) throws IOException {
+    public static Map<?, ?> run(Path casePath, Path fakeRecorder, boolean ring) throws IOException {
         Map<?, ?> kase = (Map<?, ?>) Json.parse(Files.readString(casePath));
         Map<?, ?> open = (Map<?, ?>) kase.get("open");
         ConformanceHandler handler = new ConformanceHandler();
@@ -120,6 +120,7 @@ public final class RecorderCase {
                     .configSource("case")
                     .clockNanos(ans::clock)
                     .randomBytes(ans::rand)
+                    .noRing(!ring)
                     .required(true);
             if (!flags.isEmpty()) {
                 opts.flags(() -> flags);
@@ -170,25 +171,28 @@ public final class RecorderCase {
             System.exit(2);
         }
         int failed = 0;
-        for (Path c : cases) {
-            boolean ok;
-            Object error = null;
-            try {
-                Map<?, ?> result = run(c, fake);
-                ok = Boolean.TRUE.equals(result.get("pass"));
-                error = result.get("error");
-            } catch (Exception e) {
-                ok = false;
-                error = e;
-                e.printStackTrace();
-            }
-            System.out.println((ok ? "PASS  " : "FAIL  ") + c.getFileName());
-            if (!ok) {
-                failed++;
-                System.out.println("  " + error);
+        for (boolean ring : new boolean[] {false, true}) {
+            for (Path c : cases) {
+                boolean ok;
+                Object error = null;
+                try {
+                    Map<?, ?> result = run(c, fake, ring);
+                    ok = Boolean.TRUE.equals(result.get("pass"));
+                    error = result.get("error");
+                } catch (Exception e) {
+                    ok = false;
+                    error = e;
+                    e.printStackTrace();
+                }
+                System.out.println((ok ? "PASS  " : "FAIL  ") + c.getFileName() + (ring ? " (ring)" : " (pipe)"));
+                if (!ok) {
+                    failed++;
+                    System.out.println("  " + error);
+                }
             }
         }
-        System.out.println((cases.size() - failed) + "/" + cases.size() + " recorder cases passed");
+        int total = 2 * cases.size();
+        System.out.println((total - failed) + "/" + total + " recorder cases passed (pipe and ring)");
         System.exit(failed == 0 ? 0 : 1);
     }
 }

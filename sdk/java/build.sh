@@ -4,6 +4,7 @@
 #   ./build.sh          compile the SDK, the conformance mains and the examples
 #   ./build.sh test     build, run the unit tests, the 7 SDK recorder cases and
 #                       the 18 host transcripts
+#   ./build.sh bench    build, then measure step overhead over the pipe and the ring
 #   ./build.sh clean    remove build/
 #
 # KAVACH_SPEC_DIR points at the repository's spec/ directory (default: ../../spec).
@@ -38,6 +39,8 @@ run_tests() {
 case "${1:-build}" in
   build) build ;;
   test) build; run_tests ;;
+  bench) build; "${JAVAC[@]}" -cp "$CLASSES" -d "$OUT/test-classes" $(find src/test -name '*.java')
+         java -cp "$CLASSES:$OUT/test-classes" com.kavachlabs.kavach.Bench ;;
   clean) rm -rf "$OUT" ;;
-  *) echo "usage: $0 [build|test|clean]" >&2; exit 2 ;;
+  *) echo "usage: $0 [build|test|bench|clean]" >&2; exit 2 ;;
 esac

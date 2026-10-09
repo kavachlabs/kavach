@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -66,6 +67,8 @@ public final class Recorder implements AutoCloseable {
         Consumer<Map<String, Object>> onFixture;
         LongSupplier clockNanos;
         IntFunction<byte[]> randomBytes;
+        boolean noRing;
+        int ringBytes = Ring.DEFAULT;
         Duration readyTimeout = Duration.ofSeconds(10);
         Duration closeTimeout = Duration.ofSeconds(10);
 
@@ -197,6 +200,18 @@ public final class Recorder implements AutoCloseable {
             return this;
         }
 
+        /** Carries the record stream over the recorder's pipe instead of a shared-memory ring (SPEC §10.7). */
+        public Options noRing(boolean v) {
+            noRing = v;
+            return this;
+        }
+
+        /** The ring's capacity: a power of two of at least 64 KiB; default 8 MiB. */
+        public Options ringBytes(int v) {
+            ringBytes = v;
+            return this;
+        }
+
         public Options readyTimeout(Duration v) {
             readyTimeout = v;
             return this;
@@ -321,6 +336,8 @@ public final class Recorder implements AutoCloseable {
     private final CountDownLatch ready = new CountDownLatch(1);
     private ByteArrayOutputStream buf; // the open step's frames, step thread only
     private List<Output> outputs = new ArrayList<>();
+    private Ring ring; // null on the pipe transport
+    private boolean belled; // the doorbell rang since the ring was last at most half full
     private Process proc;
     private OutputStream procIn;
     private Thread controlThread;
@@ -342,6 +359,9 @@ public final class Recorder implements AutoCloseable {
         }
         if (options.snapshots != null && options.snapshots && !canSnapshot) {
             throw new IllegalArgumentException("snapshots(true) needs a handler that implements Snapshotter");
+        }
+        if (options.ringBytes < Ring.MIN || Integer.bitCount(options.ringBytes) != 1) {
+            throw new IllegalArgumentException("ringBytes must be a power of two of at least 64 KiB");
         }
         this.handler = handler;
         this.snapshots = options.snapshots != null ? options.snapshots : canSnapshot;
@@ -367,8 +387,9 @@ public final class Recorder implements AutoCloseable {
                 throw new RecorderException(
                         "kavach-recorder not found (set recorderCommand, $KAVACH_RECORDER or put it on PATH)");
             }
+            ring = newRing();
             spawn(cmd);
-            write(Wire.frame(Wire.OPEN, Json.write(openObject()).getBytes(StandardCharsets.UTF_8)));
+            writePipe(Wire.frame(Wire.OPEN, Json.write(openObject()).getBytes(StandardCharsets.UTF_8)));
             Map<String, byte[]> facts = new LinkedHashMap<>();
             facts.put("host.runtime", Kavach.runtime().getBytes(StandardCharsets.UTF_8));
             if (options.flags != null) {
@@ -387,6 +408,7 @@ public final class Recorder implements AutoCloseable {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            releaseRing();
             if (options.required) {
                 kill();
                 if (e instanceof RecorderException re) {
@@ -423,7 +445,30 @@ public final class Recorder implements AutoCloseable {
         if (opt.secretKeys != null && !opt.secretKeys.isEmpty()) {
             o.put("secret_keys", opt.secretKeys);
         }
+        if (ring != null) {
+            o.put("ring", (long) ring.capacity());
+            o.put("ring_path", ring.path());
+        }
         return o;
+    }
+
+    private Ring newRing() {
+        if (opt.noRing) {
+            return null;
+        }
+        try {
+            return Ring.create(opt.ringBytes);
+        } catch (IOException | RuntimeException e) {
+            LOG.warning("kavach: no shared-memory ring, recording over the pipe: " + e);
+            return null;
+        }
+    }
+
+    /** The recorder unlinks the ring file once it has mapped it; this covers one that never did. */
+    private void releaseRing() {
+        if (ring != null) {
+            ring.delete();
+        }
     }
 
     private static void putIfSet(Map<String, Object> o, String key, Object v) {
@@ -554,6 +599,45 @@ public final class Recorder implements AutoCloseable {
         if (!active || data.length == 0) {
             return;
         }
+        if (ring == null) {
+            writePipe(data);
+            return;
+        }
+        int off = 0;
+        while (off < data.length) {
+            int n = ring.tryPublish(data, off, data.length - off);
+            if (n == 0) {
+                // Full: the recorder drains the ring on the doorbell. If it has
+                // exited, the control thread stops recording and ends the wait.
+                bell();
+                while (n == 0 && active && proc.isAlive()) {
+                    LockSupport.parkNanos(20_000);
+                    n = ring.tryPublish(data, off, data.length - off);
+                }
+                if (n == 0) {
+                    if (active) {
+                        fail("the recorder exited unexpectedly");
+                    }
+                    return;
+                }
+            }
+            off += n;
+            boolean over = ring.used() > ring.capacity() / 2;
+            if (over && !belled) {
+                bell();
+            }
+            belled = over;
+        }
+    }
+
+    /** Wakes a recorder that reads the ring (SPEC §10.7). */
+    private void bell() {
+        if (ring != null && active) {
+            writePipe(new byte[] {1});
+        }
+    }
+
+    private void writePipe(byte[] data) {
         try {
             procIn.write(data);
             procIn.flush();
@@ -677,6 +761,7 @@ public final class Recorder implements AutoCloseable {
             }
             target = durable ? ++durableSent : 0;
             write(Wire.flush(durable));
+            bell();
         } finally {
             stepLock.unlock();
         }
@@ -751,11 +836,13 @@ public final class Recorder implements AutoCloseable {
         }
         closed = true;
         if (proc == null) {
+            releaseRing();
             return;
         }
         if (active) {
             closing = true;
             write(Wire.close());
+            bell();
             try {
                 if (!closedAck.await(opt.closeTimeout.toNanos(), TimeUnit.NANOSECONDS)) {
                     LOG.warning("kavach: the recorder did not answer close within " + opt.closeTimeout.toSeconds() + "s");
@@ -779,6 +866,7 @@ public final class Recorder implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        releaseRing();
     }
 
     private final class RecordEnv implements Env {
