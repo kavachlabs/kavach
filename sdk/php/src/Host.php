@@ -146,8 +146,6 @@ final class Host
         exit($code);
     }
 
-    // -- transport --------------------------------------------------------
-
     /** @param array<string, mixed> $msg */
     private function send(array $msg): void
     {
@@ -222,14 +220,6 @@ final class Host
         return Support::resolveGateway($this->gateways, $name);
     }
 
-    /** @internal */
-    public function sendObserved(string $response, string $error): void
-    {
-        $this->send($error !== '' ? ['t' => 'observed', 'error' => $error] : ['t' => 'observed', 'response' => base64_encode($response)]);
-    }
-
-    // -- loop -------------------------------------------------------------
-
     /** Serves the driver until `end` or EOF. Returns the exit status. */
     public function run(): int
     {
@@ -280,7 +270,6 @@ final class Host
         if (($msg['protocol'] ?? null) !== self::PROTOCOL) {
             throw new HostStop('unsupported protocol ' . json_encode($msg['protocol'] ?? null));
         }
-        // Sandbox replay (SPEC 6.3) is not supported by this SDK.
         if (($msg['mode'] ?? 'process') === 'sandbox') {
             throw new HostStop('sandbox mode not supported');
         }

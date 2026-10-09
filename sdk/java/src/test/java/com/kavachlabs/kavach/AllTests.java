@@ -62,8 +62,6 @@ public final class AllTests {
         System.exit(failures == 0 ? 0 : 1);
     }
 
-    // -- json ----------------------------------------------------------------------
-
     static void jsonRoundTrip() {
         Object v = Json.parse(" {\"a\":[1,-2,3.5,true,null,\"x\\u00e9\\n\"],\"b\":{\"c\":9007199254740993}} ");
         eq("{\"a\":[1,-2,3.5,true,null,\"x\u00e9\\n\"],\"b\":{\"c\":9007199254740993}}", Json.write(v), "round trip");
@@ -80,8 +78,6 @@ public final class AllTests {
     static void jsonEscaping() {
         eq("\"a\\\"b\\\\c\\n\\r\\t\\u0001\\u001f<>&\u00e9\u2028\"", Json.quote("a\"b\\c\n\r\t\u0001\u001f<>&\u00e9\u2028"), "quote");
     }
-
-    // -- wire ------------------------------------------------------------------------
 
     static void wire() {
         eq(List.of(0xAC, 0x02), toInts(new Wire.Buf().uvarint(300).toByteArray()), "uvarint 300");
@@ -105,8 +101,6 @@ public final class AllTests {
         }
         return Arrays.asList(out);
     }
-
-    // -- failure mapping -----------------------------------------------------------
 
     static void failureMapping() {
         Failure p = Failure.classify(new Panic("boom"));
@@ -158,8 +152,6 @@ public final class AllTests {
 
         public void emit(String sink, byte[] data, boolean local) {}
     }
-
-    // -- host ------------------------------------------------------------------------
 
     static String b64(String s) {
         return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
@@ -261,8 +253,6 @@ public final class AllTests {
     static String Path_of(String first, String... more) {
         return java.nio.file.Path.of(first, more).toString();
     }
-
-    // -- recorder ------------------------------------------------------------------
 
     static void recorderMissing() throws Exception {
         Recorder.Options o = new Recorder.Options().service("t").recorderCommand(List.of("/nonexistent/kavach-recorder"));

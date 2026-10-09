@@ -40,18 +40,10 @@ final class HostEnv extends Env
             ['t' => 'gateway', 'gateway' => $gateway, 'request' => base64_encode($request), 'scope' => $gw->scope],
             'gateway',
         );
-        if (!empty($ans['live'])) {
-            [$resp, $err] = Support::callGateway($gw, $request);
-            $this->host->sendObserved($resp, $err);
-        } elseif (isset($ans['error']) && $ans['error'] !== '') {
-            [$resp, $err] = ['', (string) $ans['error']];
-        } else {
-            [$resp, $err] = [self::decode($ans['response'] ?? ''), ''];
+        if (isset($ans['error']) && $ans['error'] !== '') {
+            throw new GatewayError((string) $ans['error']);
         }
-        if ($err !== '') {
-            throw new GatewayError($err);
-        }
-        return $resp;
+        return self::decode($ans['response'] ?? '');
     }
 
     public function config(string $key): ?string

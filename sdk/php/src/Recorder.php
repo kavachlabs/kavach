@@ -184,8 +184,6 @@ final class Recorder
         register_shutdown_function($this->shutdown(...));
     }
 
-    // -- process and control stream ---------------------------------------
-
     /** @param list<string> $cmd */
     private function spawn(array $cmd): void
     {
@@ -381,8 +379,6 @@ final class Recorder
         }
     }
 
-    // -- writing ----------------------------------------------------------
-
     private function write(string $data): void
     {
         if (!$this->active || $data === '' || $this->stdin === null) {
@@ -406,8 +402,6 @@ final class Recorder
             $this->buf .= $frame;
         }
     }
-
-    // -- stepping ---------------------------------------------------------
 
     /**
      * Runs the handler on one input. Does not throw for handler failures; it
@@ -488,8 +482,6 @@ final class Recorder
         $this->write(Wire::snapshotFrame($data));
     }
 
-    // -- flush and close --------------------------------------------------
-
     /**
      * Asks the recorder to close its open block now. With `$durable` also
      * waits (up to `$timeout` seconds) until it is on disk. Returns false if
@@ -562,8 +554,6 @@ final class Recorder
     {
         return $this->active;
     }
-
-    // -- the Env handed to the handler (internal) -------------------------
 
     /** @internal */
     public function envNowNanos(): int

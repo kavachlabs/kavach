@@ -7,9 +7,9 @@ namespace Kavach;
 /**
  * A registered gateway: the connection that makes the query, and its scope.
  *
- * The connection is `fn(string $request): string`, called when recording (and,
- * in a sandbox replay, for local gateways). Throw anything to report a
- * failure; its message is recorded as the gateway's error.
+ * The connection is `fn(string $request): string`, called when recording.
+ * Throw anything to report a failure; its message is recorded as the
+ * gateway's error.
  */
 final readonly class Gateway
 {

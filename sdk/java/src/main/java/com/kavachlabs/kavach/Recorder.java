@@ -437,8 +437,6 @@ public final class Recorder implements AutoCloseable {
         return now.getEpochSecond() * 1_000_000_000L + now.getNano();
     }
 
-    // -- process and control stream -----------------------------------------
-
     private void spawn(List<String> cmd) throws IOException {
         // The environment is left unchanged: the recorder collects env. facts from it (§10.1).
         ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -552,8 +550,6 @@ public final class Recorder implements AutoCloseable {
         }
     }
 
-    // -- writing --------------------------------------------------------------
-
     private void write(byte[] data) {
         if (!active || data.length == 0) {
             return;
@@ -571,8 +567,6 @@ public final class Recorder implements AutoCloseable {
             buf.write(frame, 0, frame.length);
         }
     }
-
-    // -- stepping ---------------------------------------------------------------
 
     /** The first segment's path, once the recorder is ready; else null. */
     public String file() {
@@ -664,8 +658,6 @@ public final class Recorder implements AutoCloseable {
         }
         write(Wire.snapshot(data));
     }
-
-    // -- flush and close --------------------------------------------------------
 
     /**
      * Asks the recorder to close its open block now. With {@code durable} also
@@ -788,8 +780,6 @@ public final class Recorder implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
     }
-
-    // -- the Env handed to the handler ---------------------------------------------
 
     private final class RecordEnv implements Env {
         @Override
