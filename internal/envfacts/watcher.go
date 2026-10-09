@@ -90,11 +90,12 @@ func (w *Watcher) Poll() {
 func (w *Watcher) Take() []journal.Fact {
 	w.mu.Lock()
 	p := w.pending
-	w.pending = map[string]journal.Fact{}
-	w.mu.Unlock()
 	if len(p) == 0 {
+		w.mu.Unlock()
 		return nil
 	}
+	w.pending = map[string]journal.Fact{}
+	w.mu.Unlock()
 	out := make([]journal.Fact, 0, len(p))
 	for _, f := range p {
 		out = append(out, f)

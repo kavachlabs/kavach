@@ -256,11 +256,12 @@ The recorder MUST close and write the open block:
 A recorder SHOULD make each written block durable (as `fsync` does) after a
 failure marker and when the pipe closes, and MAY do so less often otherwise.
 
-**When the pipe is full**, the SDK MUST NOT silently drop a record: a journal
-with a hole in it replays to a wrong answer. It either waits for space, which
-the reference SDKs do, or it drops records and then writes a `marker` of kind
-`dropped` (§4.5) in their place, with the number dropped. Records after a
-`dropped` marker cannot be replayed until the next snapshot (§4.6).
+**When the pipe or ring (§10.7) is full**, the SDK MUST NOT silently drop a
+record: a journal with a hole in it replays to a wrong answer. It either waits
+for space, which the reference SDKs do, or it drops records and then writes a
+`marker` of kind `dropped` (§4.5) in their place, with the number dropped.
+Records after a `dropped` marker cannot be replayed until the next snapshot
+(§4.6).
 
 **Segments.** A journal written continuously grows without bound, so the
 recorder starts a new file, a **segment**, when the current one reaches a
@@ -558,7 +559,8 @@ kind of read is served from the step's records of that type:
 - A config read is served the first unread `config` record of the step with
   the same `key`; failing that, the value last recorded for that key anywhere
   earlier in the journal, by a `config` record or as a `flag.` or `env.`
-  fact of the latest `environment` record; failing that, "not set".
+  fact of the latest `environment` record that holds that fact (a change
+  record holds only the facts that changed); failing that, "not set".
 
 A replayer MUST report how many reads it synthesized (served from no record,
 or a `gateway` record whose `request` differed).
@@ -968,9 +970,12 @@ seconds. A step that times out, or a host that exits or closes its output
 during a step, makes the status `still_failing@N` for that step, with a
 `detail` saying which. A host that exits during a step fails with the failure
 string `"crash"`, so that a replay of a step recorded with a `crash` marker
-reproduces it (§6.1). A host that exits before `ready`, sends `fatal`, or
-sends a message that is not valid for the protocol state makes the replay
-fail to run, as a missing or unreadable fixture does; it produces no status.
+reproduces it (§6.1). A step that times out fails with the failure string
+`"timeout"`; no recorded failure has that string, so a timeout never
+reproduces a recorded failure. The driver kills a host that timed out. A host
+that exits before `ready`, sends `fatal`, or sends a message that is not valid
+for the protocol state makes the replay fail to run, as a missing or
+unreadable fixture does; it produces no status.
 
 ### 9.6 Host conformance
 
@@ -1185,6 +1190,76 @@ fixed once.
   each frame kind, a segment change, each way of ending, and both
   compressions. Journals are compared decoded, never byte for byte, since
   compressed bytes depend on the zstd version.
+
+### 10.7 Shared-memory transport
+
+An SDK MAY carry the record stream over a shared-memory ring instead of the
+pipe, so that recording a step costs a few memory copies and no system call.
+The frames are those of §10.2; only their transport changes. A recorder MUST
+support both transports, and the SDK chooses.
+
+**Setting up.** Before starting the recorder, the SDK creates a file of
+`256 + capacity` bytes, where `capacity` is a power of two of at least 64 KiB
+(reference default 8 MiB). It creates it in a memory-backed file system where
+the platform has one (`/dev/shm` on Linux) and in the temporary directory
+otherwise, unlinks it at once, and maps it shared. It passes the open file to
+the recorder as file descriptor 3; standard input, output and error are
+connected as in §10.1. Because the file has no name once unlinked, nothing
+can remove it from under the two processes, and nothing is left behind when
+they exit. The SDK writes the `open` frame on standard input as before, with
+the key `ring` set to `capacity`. Every later frame goes into the ring. A
+recorder that cannot map the ring, or finds the header invalid, MUST report a
+fatal error (§10.3).
+
+**Layout.** Integers are little-endian `u64`s at fixed offsets, `write` and
+`read` on cache lines of their own:
+
+| Offset | Field | Written by | Meaning |
+| --- | --- | --- | --- |
+| 0 | magic | SDK | The 8 ASCII bytes `KVRING01`. |
+| 8 | capacity | SDK | Size of the data area in bytes. |
+| 64 | write | SDK | Bytes of the record stream published so far. |
+| 128 | read | recorder | Bytes of the record stream consumed so far. |
+| 256 | data | SDK | Byte `i` of the record stream (counting from the first frame after `open`) is at `256 + i mod capacity`. A frame may wrap. |
+
+The SDK initializes the header before starting the recorder. Neither process
+writes the other's field.
+
+**Publishing.** To publish `n` bytes, the SDK checks that `n ≤ capacity −
+(write − read)`, copies them into the data area at `write`, and then stores
+`write + n` into `write` with release ordering. The recorder loads `write`
+with acquire ordering, decodes the frames in `[read, write)`, and stores the
+new `read` with release ordering once it no longer needs their bytes. Bytes
+are visible to the recorder only once `write` covers them, so a service that
+dies while copying a frame leaves none of it. The SDK SHOULD publish a step's
+`input` frame on its own before calling the handler, as §10.2 asks of the
+pipe; over the ring this costs no system call. A frame larger than the whole
+ring is published in pieces as space frees up. If the record stream ends
+inside a frame, over either transport, the recorder discards the partial frame
+and handles the end as §10.5 says. A recorder that finds `write − read`
+greater than `capacity`, or `write` moving backwards, MUST report a fatal
+error.
+
+**Waking.** The recorder polls the ring, at an interval of its choosing no
+longer than 10 ms. Standard input carries no frames after `open`; it is a
+doorbell. The SDK writes one byte of any value to it after publishing a
+`flush` or `close` frame, and when it finds the ring more than half full. A
+recorder that reads from standard input drains the ring at once.
+
+**When the ring is full**, the rule for a full pipe (§3.6) applies: the SDK
+rings the doorbell and waits for space, or drops records and publishes a
+`dropped` marker. If the recorder has exited, the SDK stops recording
+(§10.1).
+
+**Ending.** End of standard input still means that the service has ended
+(§10.5). The mapping outlives the service, so on end of input the recorder
+first drains the ring up to `write`, then applies §10.5: a step whose `input`
+was published before the service died ends with a `crash` marker, exactly as
+over the pipe.
+
+**Conformance.** The cases of §10.6 apply to both transports. An SDK that
+offers the ring passes the SDK cases over it, and a recorder passes the
+recorder cases over both.
 
 ## 11. Open questions
 

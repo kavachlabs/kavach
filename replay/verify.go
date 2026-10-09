@@ -221,6 +221,12 @@ func failureOf(r *Result) string {
 	switch r.Status {
 	case StatusStillFailing:
 		last := r.Steps[len(r.Steps)-1]
+		switch {
+		case last.Crash != "":
+			return journal.MarkerCrash
+		case last.Timeout != "":
+			return "timeout"
+		}
 		if last.Panic != "" {
 			return journal.MarkerPanic + ": " + last.Panic
 		}

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kavachlabs/kavach/internal/envfacts"
@@ -255,7 +256,7 @@ func (h *host) beforeReady(err error) error {
 	if errors.Is(err, errTimeout) {
 		return fmt.Errorf("host did not send ready within %s", StepTimeout)
 	}
-	if errors.Is(err, errHostGone) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed) {
+	if errors.Is(err, errHostGone) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed) || errors.Is(err, syscall.EPIPE) {
 		return fmt.Errorf("host exited before ready (%s)%s; does the command act as a host when run with %s?", h.exitStatus(), h.stderr.suffix(), kavach.HostCommand)
 	}
 	return err
@@ -441,7 +442,7 @@ func (h *host) stepFailure(err error) error {
 	switch {
 	case errors.Is(err, errTimeout):
 		h.cmd.Process.Kill()
-		return fmt.Errorf("kavach: host did not finish the step within %s", StepTimeout)
+		panic(hostTimeout(fmt.Sprintf("host did not finish the step within %s", StepTimeout)))
 	case errors.Is(err, errHostGone):
 		panic(hostCrash(h.crashDetail()))
 	}

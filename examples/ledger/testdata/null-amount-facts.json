@@ -1,0 +1,60 @@
+{
+  "run": "ledger-demo",
+  "recorded_at": "2026-01-01T00:00:00Z",
+  "facts": {
+    "env.PATH": {
+      "value": "L3Vzci9iaW46L2Jpbg=="
+    },
+    "host.arch": {
+      "value": "YW1kNjQ="
+    },
+    "host.cpus": {
+      "value": "NA=="
+    },
+    "host.hostname": {
+      "value": "bGVkZ2VyLWhvc3Q="
+    },
+    "host.kernel": {
+      "value": "Ni44LjA="
+    },
+    "host.os": {
+      "value": "bGludXg="
+    },
+    "host.tz": {
+      "value": "VVRD"
+    },
+    "host.uid": {
+      "value": "MTAwMA=="
+    },
+    "host.ulimit.as": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.core": {
+      "value": "MA=="
+    },
+    "host.ulimit.cpu": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.data": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.fsize": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.memlock": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.nofile": {
+      "value": "MTA0ODU3Ng=="
+    },
+    "host.ulimit.nproc": {
+      "value": "dW5saW1pdGVk"
+    },
+    "host.ulimit.stack": {
+      "value": "ODM4ODYwOA=="
+    },
+    "host.user": {
+      "value": "bGVkZ2Vy"
+    }
+  }
+}

@@ -53,7 +53,7 @@ type Open struct {
 	Start     string `json:"start"`
 	Producer  string `json:"producer,omitempty"`
 	Handler   string `json:"handler,omitempty"`
-	Snapshots bool   `json:"snapshots,omitempty"`
+	Snapshots bool   `json:"snapshots"`
 
 	Dir            string   `json:"dir,omitempty"`
 	Compression    string   `json:"compression,omitempty"`
@@ -64,6 +64,10 @@ type Open struct {
 	SegmentSeconds int      `json:"segment_seconds,omitempty"`
 	RetainSegments int      `json:"retain_segments,omitempty"`
 	SecretKeys     []string `json:"secret_keys,omitempty"`
+
+	// Ring, if set, is the capacity of the shared-memory ring that carries
+	// every later frame (SPEC.md §10.7).
+	Ring int `json:"ring,omitempty"`
 }
 
 // Defaults of the open object (SPEC.md §10.2).
@@ -121,6 +125,8 @@ func (o Open) Validate() error {
 		return errors.New("open: numeric options must not be negative")
 	case o.BlockBytes > journal.MaxBlockLen-journal.MaxBodyLen:
 		return fmt.Errorf("open: block_bytes %d is too large", o.BlockBytes)
+	case o.Ring != 0 && (o.Ring < MinRing || o.Ring&(o.Ring-1) != 0):
+		return fmt.Errorf("open: ring %d is not a power of two of at least %d", o.Ring, MinRing)
 	}
 	return nil
 }
@@ -138,10 +144,47 @@ func AppendFrame(dst []byte, kind byte, payload []byte) []byte {
 	return append(dst, payload...)
 }
 
+// AppendRecordFrame appends a record frame holding r to dst. Seq is ignored.
+// It encodes in place, so the hot path of an SDK needs no scratch payload.
+func AppendRecordFrame(dst []byte, r journal.Record) ([]byte, error) {
+	start := len(dst)
+	// One byte for the length is enough for all but large records; those
+	// are shifted up once the length is known.
+	dst = append(dst, 0, KindRecord, byte(r.Type), r.Flags)
+	dst, err := journal.AppendPayload(dst, r)
+	if err != nil {
+		return dst[:start], err
+	}
+	n := len(dst) - start - 1
+	if n-2 > journal.MaxBodyLen-10 {
+		return dst[:start], fmt.Errorf("recstream: record payload is %d bytes, too large", n-2)
+	}
+	if n < 0x80 {
+		dst[start] = byte(n)
+		return dst, nil
+	}
+	var hdr [binary.MaxVarintLen64]byte
+	k := binary.PutUvarint(hdr[:], uint64(n))
+	dst = append(dst, hdr[:k-1]...)
+	copy(dst[start+k:], dst[start+1:len(dst)-(k-1)])
+	copy(dst[start:], hdr[:k])
+	return dst, nil
+}
+
+// Buffered is the number of bytes read from the source but not yet decoded.
+func (r *Reader) Buffered() int { return r.r.Buffered() }
+
+// Raw returns the reader's source, with whatever it has buffered. Over the
+// ring, standard input carries only doorbell bytes after the open frame.
+func (r *Reader) Raw() io.Reader { return r.r }
+
 // Reader decodes frames from a stream.
 type Reader struct {
-	r *bufio.Reader
+	r    *bufio.Reader
+	slab []byte // frames are carved from it, one allocation for many
 }
+
+const slabSize = 64 << 10
 
 // NewReader returns a Reader over r.
 func NewReader(r io.Reader) *Reader { return &Reader{r: bufio.NewReaderSize(r, 1<<20)} }
@@ -160,7 +203,15 @@ func (r *Reader) Next() (Frame, error) {
 	if n == 0 || n > MaxFrame {
 		return Frame{}, fmt.Errorf("invalid frame length %d", n)
 	}
-	buf := make([]byte, n)
+	var buf []byte
+	if n > slabSize/4 {
+		buf = make([]byte, n)
+	} else {
+		if int(n) > len(r.slab) {
+			r.slab = make([]byte, slabSize)
+		}
+		buf, r.slab = r.slab[:n:n], r.slab[n:]
+	}
 	if _, err := io.ReadFull(r.r, buf); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
@@ -237,15 +288,13 @@ func (e *Encoder) Open(o Open) error {
 
 // Record writes a record frame. Seq is ignored: the recorder assigns it.
 func (e *Encoder) Record(r journal.Record) error {
-	payload := []byte{byte(r.Type), r.Flags}
-	payload, err := journal.AppendPayload(payload, r)
+	buf, err := AppendRecordFrame(e.buf[:0], r)
 	if err != nil {
 		return err
 	}
-	if len(payload)-2 > journal.MaxBodyLen-10 {
-		return fmt.Errorf("recstream: record payload is %d bytes, too large", len(payload)-2)
-	}
-	return e.write(KindRecord, payload)
+	e.buf = buf
+	_, err = e.w.Write(buf)
+	return err
 }
 
 // Records writes several record frames, then a step_end frame if stepEnd, in

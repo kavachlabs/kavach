@@ -38,6 +38,12 @@ The runner writes the frames into the recorder's standard input through a pipe
 and closes it after the last one: a stream with no `close` frame ends the way a
 dead service's would (SPEC.md §10.5).
 
+A recorder passes every case over both transports (SPEC.md §10.7). Over the
+ring, the runner sends the `open` frame with `ring` added on standard input,
+publishes all the other frames into a ring it passes as file descriptor 3,
+writes one doorbell byte and closes standard input. The expected output is the
+same. A stream that does not start with an `open` frame goes over the pipe.
+
 ### expected.json
 
 - `exit` is 0 unless the case ends in a fatal error.

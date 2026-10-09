@@ -99,6 +99,28 @@ func testOptions(t *testing.T) kavach.Options {
 	}
 }
 
+// newRecorder starts a recorder that is closed when the test ends.
+func newRecorder(t *testing.T, h kavach.Handler, opts kavach.Options) *kavach.Recorder {
+	t.Helper()
+	r := kavach.NewRecorder(h, opts)
+	t.Cleanup(r.Close)
+	return r
+}
+
+// fixtureIn waits until everything recorded is durable and returns the one
+// fixture the recorder wrote under dir.
+func fixtureIn(t *testing.T, r *kavach.Recorder, dir string) string {
+	t.Helper()
+	if err := r.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := filepath.Glob(filepath.Join(dir, "fixtures", "*.kavach"))
+	if len(m) != 1 {
+		t.Fatalf("want one fixture under %s, got %v", dir, m)
+	}
+	return m[0]
+}
+
 func feed(t *testing.T, r *kavach.Recorder, inputs ...string) error {
 	t.Helper()
 	for i, in := range inputs {
@@ -111,13 +133,14 @@ func feed(t *testing.T, r *kavach.Recorder, inputs ...string) error {
 
 func recordCrash(t *testing.T) string {
 	t.Helper()
-	r := kavach.NewRecorder(newWallet(), testOptions(t))
+	opts := testOptions(t)
+	r := newRecorder(t, newWallet(), opts)
 	err := feed(t, r, "alice:10", "bob:5", "alice:7", "bob:null")
 	var pe *kavach.PanicError
-	if !errors.As(err, &pe) || pe.Fixture == "" {
-		t.Fatalf("expected a panic with a fixture, got %v", err)
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected a panic, got %v", err)
 	}
-	return pe.Fixture
+	return fixtureIn(t, r, opts.Dir)
 }
 
 func TestCrashIsReproducedThenFixed(t *testing.T) {
@@ -206,13 +229,14 @@ func TestNondeterminism(t *testing.T) {
 }
 
 func TestInvariantViolation(t *testing.T) {
-	r := kavach.NewRecorder(newWallet(), testOptions(t))
+	opts := testOptions(t)
+	r := newRecorder(t, newWallet(), opts)
 	err := feed(t, r, "alice:10", "alice:-30")
 	var ie *kavach.InvariantError
-	if !errors.As(err, &ie) || ie.Name != "balance_non_negative" || ie.Fixture == "" {
+	if !errors.As(err, &ie) || ie.Name != "balance_non_negative" {
 		t.Fatalf("got %v", err)
 	}
-	res, err := replay.RunFile(ie.Fixture, newWallet)
+	res, err := replay.RunFile(fixtureIn(t, r, opts.Dir), newWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,37 +246,27 @@ func TestInvariantViolation(t *testing.T) {
 }
 
 func TestHandlerErrorWritesFixture(t *testing.T) {
-	var flushed []string
 	opts := testOptions(t)
-	opts.OnFlush = func(p string, err error) { flushed = append(flushed, p) }
-	h := &wallet{bal: map[string]int64{}, failOn: "carol"}
-	r := kavach.NewRecorder(h, opts)
+	reported := make(chan string, 1)
+	opts.OnFixture = func(file, failure string) { reported <- file + " " + failure }
+	r := newRecorder(t, &wallet{bal: map[string]int64{}, failOn: "carol"}, opts)
 	if err := feed(t, r, "alice:1", "carol:1"); err == nil || !strings.Contains(err.Error(), "frozen") {
 		t.Fatalf("got %v", err)
 	}
-	if len(flushed) != 1 || !strings.HasSuffix(flushed[0], "-error.kavach") {
-		t.Fatalf("flushed = %v", flushed)
+	path := fixtureIn(t, r, opts.Dir)
+	if got := <-reported; got != path+" error: account carol is frozen" {
+		t.Fatalf("OnFixture got %q", got)
 	}
-	res, _ := replay.RunFile(flushed[0], func() kavach.Handler { return &wallet{bal: map[string]int64{}, failOn: "carol"} })
+	res, _ := replay.RunFile(path, func() kavach.Handler { return &wallet{bal: map[string]int64{}, failOn: "carol"} })
 	if res.Status != replay.StatusStillFailing || !strings.Contains(res.Detail, "error: account carol is frozen") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
-	}
-
-	opts.NoFlushOnError = true
-	flushed = nil
-	r = kavach.NewRecorder(&wallet{bal: map[string]int64{}, failOn: "carol"}, opts)
-	feed(t, r, "carol:1")
-	if len(flushed) != 0 {
-		t.Fatalf("flushed with NoFlushOnError: %v", flushed)
 	}
 }
 
 func TestPanicPropagatesByDefault(t *testing.T) {
 	opts := testOptions(t)
 	opts.RecoverPanics = false
-	var fixture string
-	opts.OnFlush = func(p string, err error) { fixture = p }
-	r := kavach.NewRecorder(newWallet(), opts)
+	r := newRecorder(t, newWallet(), opts)
 	func() {
 		defer func() {
 			if recover() == nil {
@@ -261,21 +275,32 @@ func TestPanicPropagatesByDefault(t *testing.T) {
 		}()
 		feed(t, r, "a:null")
 	}()
-	if fixture == "" {
-		t.Fatal("no fixture written before re-panic")
+	// The step made the failure durable before it panicked.
+	if m, _ := filepath.Glob(filepath.Join(opts.Dir, "fixtures", "*.kavach")); len(m) != 1 {
+		t.Fatalf("fixtures: %v", m)
 	}
 }
 
-func TestSnapshotWindow(t *testing.T) {
+// TestSegmentSnapshot starts a segment for every step, so the fixture of the
+// crash begins from a snapshot the SDK took at a step boundary.
+func TestSegmentSnapshot(t *testing.T) {
 	opts := testOptions(t)
-	opts.SnapshotEvery = 3
-	r := kavach.NewRecorder(newWallet(), opts)
-	inputs := []string{"a:1", "a:2", "b:3", "a:4", "b:5", "a:6", "b:7", "a:null"}
+	opts.SegmentBytes = 1
+	r := newRecorder(t, newWallet(), opts)
+	for i, in := range []string{"a:1", "a:2", "b:3", "a:4"} {
+		if err := feed(t, r, in); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+		// The snapshot_request of this step is read before the next one.
+		if err := r.Flush(true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var pe *kavach.PanicError
-	if err := feed(t, r, inputs...); !errors.As(err, &pe) {
+	if err := feed(t, r, "a:null"); !errors.As(err, &pe) {
 		t.Fatalf("got %v", err)
 	}
-	j, err := journal.ReadFile(pe.Fixture)
+	j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,11 +308,8 @@ func TestSnapshotWindow(t *testing.T) {
 		t.Fatalf("fixture does not start from a snapshot: %+v", j.Header.Meta)
 	}
 	res, err := replay.Run(j, fixedWallet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Status != replay.StatusFixed || len(res.Steps) != 2 {
-		t.Fatalf("got %s with %d steps (%s)", res, len(res.Steps), res.Detail)
+	if err != nil || res.Status != replay.StatusFixed {
+		t.Fatalf("got %v (%v)", res, err)
 	}
 
 	// A handler that cannot restore cannot replay a snapshot fixture.
@@ -296,51 +318,18 @@ func TestSnapshotWindow(t *testing.T) {
 	}
 }
 
-func TestWindowRestartsAfterFailure(t *testing.T) {
-	r := kavach.NewRecorder(newWallet(), testOptions(t))
-	if err := feed(t, r, "a:5", "a:null"); err == nil {
-		t.Fatal("expected panic error")
-	}
-	feed(t, r, "a:1", "b:2")
-	path, err := r.Flush("later")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := replay.RunFile(path, newWallet)
-	if err != nil || res.Status != replay.StatusOK || len(res.Steps) != 2 {
-		t.Fatalf("got %v (%v), err %v", res, res.Detail, err)
-	}
-}
-
-func TestHistoryLost(t *testing.T) {
-	opts := testOptions(t)
-	opts.MaxRecords = 5
-	h := kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
-		env.Emit("out", in.Data)
-		return nil
-	})
-	r := kavach.NewRecorder(h, opts)
-	feed(t, r, "1", "2", "3")
-	if _, err := r.Flush("manual"); !errors.Is(err, kavach.ErrHistoryLost) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestManualFlushReplaysOK(t *testing.T) {
+func TestSegmentReplaysOK(t *testing.T) {
 	var delivered []kavach.Output
 	opts := testOptions(t)
 	opts.Deliver = func(outs []kavach.Output) error { delivered = append(delivered, outs...); return nil }
-	r := kavach.NewRecorder(newWallet(), opts)
+	r := newRecorder(t, newWallet(), opts)
 	feed(t, r, "a:1", "b:2")
-	path, err := r.Flush("operator request")
-	if err != nil {
-		t.Fatal(err)
-	}
+	r.Close()
 	if len(delivered) != 2 {
 		t.Fatalf("delivered %d outputs", len(delivered))
 	}
-	res, err := replay.RunFile(path, newWallet)
-	if err != nil || res.Status != replay.StatusOK || res.Recorded != nil {
+	res, err := replay.RunFile(r.File(), newWallet)
+	if err != nil || res.Status != replay.StatusOK || res.Recorded != nil || len(res.Steps) != 2 {
 		t.Fatalf("got %v, %v", res, err)
 	}
 }
@@ -349,7 +338,7 @@ func TestDeliverOnlyOnSuccess(t *testing.T) {
 	var delivered int
 	opts := testOptions(t)
 	opts.Deliver = func(outs []kavach.Output) error { delivered += len(outs); return nil }
-	r := kavach.NewRecorder(kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+	r := newRecorder(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
 		env.Emit("out", in.Data)
 		if string(in.Data) == "bad" {
 			return errors.New("bad input")
@@ -363,7 +352,7 @@ func TestDeliverOnlyOnSuccess(t *testing.T) {
 	}
 
 	opts.Deliver = func([]kavach.Output) error { return errors.New("sink down") }
-	r = kavach.NewRecorder(kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+	r = newRecorder(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
 		env.Emit("out", in.Data)
 		return nil
 	}), opts)
@@ -459,6 +448,7 @@ func TestKavachtest(t *testing.T) {
 func BenchmarkRecorderStep(b *testing.B) {
 	opts := kavach.Options{Service: "bench", Dir: b.TempDir(), Rand: rand.New(rand.NewSource(1))}
 	r := kavach.NewRecorder(benchHandler{}, opts)
+	defer r.Close()
 	in := kavach.Input{Source: "bench", Position: "0", Data: []byte(`{"account":"alice","amount":10}`)}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -471,7 +461,7 @@ func BenchmarkRecorderStep(b *testing.B) {
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*4), "ns/event")
 }
 
-// benchHandler snapshots so the recorder's window stays bounded, as in production.
+// benchHandler snapshots, as a production handler would.
 type benchHandler struct{}
 
 func (benchHandler) Handle(env kavach.Env, in kavach.Input) error {

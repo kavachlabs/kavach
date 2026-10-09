@@ -43,7 +43,9 @@ func TestKafkaCrashFixture(t *testing.T) {
 	}
 	defer cl.Close()
 
-	rec := kavach.NewRecorder(NewLedger(), kavach.Options{Service: "ledger", Dir: t.TempDir(), RecoverPanics: true})
+	dir := t.TempDir()
+	rec := kavach.NewRecorder(NewLedger(), kavach.Options{Service: "ledger", Dir: dir, RecoverPanics: true})
+	defer rec.Close()
 	// The buggy build stops at the crash; the fixed one consumes until the
 	// deadline, as a service would until shut down.
 	timeout := 10 * time.Second
@@ -58,9 +60,10 @@ func TestKafkaCrashFixture(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fixed build: %v", err)
 		}
-		if path, err := rec.Flush("test"); err != nil {
+		if err := rec.Flush(true); err != nil {
 			t.Fatal(err)
-		} else if res, _ := replay.RunFile(path, newHandler); res.Status != replay.StatusOK || len(res.Steps) != 9 {
+		}
+		if res, _ := replay.RunFile(rec.File(), newHandler); res.Status != replay.StatusOK || len(res.Steps) != 9 {
 			t.Fatalf("fixed build consumed %v", res)
 		}
 		return
@@ -69,7 +72,14 @@ func TestKafkaCrashFixture(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected the null amount to crash the ledger, got %v", err)
 	}
-	j, err := journal.ReadFile(pe.Fixture)
+	if err := rec.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "fixtures", "*.kavach"))
+	if len(paths) != 1 {
+		t.Fatalf("fixtures: %v", paths)
+	}
+	j, err := journal.ReadFile(paths[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +115,7 @@ func TestKafkaBinary(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, b)
 	}
 
-	fx := filepath.Join(dir, "fixtures")
+	fx := filepath.Join(dir, "journal")
 	cmd := exec.Command(bin, "-kafka", brokers, "-topic", topic, "-fixtures", fx)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -114,7 +124,7 @@ func TestKafkaBinary(t *testing.T) {
 	if !strings.Contains(string(out), "kavach: wrote fixture") {
 		t.Fatalf("no fixture reported:\n%s", out)
 	}
-	paths, _ := filepath.Glob(filepath.Join(fx, "*.kavach"))
+	paths, _ := filepath.Glob(filepath.Join(fx, "fixtures", "*.kavach"))
 	if len(paths) != 1 {
 		t.Fatalf("fixtures: %v", paths)
 	}
