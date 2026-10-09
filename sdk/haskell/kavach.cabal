@@ -1,0 +1,54 @@
+cabal-version:      2.4
+name:               kavach
+version:            0.1.0
+synopsis:           Kavach SDK: record production crashes and replay them deterministically
+license:            Apache-2.0
+build-type:         Simple
+extra-doc-files:    README.md
+
+common shared
+  default-language: Haskell2010
+  default-extensions: OverloadedStrings
+  ghc-options:      -Wall -Wno-name-shadowing
+  build-depends:    base >=4.17 && <5, bytestring, text
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:  Kavach
+                    Kavach.Conformance
+                    Kavach.Json
+                    Kavach.Wire
+  other-modules:    Kavach.Effects
+                    Kavach.Host
+                    Kavach.Internal
+                    Kavach.Recorder
+  build-depends:    directory, process, stm, time, unix
+
+executable kavach-conformance-host
+  import:           shared
+  hs-source-dirs:   conformance
+  main-is:          HostMain.hs
+  build-depends:    kavach
+
+executable kavach-recorder-case
+  import:           shared
+  hs-source-dirs:   conformance
+  main-is:          CaseMain.hs
+  other-modules:    RecorderCase
+  build-depends:    kavach, containers, directory, unix
+
+executable ledger
+  import:           shared
+  hs-source-dirs:   examples/ledger
+  main-is:          Main.hs
+  build-depends:    kavach, containers, time
+
+test-suite spec
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test conformance
+  main-is:          Spec.hs
+  other-modules:    RecorderCase
+  build-depends:    kavach, containers, directory, process, unix
+  build-tool-depends: kavach:kavach-conformance-host
