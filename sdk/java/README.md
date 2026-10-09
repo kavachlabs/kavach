@@ -163,7 +163,9 @@ rec.close();       // orderly shutdown; also run from a JVM shutdown hook
   itself if the recorder never starts. `ringBytes(n)` sets the capacity (power
   of two, at least 64 KiB, default 8 MiB). `noRing(true)` forces the pipe, which
   is also what the SDK falls back to, with a WARNING, when the ring cannot be
-  set up. The mapping is released by the garbage collector.
+  set up. The mapping is released by the garbage collector. The data area is
+  mapped once, so a frame that wraps is two copies (mapping it twice needs
+  Java 22's FFM).
 - Median step overhead on the benchmark handler (`./build.sh bench`, a clock
   read, an 8-byte random read and an emit per step): about 75 ns/event over the
   ring, about 415 over the pipe (JDK 25, macOS).

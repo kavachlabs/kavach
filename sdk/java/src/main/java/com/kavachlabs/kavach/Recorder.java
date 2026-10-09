@@ -609,6 +609,8 @@ public final class Recorder implements AutoCloseable {
             if (n == 0) {
                 // Full: the recorder drains the ring on the doorbell. If it has
                 // exited, the control thread stops recording and ends the wait.
+                // TODO: a writer outrunning the recorder blocks the service here;
+                // handling that is deferred.
                 bell();
                 while (n == 0 && active && proc.isAlive()) {
                     LockSupport.parkNanos(20_000);
