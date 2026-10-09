@@ -47,6 +47,9 @@ mutable struct Recorder{H,C,R}
     run::Union{String,Nothing}
 end
 
+# How long a Recorder waits for `ready` when not `required` (SPEC §10.1).
+const START_WAIT = 2.0
+
 """    Recorder(handler; service, start=:genesis, ...)
 
 Runs `handler` step by step and writes everything to `kavach-recorder`.
@@ -123,6 +126,10 @@ function Recorder(handler; service::AbstractString, start::Symbol=:genesis, snap
         if required
             timedwait(() -> rec.ready[], Float64(ready_timeout); pollint=0.005)
             rec.ready[] && rec.active[] || throw(RecorderError("kavach-recorder did not become ready"))
+        else
+            # Waiting here, not in a step, keeps a slow-starting recorder from finding a full
+            # ring or pipe at its first read (SPEC §10.1); on timeout recording goes on.
+            timedwait(() -> rec.ready[], START_WAIT; pollint=0.005)
         end
     catch e
         if required
