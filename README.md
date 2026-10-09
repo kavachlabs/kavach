@@ -25,9 +25,9 @@ go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger  # a fix tha
 
 ./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes kavach/fixtures/ledger-*.kavach
 kavach inspect kavach/fixtures/ledger-*.kavach                 # what happened, record by record
-kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@31
+kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@32
 kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
-kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@22
+kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@23
 ```
 
 The partial fix guards only deposits, the event type in the incident. It
