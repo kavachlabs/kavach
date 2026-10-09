@@ -9,7 +9,9 @@ module Kavach.Ring
   , defaultRingBytes
   , createRing
   , tryPublish
+  , tryPublishDirect
   , destroyRing
+  , realtimeNanos
   ) where
 
 import Control.Exception (finally, onException)
@@ -19,6 +21,7 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.IORef
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Int (Int64)
 import Data.Word (Word64, Word8)
 import Foreign.C.Types (CInt (..), CSize (..))
 import Foreign.Marshal.Utils (copyBytes)
@@ -41,6 +44,9 @@ foreign import ccall unsafe "kavach_load_acquire"
 
 foreign import ccall unsafe "kavach_store_release"
   storeRelease :: Ptr Word64 -> Word64 -> IO ()
+
+foreign import ccall unsafe "kavach_now_nanos"
+  realtimeNanos :: IO Int64
 
 data Ring = Ring
   { ringMem :: Ptr Word8
@@ -112,6 +118,23 @@ tryPublish g bs = do
       copyBytes dat (castPtr src `plusPtr` first) (n - first)
     storeRelease wp (w + fromIntegral n)
     pure (n, used + n)
+
+-- | Publish @n@ bytes written by @w@ straight into the ring, when they fit in
+-- the free space without wrapping. Returns the unread bytes afterwards, or
+-- Nothing if the caller must use 'tryPublish'.
+tryPublishDirect :: Ring -> Int -> (Ptr Word8 -> IO ()) -> IO (Maybe Int)
+tryPublishDirect g n w = do
+  let wp = castPtr (ringMem g) `plusPtr` offWrite :: Ptr Word64
+      rp = castPtr (ringMem g) `plusPtr` offRead :: Ptr Word64
+      cap = ringCap g
+  wr <- loadAcquire wp
+  rd <- loadAcquire rp
+  let used = fromIntegral (wr - rd) :: Int
+      off = fromIntegral (wr `mod` fromIntegral cap)
+  if n > cap - used || n > cap - off then pure Nothing else do
+    w (ringMem g `plusPtr` (headerBytes + off))
+    storeRelease wp (wr + fromIntegral n)
+    pure (Just (used + n))
 
 -- | Unmap the ring and remove its file if the recorder has not.
 destroyRing :: Ring -> IO ()

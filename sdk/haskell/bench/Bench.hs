@@ -2,7 +2,7 @@
 -- clock read, one 8-byte random read and one emit per step, a 33-byte input,
 -- 4 journal events per step, a deterministic random source.
 --
--- > KAVACH_RECORDER=/path/to/kavach-recorder kavach-bench [steps]
+-- > KAVACH_RECORDER=/path/to/kavach-recorder kavach-bench [steps [pipe|ring]]
 --
 -- Prints the median ns/event of 5 runs over the pipe and over the ring.
 module Main (main) where
@@ -44,7 +44,7 @@ run noRing n = do
           , roRandom = \k -> do
               modifyIORef' ctr (+ 1)
               c <- readIORef ctr
-              pure (BS.pack (take k (map fromIntegral [c ..])))
+              pure (BS.replicate k (fromIntegral c))
           }
       inp = Input "bench" "0" "{\"account\":\"alice\",\"amount\":10,\"x\":1}"
   r <- newRecorder opts handler
@@ -58,8 +58,9 @@ run noRing n = do
 main :: IO ()
 main = do
   args <- getArgs
-  let n = case args of [a] -> read a; _ -> 100000
-  forM_ [("pipe", True), ("ring", False)] $ \(name, noRing) -> do
+  let n = case args of a : _ -> read a; _ -> 100000
+      only = drop 1 args
+  forM_ [t | t@(name, _) <- [("pipe", True), ("ring", False)], null only || name `elem` only] $ \(name, noRing) -> do
     rs <- forM [1 .. 5 :: Int] $ \_ -> run noRing n
     hPutStrLn stderr (name ++ " runs (ns/event): " ++ unwords (map (show . tenth) rs))
     putStrLn (name ++ " median ns/event: " ++ show (tenth (sort rs !! 2)))
