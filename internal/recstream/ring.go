@@ -49,9 +49,6 @@ func (g *Ring) Capacity() uint64 { return g.cap }
 // space it publishes nothing and returns 0, unless p is larger than the whole
 // ring, in which case it publishes as much as fits. used is the number of
 // bytes the recorder has not consumed yet, counting the ones just published.
-//
-// SPEC: §10.7 does not say how a frame larger than the ring is published; this
-// sends it in pieces, which the recorder reads as the one frame it is.
 func (g *Ring) TryPublish(p []byte) (n int, used uint64) {
 	w := g.write.Load()
 	used = w - g.read.Load()

@@ -1225,17 +1225,20 @@ fatal error (§10.3).
 The SDK initializes the header before starting the recorder. Neither process
 writes the other's field.
 
-**Publishing.** To publish `n` bytes, the SDK checks that
-`n ≤ capacity − (write − read)`, copies them into the data area at
-`write`, and then stores `write + n` into `write` with release ordering.
-The recorder loads `write` with acquire ordering, decodes the frames in
-`[read, write)`, and stores the new `read` with release ordering once it no
-longer needs their bytes. Bytes are visible to the recorder only once `write`
-covers them, so a service that dies while copying leaves no partial frame. The
-SDK SHOULD publish a step's `input` frame on its own before calling the
-handler, as §10.2 asks of the pipe; over the ring this costs no system call.
-A recorder that finds `write − read` greater than `capacity`, or `write` moving
-backwards, MUST report a fatal error.
+**Publishing.** To publish `n` bytes, the SDK checks that `n ≤ capacity −
+(write − read)`, copies them into the data area at `write`, and then stores
+`write + n` into `write` with release ordering. The recorder loads `write`
+with acquire ordering, decodes the frames in `[read, write)`, and stores the
+new `read` with release ordering once it no longer needs their bytes. Bytes
+are visible to the recorder only once `write` covers them, so a service that
+dies while copying a frame leaves none of it. The SDK SHOULD publish a step's
+`input` frame on its own before calling the handler, as §10.2 asks of the
+pipe; over the ring this costs no system call. A frame larger than the whole
+ring is published in pieces as space frees up. If the record stream ends
+inside a frame, over either transport, the recorder discards the partial frame
+and handles the end as §10.5 says. A recorder that finds `write − read`
+greater than `capacity`, or `write` moving backwards, MUST report a fatal
+error.
 
 **Waking.** The recorder polls the ring, at an interval of its choosing no
 longer than 10 ms. Standard input carries no frames after `open`; it is a
