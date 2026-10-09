@@ -117,8 +117,6 @@ func Run(cfg Config) int {
 	return r.loop()
 }
 
-func (r *recorder) now() time.Time { return time.Now() }
-
 type item struct {
 	f   recstream.Frame
 	err error

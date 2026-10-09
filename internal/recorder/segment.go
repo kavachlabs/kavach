@@ -20,6 +20,7 @@ import (
 //	<dir>/fixtures/<service>-<run>-<seq>.kavach       a fixture; seq is the failing input's
 //
 // Service names are made safe for a file name first (see safeName).
+
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
 func safeName(s string) string { return unsafeName.ReplaceAllString(s, "_") }
@@ -61,7 +62,7 @@ func (r *recorder) newSegment(index int, start string) (*segment, error) {
 		Handler:     r.open.Handler,
 		Producer:    r.open.Producer,
 		Recorder:    Name,
-		RecordedAt:  r.now().UTC().Format(time.RFC3339Nano),
+		RecordedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 		Run:         r.run,
 		Segment:     &index,
 	}

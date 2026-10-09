@@ -152,11 +152,8 @@ func NewReader(r io.Reader) *Reader { return &Reader{r: bufio.NewReaderSize(r, 1
 func (r *Reader) Next() (Frame, error) {
 	n, err := binary.ReadUvarint(r.r)
 	if err != nil {
-		if err == io.EOF {
-			return Frame{}, io.EOF
-		}
-		if err == io.ErrUnexpectedEOF {
-			return Frame{}, io.ErrUnexpectedEOF
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return Frame{}, err
 		}
 		return Frame{}, fmt.Errorf("invalid frame length: %w", err)
 	}
