@@ -360,6 +360,8 @@ struct RecorderOptions {
   bool no_segments = false;
   bool required = false;  // throw Error from the constructor if recording cannot start
   int startup_timeout_ms = 0, flush_timeout_ms = 0, close_timeout_ms = 0;
+  bool no_ring = false;          // carry the record stream over the pipe, not the shared-memory ring
+  std::uint64_t ring_bytes = 0;  // ring capacity, a power of two >= 64 KiB; 0 = 8 MiB
 
   std::vector<Gateway> gateways;
   std::function<std::optional<Bytes>(std::string_view key)> config;
@@ -463,6 +465,8 @@ class Recorder {
       c.startup_timeout_ms = opts.startup_timeout_ms;
       c.flush_timeout_ms = opts.flush_timeout_ms;
       c.close_timeout_ms = opts.close_timeout_ms;
+      c.no_ring = opts.no_ring;
+      c.ring_bytes = opts.ring_bytes;
 
       gslots.reserve(opts.gateways.size());
       for (auto& g : opts.gateways) {

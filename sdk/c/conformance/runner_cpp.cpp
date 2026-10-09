@@ -1,5 +1,5 @@
 // Recorder-case runner (spec/recorder/sdk/README.md) for the C++ wrapper.
-//   runner-cpp <case.json> <fake_recorder.py> <result.json>
+//   runner-cpp <case.json> <fake_recorder.py> <result.json> [pipe|ring]
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -15,8 +15,8 @@ ans* pop(ans_list& l) { return l.next < l.n ? &l.v[l.next++] : nullptr; }
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    std::fprintf(stderr, "usage: %s case.json fake_recorder.py result.json\n", argv[0]);
+  if (argc != 4 && argc != 5) {
+    std::fprintf(stderr, "usage: %s case.json fake_recorder.py result.json [pipe|ring]\n", argv[0]);
     return 2;
   }
   char err[256];
@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
   o.start_from_snapshot = c->start_snapshot != 0;
   o.no_segments = !c->snapshots;
   o.required = true;
+  o.no_ring = argc == 5 && std::strcmp(argv[4], "pipe") == 0;
   o.config_source = "test";
   o.clock_ns = [&]() -> std::int64_t {
     ans* a = pop(cur->clock);
