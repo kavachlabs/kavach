@@ -47,6 +47,7 @@ func TestRegressionFixtures(t *testing.T) {
 
 func TestInvariantsHoldOnCleanInput(t *testing.T) {
 	r := kavach.NewRecorder(NewLedger(), kavach.Options{Dir: t.TempDir(), RecoverPanics: true})
+	defer r.Close()
 	for _, ev := range []string{
 		`{"id":"1","type":"deposit","account":"a","amount":10}`,
 		`{"id":"2","type":"transfer","account":"a","to":"b","amount":4}`,
@@ -88,11 +89,11 @@ func TestCLI(t *testing.T) {
 	build(partialBin, "-tags", "ledgerpartialfix", ".")
 
 	// The buggy service crashes and leaves a fixture behind.
-	fx := filepath.Join(dir, "fixtures")
+	fx := filepath.Join(dir, "journal")
 	if err := exec.Command(oldBin, "-in", "testdata/events.jsonl", "-fixtures", fx).Run(); err == nil {
 		t.Fatal("expected the buggy ledger to crash")
 	}
-	paths, _ := filepath.Glob(filepath.Join(fx, "*.kavach"))
+	paths, _ := filepath.Glob(filepath.Join(fx, "fixtures", "*.kavach"))
 	if len(paths) != 1 {
 		t.Fatalf("fixtures written: %v", paths)
 	}

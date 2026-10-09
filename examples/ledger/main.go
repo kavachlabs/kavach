@@ -7,7 +7,8 @@
 //	ledger -kafka localhost:9092
 //
 // One upstream event has "amount": null, which crashes the handler. The flight
-// recorder writes a fixture before the process dies.
+// recorder (kavach-recorder, found through $KAVACH_RECORDER or PATH) writes a
+// fixture before the process dies.
 package main
 
 import (
@@ -30,7 +31,7 @@ func main() {
 	brokers := flag.String("kafka", "", "comma-separated Kafka seed brokers; consume -topic instead of -in")
 	topic := flag.String("topic", "wallet-events", "Kafka topic holding the ledger's events")
 	seed := flag.String("seed", "", "produce this JSON-lines file to -topic and exit")
-	dir := flag.String("fixtures", "fixtures", "directory for crash fixtures")
+	dir := flag.String("fixtures", "", "directory for the journal; crash fixtures go in its fixtures/ subdirectory (default kavach)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -57,13 +58,6 @@ func main() {
 			}
 			return nil
 		},
-		OnFlush: func(path string, err error) {
-			if err != nil {
-				log.Printf("kavach: could not write fixture: %v", err)
-				return
-			}
-			log.Printf("kavach: wrote fixture %s", path)
-		},
 	})
 
 	var err error
@@ -81,6 +75,7 @@ func main() {
 	default:
 		log.Fatal("ledger: pass -in FILE or -kafka BROKERS")
 	}
+	rec.Close()
 	if err != nil {
 		log.Fatal(err)
 	}

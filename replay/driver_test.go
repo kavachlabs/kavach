@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kavachlabs/kavach/internal/testrecorder"
 	"github.com/kavachlabs/kavach/journal"
 	"github.com/kavachlabs/kavach/replay"
 )
@@ -46,7 +47,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	code := m.Run()
+	code := testrecorder.Run(m)
 	if hostDir != "" {
 		os.RemoveAll(hostDir)
 	}

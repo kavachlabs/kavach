@@ -1,7 +1,7 @@
 package replay_test
 
 import (
-	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,20 +43,22 @@ func (q *quoter) Handle(env kavach.Env, in kavach.Input) error {
 
 func recordQuotes(t *testing.T, h kavach.Handler) *journal.Journal {
 	t.Helper()
-	r := kavach.NewRecorder(h, kavach.Options{
-		Service: "quotes", Dir: t.TempDir(), RecoverPanics: true,
+	dir := t.TempDir()
+	r := newRecorder(t, h, kavach.Options{
+		Service: "quotes", Dir: dir, RecoverPanics: true,
 		Gateway: func(gateway string, request []byte) ([]byte, error) { return []byte("rate:" + string(request)), nil },
 		Config:  func(key string) ([]byte, string, bool) { return []byte("on"), "test", key == "flag.strict" },
 	})
-	path := ""
 	for _, d := range []string{"a", "b", "c"} {
-		var pe *kavach.PanicError
-		if err := r.Step(kavach.Input{Source: "s", Data: []byte(d)}); errors.As(err, &pe) {
-			path = pe.Fixture
-		}
+		r.Step(kavach.Input{Source: "s", Data: []byte(d)})
 	}
-	if path == "" {
-		path, _ = r.Flush("test")
+	if err := r.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	// The incident's fixture when the last step failed, else the journal itself.
+	path := r.File()
+	if m, _ := filepath.Glob(filepath.Join(dir, "fixtures", "*.kavach")); len(m) == 1 {
+		path = m[0]
 	}
 	j, err := journal.ReadFile(path)
 	if err != nil {

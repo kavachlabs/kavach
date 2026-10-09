@@ -18,16 +18,16 @@ The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
 
 ```bash
 git clone https://github.com/kavachlabs/kavach && cd kavach
-go install ./cmd/kavach
+go install ./cmd/kavach ./cmd/kavach-recorder   # the recorder is a separate process the SDK starts
 go build -o ledger-old ./examples/ledger
 go build -tags ledgerfix -o ledger-new ./examples/ledger   # the fixed build
 go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger  # a fix that is too narrow
 
-./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes fixtures/ledger-*.kavach
-kavach inspect fixtures/ledger-*.kavach                    # what happened, record by record
-kavach replay  fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@31
-kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
-kavach diff    fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@22
+./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes kavach/fixtures/ledger-*.kavach
+kavach inspect kavach/fixtures/ledger-*.kavach                 # what happened, record by record
+kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@31
+kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
+kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@22
 ```
 
 The partial fix guards only deposits, the event type in the incident. It
@@ -76,6 +76,7 @@ func main() {
 	kavach.MaybeReplay(func() kavach.Handler { return NewLedger() })
 
 	rec := kavach.NewRecorder(NewLedger(), kavach.Options{Service: "ledger", Deliver: publish})
+	defer rec.Close()
 	for msg := range consume() {
 		rec.Step(kavach.Input{Source: "kafka:wallet", Position: msg.Offset, Data: msg.Value})
 	}
@@ -93,10 +94,10 @@ declare invariants that are checked after every step, live and in replay. Use
 ## How it works
 
 1. **Record.** Your handler reads time and randomness, and emits effects,
-   through the `kavach.Env` it is given for each input. An
-   in-process flight recorder keeps recent journal events in memory and flushes
-   them to a fixture file when the handler panics, returns an error, or you
-   trigger it.
+   through the `kavach.Env` it is given for each input. The SDK writes
+   everything to `kavach-recorder`, a child process that keeps the journal on
+   disk and writes a fixture file when the handler panics, returns an error, or
+   violates an invariant, even if the service dies in the step.
 2. **Replay.** `kavach replay <fixture> --bin <your-service>` runs your own
    build as a host process (any language; `--bin "python -m ledger"` works too)
    and folds the recorded inputs through its handler, serving every clock,
