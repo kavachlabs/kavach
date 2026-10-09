@@ -558,7 +558,8 @@ kind of read is served from the step's records of that type:
 - A config read is served the first unread `config` record of the step with
   the same `key`; failing that, the value last recorded for that key anywhere
   earlier in the journal, by a `config` record or as a `flag.` or `env.`
-  fact of the latest `environment` record; failing that, "not set".
+  fact of the latest `environment` record that holds that fact (a change
+  record holds only the facts that changed); failing that, "not set".
 
 A replayer MUST report how many reads it synthesized (served from no record,
 or a `gateway` record whose `request` differed).
@@ -968,9 +969,12 @@ seconds. A step that times out, or a host that exits or closes its output
 during a step, makes the status `still_failing@N` for that step, with a
 `detail` saying which. A host that exits during a step fails with the failure
 string `"crash"`, so that a replay of a step recorded with a `crash` marker
-reproduces it (§6.1). A host that exits before `ready`, sends `fatal`, or
-sends a message that is not valid for the protocol state makes the replay
-fail to run, as a missing or unreadable fixture does; it produces no status.
+reproduces it (§6.1). A step that times out fails with the failure string
+`"timeout"`; no recorded failure has that string, so a timeout never
+reproduces a recorded failure. The driver kills a host that timed out. A host
+that exits before `ready`, sends `fatal`, or sends a message that is not valid
+for the protocol state makes the replay fail to run, as a missing or
+unreadable fixture does; it produces no status.
 
 ### 9.6 Host conformance
 

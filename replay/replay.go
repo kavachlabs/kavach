@@ -50,6 +50,9 @@ type StepResult struct {
 	// Crash is set when the host process running the step exited during it
 	// (SPEC.md §9.5); it holds what happened.
 	Crash string `json:"crash,omitempty"`
+	// Timeout is set when the step did not finish within StepTimeout (SPEC.md
+	// §9.5); it holds what happened.
+	Timeout string `json:"timeout,omitempty"`
 	// Synthesized counts reads that the journal could not serve: clock and
 	// random reads past the recorded ones, gateway queries answered by a
 	// record with a different request or by none, config values that no
@@ -201,6 +204,11 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handle
 			res.Steps = append(res.Steps, sr)
 			return res.set(StatusStillFailing, seq, "crash: "+sr.Crash), nil
 		}
+		if ht, ok := pv.(hostTimeout); ok && panicked {
+			sr.Timeout = string(ht)
+			res.Steps = append(res.Steps, sr)
+			return res.set(StatusStillFailing, seq, "timeout: "+sr.Timeout), nil
+		}
 		if panicked {
 			sr.Panic = fmt.Sprint(pv)
 			res.Steps = append(res.Steps, sr)
@@ -329,12 +337,14 @@ type nondeterminism struct {
 	msg string
 }
 
-// hostFailure and hostCrash are the panic values a host proxy uses to end a
-// step: the first makes the replay fail to run, the second is a step failure
-// of the host process itself (SPEC.md §9.5).
+// hostFailure, hostCrash and hostTimeout are the panic values a host proxy uses
+// to end a step: the first makes the replay fail to run, the others are step
+// failures of the host process itself (SPEC.md §9.5).
 type hostFailure struct{ err error }
 
 type hostCrash string
+
+type hostTimeout string
 
 // history is what earlier parts of a journal said about config values: the
 // last config record of each key, and the latest value of each environment
@@ -586,6 +596,8 @@ func failure(s StepResult) string {
 	switch {
 	case s.Crash != "":
 		return "crash: " + s.Crash
+	case s.Timeout != "":
+		return "timeout: " + s.Timeout
 	case s.Panic != "":
 		return "panic: " + s.Panic
 	case s.Error != "":

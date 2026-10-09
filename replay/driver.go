@@ -441,7 +441,7 @@ func (h *host) stepFailure(err error) error {
 	switch {
 	case errors.Is(err, errTimeout):
 		h.cmd.Process.Kill()
-		return fmt.Errorf("kavach: host did not finish the step within %s", StepTimeout)
+		panic(hostTimeout(fmt.Sprintf("host did not finish the step within %s", StepTimeout)))
 	case errors.Is(err, errHostGone):
 		panic(hostCrash(h.crashDetail()))
 	}

@@ -193,7 +193,7 @@ func TestReplayHostFailures(t *testing.T) {
 	// A step that takes too long fails and the host is killed.
 	start := time.Now()
 	res, err = replay.RunHost(j, script("read hello; "+ready+"; read step; sleep 30"))
-	if err != nil || res.String() != "still_failing@1" || !strings.Contains(res.Detail, "within") || time.Since(start) > 10*time.Second {
+	if err != nil || res.String() != "still_failing@1" || !strings.HasPrefix(res.Detail, "timeout: ") || res.Steps[0].Timeout == "" || time.Since(start) > 10*time.Second {
 		t.Fatalf("%v, %v: %s", res, err, res.Detail)
 	}
 
