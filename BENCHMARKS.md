@@ -23,7 +23,7 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 | Ten planted bugs (panic, returned error, invariant; see below): old build reproduces the recorded failure | 10 of 10 | 10 of 10 | `go test ./bench -run TestBenchmark -v` |
 | Same ten: correct fix verified as `fixed` | 10 of 10 | 10 of 10 (255 of 340 variants reproduce on the old build, 25.5 per bug on average; each fix passes all it is shown) | same |
 | Same ten: narrow fix rejected | — | 10 of 10, all `variant_failed` | same |
-| Demo crash fixture size | < 100 KB | 3,815 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
+| Demo crash fixture size | < 100 KB | 1,975 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
 | Determinism | 1,000 replays byte-identical | 1,000 / 1,000 | `go test -run Determinism ./examples/ledger` |
 | Test coverage, core packages | ≥ 80% | `kavach` 86.9%, `journal` 85.8% | `go test -cover . ./journal` |
 

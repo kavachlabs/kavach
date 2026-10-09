@@ -53,7 +53,7 @@ type Open struct {
 	Start     string `json:"start"`
 	Producer  string `json:"producer,omitempty"`
 	Handler   string `json:"handler,omitempty"`
-	Snapshots bool   `json:"snapshots,omitempty"`
+	Snapshots bool   `json:"snapshots"`
 
 	Dir            string   `json:"dir,omitempty"`
 	Compression    string   `json:"compression,omitempty"`

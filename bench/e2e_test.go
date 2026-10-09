@@ -73,7 +73,9 @@ func TestEndToEnd(t *testing.T) {
 				buggy, fixed, narrow := svc(t, b.Name, "buggy"), svc(t, b.Name, "fixed"), svc(t, b.Name, "narrow")
 
 				// The buggy service records its own incident.
-				fx := strings.TrimSpace(run(t, 0, buggy, "record", filepath.Join(dir, "fx-"+b.Name)))
+				// The SDK logs the fixture too, so the path is the last line.
+				lines := strings.Split(strings.TrimSpace(run(t, 0, buggy, "record", filepath.Join(dir, "fx-"+b.Name))), "\n")
+				fx := lines[len(lines)-1]
 				j, err := journal.ReadFile(fx)
 				if err != nil {
 					t.Fatal(err)

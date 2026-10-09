@@ -118,20 +118,21 @@ func contains(ss []string, s string) bool {
 }
 
 func TestVariantsOfJSONInput(t *testing.T) {
-	r := kavach.NewRecorder(kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+	opts := testOptions(t)
+	r := newRecorder(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
 		var ev struct{ Amount *float64 }
 		if err := json.Unmarshal(in.Data, &ev); err != nil {
 			return err
 		}
 		env.Emit("out", []byte(strings.Repeat("x", int(*ev.Amount))))
 		return nil
-	}), testOptions(t))
+	}), opts)
 	err := feed(t, r, `{"id":"a","n":1,"ok":true,"amount":2.5}`, `{"id":"b","n":2,"amount":1,"tag":"t"}`, `{"id":"c", "n":3, "ok":false, "amount":null}`)
 	var pe *kavach.PanicError
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected a panic, got %v", err)
 	}
-	j, err := journal.ReadFile(pe.Fixture)
+	j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,15 +265,11 @@ func TestVariantFileReplaysLeniently(t *testing.T) {
 func TestVerifyErrorIncident(t *testing.T) {
 	frozen := func() kavach.Handler { return &wallet{bal: map[string]int64{}, failOn: "bob"} }
 	opts := testOptions(t)
-	r := kavach.NewRecorder(frozen(), opts)
+	r := newRecorder(t, frozen(), opts)
 	if err := feed(t, r, "alice:10", "carol:2", "bob:5"); err == nil {
 		t.Fatal("expected an error")
 	}
-	paths, _ := filepath.Glob(filepath.Join(opts.Dir, "*-error.kavach"))
-	if len(paths) != 1 {
-		t.Fatalf("fixtures: %v", paths)
-	}
-	j, err := journal.ReadFile(paths[0])
+	j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
 	if err != nil {
 		t.Fatal(err)
 	}
