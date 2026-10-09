@@ -1,0 +1,43 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "zstd",
+    "recorder": "kavach-recorder/0.2.0",
+    "run": "r1",
+    "segment": 2,
+    "cut_from": {
+      "run": "r1",
+      "segment": 2,
+      "first_seq": 0,
+      "last_seq": 1
+    }
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "s"
+    }
+  ],
+  "truncated": false
+}

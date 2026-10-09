@@ -21,7 +21,7 @@ func TestPlainWhenNotATerminal(t *testing.T) {
 	if code != exitPass || strings.Contains(out, "\033[") || strings.Contains(out, "⣠") {
 		t.Fatalf("exit %d, styled output when piped:\n%s", code, out)
 	}
-	if !strings.Contains(out, "    31  input     file:events.jsonl @ 8") {
+	if !strings.Contains(out, "    32  input     file:events.jsonl @ 8") {
 		t.Fatalf("unexpected output:\n%s", out)
 	}
 }

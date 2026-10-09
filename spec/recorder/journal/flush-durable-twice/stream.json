@@ -1,0 +1,87 @@
+{
+  "description": "Each durable flush is answered by exactly one durable message, in order, and nothing else is: not a non-durable flush, not a failure's sync, not close.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "critical": false,
+      "data": "YQ==",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWE=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "YmFk",
+      "frame": "record",
+      "position": "f",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "5"
+    },
+    {
+      "critical": false,
+      "data": "",
+      "frame": "record",
+      "kind": "panic",
+      "message": "boom",
+      "type": "marker"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "durable": false,
+      "frame": "flush"
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "durable": true,
+      "frame": "flush"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

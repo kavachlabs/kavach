@@ -1,0 +1,27 @@
+{
+  "facts": {
+    "env.API_TOKEN": {
+      "sha256": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+    },
+    "env.MAX_TRANSFER": {
+      "value": "MTAwMA=="
+    },
+    "host.arch": {
+      "value": "YW1kNjQ="
+    },
+    "host.kernel": {
+      "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+    },
+    "host.mount./dev/shm": {
+      "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+    },
+    "host.os": {
+      "value": "bGludXg="
+    },
+    "host.sessions.wfinfra": {
+      "value": "MQ=="
+    }
+  },
+  "recorded_at": "2026-01-01T00:00:00Z",
+  "run": "test-run"
+}

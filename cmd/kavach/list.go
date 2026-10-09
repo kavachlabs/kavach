@@ -88,7 +88,7 @@ func describeIncident(path string) incident {
 		case r.Type == journal.TypeMarker && r.Kind == journal.MarkerTrigger && inc.Trigger == "":
 			inc.Trigger = r.Message
 		case r.Type == journal.TypeMarker && inc.Failure == nil &&
-			(r.Kind == journal.MarkerPanic || r.Kind == journal.MarkerError || r.Kind == journal.MarkerInvariant):
+			(r.Kind == journal.MarkerPanic || r.Kind == journal.MarkerError || r.Kind == journal.MarkerInvariant || r.Kind == journal.MarkerCrash):
 			inc.Failure = &incidentFailure{Kind: r.Kind, Seq: input, Message: r.Message}
 		}
 	}

@@ -1,0 +1,39 @@
+{
+  "description": "With start \"snapshot\", the first frame after open must be a snapshot.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "snapshot"
+      }
+    },
+    {
+      "critical": false,
+      "data": "YQ==",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LWE=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    }
+  ]
+}

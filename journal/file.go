@@ -1,7 +1,6 @@
 package journal
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -11,12 +10,12 @@ import (
 )
 
 // File is an append-only journal stored in a file. Append assigns sequence
-// numbers; Iterate reads the file from the start.
+// numbers and gathers records into a block; Flush writes the block; Iterate
+// reads the file from the start.
 type File struct {
 	mu   sync.Mutex
 	path string
 	f    *os.File
-	w    *bufio.Writer
 	jw   *Writer
 	next uint64
 	sync bool
@@ -24,14 +23,16 @@ type File struct {
 
 // FileOptions configure OpenFile.
 type FileOptions struct {
-	// Sync makes Append fsync after every record. Without it, records are
-	// buffered until Flush or Close.
+	// Sync makes Append write a block and fsync after every record. Without
+	// it, records are buffered until Flush or Close.
 	Sync bool
+	// Writer tunes block size and compression level.
+	Writer WriterOptions
 }
 
 // OpenFile opens the journal at path for appending, creating it with meta if it
 // does not exist. Opening an existing journal keeps its header and cuts off a
-// record left half-written by a crash. Only genesis journals can be appended to.
+// block left half-written by a crash. Only genesis journals can be appended to.
 func OpenFile(path string, meta Meta, opts FileOptions) (*File, error) {
 	if meta.Start == "" {
 		meta.Start = StartGenesis
@@ -44,38 +45,35 @@ func OpenFile(path string, meta Meta, opts FileOptions) (*File, error) {
 		return nil, err
 	}
 	jf := &File{path: path, f: f, sync: opts.Sync}
-	if err := jf.init(meta); err != nil {
+	if err := jf.init(meta, opts.Writer); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return jf, nil
 }
 
-func (jf *File) init(meta Meta) error {
+func (jf *File) init(meta Meta, wopts WriterOptions) error {
 	st, err := jf.f.Stat()
 	if err != nil {
 		return err
 	}
-	jf.w = bufio.NewWriter(jf.f)
 	if st.Size() == 0 {
-		jw, err := NewWriter(jf.w, meta)
+		jw, err := NewWriterOptions(jf.f, meta, wopts)
 		if err != nil {
 			return err
 		}
 		jf.jw = jw
-		return jf.w.Flush()
+		return nil
 	}
 
-	// Existing journal: find the end of the last complete record.
-	cr := &countingReader{r: jf.f}
-	jr, err := NewReader(cr)
+	// Existing journal: find the end of the last complete block.
+	jr, err := NewReader(jf.f)
 	if err != nil {
 		return err
 	}
 	if jr.Header().Meta.Start != StartGenesis {
 		return errors.New("journal: OpenFile only supports genesis journals")
 	}
-	end := cr.n - int64(jr.r.Buffered())
 	for {
 		_, err := jr.read()
 		if err == io.EOF {
@@ -84,16 +82,22 @@ func (jf *File) init(meta Meta) error {
 		if err != nil {
 			return err
 		}
-		end = cr.n - int64(jr.r.Buffered())
 	}
+	end := jr.Offset()
 	if err := jf.f.Truncate(end); err != nil {
 		return err
 	}
 	if _, err := jf.f.Seek(end, io.SeekStart); err != nil {
 		return err
 	}
-	jf.next = jr.nextSeq
-	jf.jw = &Writer{w: jf.w, start: StartGenesis, next: jr.nextSeq, started: jr.started}
+	jf.next = jr.ord.next
+	if wopts.Level == 0 {
+		wopts.Level = DefaultLevel
+	}
+	if wopts.BlockBytes <= 0 {
+		wopts.BlockBytes = DefaultBlockSz
+	}
+	jf.jw = newWriter(jf.f, jr.Header().Meta, wopts, jr.ord)
 	return nil
 }
 
@@ -113,7 +117,7 @@ func (jf *File) Append(r Record) (uint64, error) {
 	}
 	jf.next++
 	if jf.sync {
-		if err := jf.w.Flush(); err != nil {
+		if err := jf.jw.Flush(); err != nil {
 			return 0, err
 		}
 		if err := jf.f.Sync(); err != nil {
@@ -123,14 +127,14 @@ func (jf *File) Append(r Record) (uint64, error) {
 	return r.Seq, nil
 }
 
-// Flush writes buffered records to the file.
+// Flush writes the open block to the file.
 func (jf *File) Flush() error {
 	jf.mu.Lock()
 	defer jf.mu.Unlock()
 	if jf.f == nil {
 		return nil
 	}
-	return jf.w.Flush()
+	return jf.jw.Flush()
 }
 
 // Iterate calls fn for every record from the start of the journal. Records
@@ -169,24 +173,13 @@ func (jf *File) Close() error {
 	if jf.f == nil {
 		return nil
 	}
-	ferr := jf.w.Flush()
+	ferr := jf.jw.Flush()
 	cerr := jf.f.Close()
 	jf.f = nil
 	if ferr != nil {
 		return fmt.Errorf("journal: flush: %w", ferr)
 	}
 	return cerr
-}
-
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
 }
 
 // ReadFile decodes the whole journal at path.
@@ -206,12 +199,7 @@ func WriteFile(path string, meta Meta, records []Record) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	bw := bufio.NewWriter(tmp)
-	if err := Encode(bw, meta, records); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := bw.Flush(); err != nil {
+	if err := Encode(tmp, meta, records); err != nil {
 		tmp.Close()
 		return err
 	}

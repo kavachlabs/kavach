@@ -1,0 +1,140 @@
+{
+  "description": "Every record type, in a genesis journal that closes cleanly.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "facts": {
+        "flag.ledger-v2": {
+          "value": "dHJ1ZQ=="
+        },
+        "host.runtime": {
+          "value": "Z28xLjI0Ljc="
+        }
+      },
+      "frame": "facts"
+    },
+    {
+      "critical": false,
+      "data": "WzFd",
+      "frame": "record",
+      "position": "0",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1759752000000000000"
+    },
+    {
+      "critical": false,
+      "data": "AQL/",
+      "frame": "record",
+      "type": "rand"
+    },
+    {
+      "critical": true,
+      "error": "",
+      "frame": "record",
+      "gateway": "fx-rates",
+      "request": "RVVSVVNE",
+      "response": "MS4wNw==",
+      "scope": "remote",
+      "type": "gateway"
+    },
+    {
+      "critical": true,
+      "error": "timeout",
+      "frame": "record",
+      "gateway": "fx-rates",
+      "request": "R0JQVVNE",
+      "response": "",
+      "scope": "remote",
+      "type": "gateway"
+    },
+    {
+      "critical": true,
+      "error": "",
+      "frame": "record",
+      "gateway": "shm:/dev/shm/orderbook",
+      "request": "cmVhZA==",
+      "response": "cm93cw==",
+      "scope": "local",
+      "type": "gateway"
+    },
+    {
+      "critical": true,
+      "frame": "record",
+      "key": "flag.ledger-v2",
+      "present": true,
+      "source": "launchdarkly",
+      "type": "config",
+      "value": "dHJ1ZQ=="
+    },
+    {
+      "critical": true,
+      "frame": "record",
+      "key": "MAX_TRANSFER",
+      "present": false,
+      "source": "env",
+      "type": "config",
+      "value": ""
+    },
+    {
+      "critical": false,
+      "data": "YWxpY2U9MTA=",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "postgres:balances",
+      "type": "output"
+    },
+    {
+      "critical": false,
+      "data": "bGluZQ==",
+      "frame": "record",
+      "scope": "local",
+      "sink": "file:/tmp/audit",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "critical": false,
+      "data": "WzJd",
+      "frame": "record",
+      "position": "1",
+      "source": "test",
+      "type": "input"
+    },
+    {
+      "critical": false,
+      "frame": "record",
+      "type": "clock",
+      "unix_nanos": "1001"
+    },
+    {
+      "critical": false,
+      "data": "b3V0LVsyXQ==",
+      "frame": "record",
+      "scope": "remote",
+      "sink": "sink",
+      "type": "output"
+    },
+    {
+      "frame": "step_end"
+    },
+    {
+      "frame": "close"
+    }
+  ]
+}

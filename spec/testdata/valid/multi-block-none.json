@@ -1,0 +1,98 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "none"
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "kafka:wallet",
+      "position": "3:1042",
+      "data": "eyJhbW91bnQiOjEwfQ=="
+    },
+    {
+      "type": "clock",
+      "seq": 2,
+      "unix_nanos": -5
+    },
+    {
+      "type": "rand",
+      "seq": 3,
+      "data": "AQIDBAUGBwg="
+    },
+    {
+      "type": "output",
+      "seq": 4,
+      "sink": "postgres:balances",
+      "data": "YWxpY2U9MTA=",
+      "scope": 1
+    },
+    {
+      "type": "marker",
+      "seq": 5,
+      "kind": "panic",
+      "message": "boom",
+      "data": "c3RhY2s="
+    },
+    {
+      "type": "input",
+      "seq": 6,
+      "source": "s"
+    },
+    {
+      "type": "gateway",
+      "flags": 1,
+      "seq": 7,
+      "gateway": "fx-rates",
+      "request": "eyJwYWlyIjoiRVVSVVNEIn0=",
+      "response": "eyJyYXRlIjoxLjA4fQ==",
+      "scope": 0
+    },
+    {
+      "type": "config",
+      "flags": 1,
+      "seq": 8,
+      "source": "launchdarkly",
+      "key": "flag.ledger-v2",
+      "value": "dHJ1ZQ==",
+      "present": true
+    },
+    {
+      "type": "config",
+      "flags": 1,
+      "seq": 9,
+      "source": "env",
+      "key": "MAX_TRANSFER",
+      "present": false
+    },
+    {
+      "type": "output",
+      "seq": 10,
+      "sink": "shm:/dev/shm/orderbook",
+      "data": "eA==",
+      "scope": 1
+    }
+  ],
+  "truncated": false
+}

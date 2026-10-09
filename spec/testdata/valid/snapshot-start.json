@@ -1,9 +1,10 @@
 {
   "major": 0,
-  "minor": 1,
+  "minor": 2,
   "meta": {
     "service": "conformance",
-    "start": "snapshot"
+    "start": "snapshot",
+    "compression": "zstd"
   },
   "records": [
     {
@@ -13,8 +14,25 @@
       "data": "eyJhbGljZSI6MTB9"
     },
     {
-      "type": "input",
+      "type": "environment",
+      "flags": 1,
       "seq": 101,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 102,
       "source": "s",
       "position": "7",
       "data": "eA=="

@@ -1,0 +1,19 @@
+{
+  "description": "The SDK never sends environment records.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 1,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    },
+    {
+      "critical": true,
+      "frame": "record",
+      "type": "environment"
+    }
+  ]
+}

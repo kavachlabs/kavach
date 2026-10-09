@@ -1,0 +1,97 @@
+{
+  "exit": 1,
+  "control": [
+    {
+      "file": "conformance-test-run-000000.kavach",
+      "protocol": 1,
+      "recorder": "kavach-recorder/0.2.0",
+      "run": "test-run",
+      "t": "ready"
+    },
+    {
+      "fatal": true,
+      "message": "unknown frame kind 0x63",
+      "t": "error"
+    }
+  ],
+  "files": {
+    "conformance-test-run-000000.kavach": {
+      "major": 0,
+      "minor": 2,
+      "meta": {
+        "service": "conformance",
+        "start": "genesis",
+        "compression": "zstd",
+        "producer": "kavach-go/conformance",
+        "recorder": "kavach-recorder/0.2.0",
+        "recorded_at": "2026-01-01T00:00:00Z",
+        "run": "test-run",
+        "segment": 0
+      },
+      "records": [
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 0,
+          "facts": [
+            {
+              "key": "env.API_TOKEN",
+              "form": 1,
+              "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+            },
+            {
+              "key": "env.MAX_TRANSFER",
+              "form": 0,
+              "value": "MTAwMA=="
+            },
+            {
+              "key": "host.arch",
+              "form": 0,
+              "value": "YW1kNjQ="
+            },
+            {
+              "key": "host.kernel",
+              "form": 0,
+              "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+            },
+            {
+              "key": "host.mount./dev/shm",
+              "form": 0,
+              "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+            },
+            {
+              "key": "host.os",
+              "form": 0,
+              "value": "bGludXg="
+            },
+            {
+              "key": "host.sessions.wfinfra",
+              "form": 0,
+              "value": "MQ=="
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 1,
+          "source": "test",
+          "position": "0",
+          "data": "YQ=="
+        },
+        {
+          "type": "clock",
+          "seq": 2,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 3,
+          "sink": "sink",
+          "data": "b3V0LWE=",
+          "scope": 0
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

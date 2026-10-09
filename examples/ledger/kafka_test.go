@@ -87,7 +87,7 @@ func TestKafkaCrashFixture(t *testing.T) {
 
 	// The fixture replays with no Kafka at all.
 	res, err := kavach.Replay(j, newHandler)
-	if err != nil || res.String() != "still_failing@31" {
+	if err != nil || res.String() != "still_failing@32" {
 		t.Fatalf("replay: %v, %v", res, err)
 	}
 }

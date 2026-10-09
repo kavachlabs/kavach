@@ -163,7 +163,7 @@ func TestDivergedBeforeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.String() != "diverged@0" || !strings.Contains(res.Detail, "output 0 differs") {
+	if res.String() != "diverged@1" || !strings.Contains(res.Detail, "output 0 differs") {
 		t.Fatalf("got %s (%s)", res, res.Detail)
 	}
 }
@@ -215,7 +215,7 @@ func TestInvariantViolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.String() != "invariant_violated(balance_non_negative)@4" || res.Recorded.Kind != journal.MarkerInvariant {
+	if res.String() != "invariant_violated(balance_non_negative)@5" || res.Recorded.Kind != journal.MarkerInvariant {
 		t.Fatalf("got %s (%+v)", res, res.Recorded)
 	}
 }
@@ -408,7 +408,7 @@ func TestCompare(t *testing.T) {
 	reformatted, _ := kavach.ReplayFile(path, func() kavach.Handler {
 		return &wallet{bal: map[string]int64{}, fixed: true, newFormat: true}
 	})
-	if d := kavach.Compare(fix, reformatted); d == nil || d.Seq != 0 || d.Output != 0 {
+	if d := kavach.Compare(fix, reformatted); d == nil || d.Seq != 1 || d.Output != 0 {
 		t.Fatalf("divergence = %+v", d)
 	}
 }

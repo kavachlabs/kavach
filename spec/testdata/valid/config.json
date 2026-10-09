@@ -1,0 +1,63 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "zstd",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "s",
+      "position": "1",
+      "data": "eA=="
+    },
+    {
+      "type": "config",
+      "flags": 1,
+      "seq": 2,
+      "source": "launchdarkly",
+      "key": "flag.ledger-v2",
+      "value": "dHJ1ZQ==",
+      "present": true
+    },
+    {
+      "type": "config",
+      "flags": 1,
+      "seq": 3,
+      "source": "launchdarkly",
+      "key": "flag.new-ui",
+      "present": false
+    },
+    {
+      "type": "config",
+      "flags": 1,
+      "seq": 4,
+      "source": "env",
+      "key": "MAX_TRANSFER",
+      "value": "MTAwMA==",
+      "present": true
+    }
+  ],
+  "truncated": false
+}

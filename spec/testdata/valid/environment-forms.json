@@ -1,0 +1,105 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "none",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MAX_TRANSFER",
+          "form": 0,
+          "value": "MTAwMA=="
+        },
+        {
+          "key": "env.API_TOKEN",
+          "form": 1,
+          "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+        },
+        {
+          "key": "env.UNUSED",
+          "form": 2
+        },
+        {
+          "key": "host.mount./dev/shm",
+          "form": 0,
+          "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+        },
+        {
+          "key": "host.sessions.wfinfra",
+          "form": 0,
+          "value": "MQ=="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "s",
+      "position": "1",
+      "data": "eA=="
+    },
+    {
+      "type": "output",
+      "seq": 2,
+      "sink": "sink",
+      "data": "eQ==",
+      "scope": 0
+    },
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 3,
+      "facts": [
+        {
+          "key": "host.sessions.wfinfra",
+          "form": 0,
+          "value": "MA=="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 4,
+      "source": "s",
+      "position": "2",
+      "data": "eg=="
+    },
+    {
+      "type": "marker",
+      "seq": 5,
+      "kind": "panic",
+      "message": "segment vanished"
+    },
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 6,
+      "facts": [
+        {
+          "key": "host.mount./dev/shm",
+          "form": 2
+        },
+        {
+          "key": "host.sessions.wfinfra",
+          "form": 1,
+          "value": "a4ayc/80/OGda4BO/1o/V0etpOqiLx1JwB5S3beHW0s="
+        }
+      ]
+    },
+    {
+      "type": "marker",
+      "seq": 7,
+      "kind": "exit",
+      "message": "process ended without closing the recorder"
+    }
+  ],
+  "truncated": false
+}

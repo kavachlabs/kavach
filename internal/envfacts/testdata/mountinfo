@@ -1,0 +1,7 @@
+22 28 0:21 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs sysfs rw
+23 28 0:22 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw
+28 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw,errors=remount-ro
+31 22 0:25 / /dev/shm rw,nosuid,nodev shared:4 - tmpfs tmpfs rw,size=8192k
+32 28 0:26 / /mnt/with\040space rw,relatime - tmpfs tmpfs rw
+33 28 0:27 / /tmp rw,nosuid - tmpfs tmpfs rw
+34 28 0:28 / /tmp ro,nosuid,nodev master:1 shared:2 - tmpfs tmpfs ro

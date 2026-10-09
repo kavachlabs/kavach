@@ -1,0 +1,324 @@
+{
+  "exit": 0,
+  "control": [
+    {
+      "file": "conformance-test-run-000000.kavach",
+      "protocol": 1,
+      "recorder": "kavach-recorder/0.2.0",
+      "run": "test-run",
+      "t": "ready"
+    },
+    {
+      "t": "snapshot_request"
+    },
+    {
+      "file": "conformance-test-run-000001.kavach",
+      "first_seq": "4",
+      "t": "segment"
+    },
+    {
+      "t": "snapshot_request"
+    },
+    {
+      "failure": "panic: late",
+      "file": "fixtures/conformance-test-run-000009.kavach",
+      "seq": "9",
+      "t": "fixture"
+    },
+    {
+      "t": "closed"
+    }
+  ],
+  "files": {
+    "conformance-test-run-000000.kavach": {
+      "major": 0,
+      "minor": 2,
+      "meta": {
+        "service": "conformance",
+        "start": "genesis",
+        "compression": "zstd",
+        "producer": "kavach-go/conformance",
+        "recorder": "kavach-recorder/0.2.0",
+        "recorded_at": "2026-01-01T00:00:00Z",
+        "run": "test-run",
+        "segment": 0
+      },
+      "records": [
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 0,
+          "facts": [
+            {
+              "key": "env.API_TOKEN",
+              "form": 1,
+              "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+            },
+            {
+              "key": "env.MAX_TRANSFER",
+              "form": 0,
+              "value": "MTAwMA=="
+            },
+            {
+              "key": "host.arch",
+              "form": 0,
+              "value": "YW1kNjQ="
+            },
+            {
+              "key": "host.kernel",
+              "form": 0,
+              "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+            },
+            {
+              "key": "host.mount./dev/shm",
+              "form": 0,
+              "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+            },
+            {
+              "key": "host.os",
+              "form": 0,
+              "value": "bGludXg="
+            },
+            {
+              "key": "host.sessions.wfinfra",
+              "form": 0,
+              "value": "MQ=="
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 1,
+          "source": "test",
+          "position": "0",
+          "data": "YQ=="
+        },
+        {
+          "type": "clock",
+          "seq": 2,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 3,
+          "sink": "sink",
+          "data": "b3V0LWE=",
+          "scope": 0
+        }
+      ],
+      "truncated": false
+    },
+    "conformance-test-run-000001.kavach": {
+      "major": 0,
+      "minor": 2,
+      "meta": {
+        "service": "conformance",
+        "start": "snapshot",
+        "compression": "zstd",
+        "producer": "kavach-go/conformance",
+        "recorder": "kavach-recorder/0.2.0",
+        "recorded_at": "2026-01-01T00:00:00Z",
+        "run": "test-run",
+        "segment": 1
+      },
+      "records": [
+        {
+          "type": "snapshot",
+          "flags": 1,
+          "seq": 4,
+          "data": "czE="
+        },
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 5,
+          "facts": [
+            {
+              "key": "env.API_TOKEN",
+              "form": 1,
+              "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+            },
+            {
+              "key": "env.MAX_TRANSFER",
+              "form": 0,
+              "value": "MTAwMA=="
+            },
+            {
+              "key": "host.arch",
+              "form": 0,
+              "value": "YW1kNjQ="
+            },
+            {
+              "key": "host.kernel",
+              "form": 0,
+              "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+            },
+            {
+              "key": "host.mount./dev/shm",
+              "form": 0,
+              "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+            },
+            {
+              "key": "host.os",
+              "form": 0,
+              "value": "bGludXg="
+            },
+            {
+              "key": "host.sessions.wfinfra",
+              "form": 0,
+              "value": "MQ=="
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 6,
+          "source": "test",
+          "position": "1",
+          "data": "Yg=="
+        },
+        {
+          "type": "clock",
+          "seq": 7,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 8,
+          "sink": "sink",
+          "data": "b3V0LWI=",
+          "scope": 0
+        },
+        {
+          "type": "input",
+          "seq": 9,
+          "source": "test",
+          "position": "f",
+          "data": "YmFk"
+        },
+        {
+          "type": "clock",
+          "seq": 10,
+          "unix_nanos": 5
+        },
+        {
+          "type": "marker",
+          "seq": 11,
+          "kind": "panic",
+          "message": "late",
+          "data": "dHJhY2U="
+        }
+      ],
+      "truncated": false
+    },
+    "fixtures/conformance-test-run-000009.kavach": {
+      "major": 0,
+      "minor": 2,
+      "meta": {
+        "service": "conformance",
+        "start": "snapshot",
+        "compression": "zstd",
+        "producer": "kavach-go/conformance",
+        "recorder": "kavach-recorder/0.2.0",
+        "recorded_at": "2026-01-01T00:00:00Z",
+        "run": "test-run",
+        "segment": 1,
+        "cut_from": {
+          "run": "test-run",
+          "segment": 1,
+          "first_seq": 4,
+          "last_seq": 11
+        }
+      },
+      "records": [
+        {
+          "type": "snapshot",
+          "flags": 1,
+          "seq": 4,
+          "data": "czE="
+        },
+        {
+          "type": "environment",
+          "flags": 1,
+          "seq": 5,
+          "facts": [
+            {
+              "key": "env.API_TOKEN",
+              "form": 1,
+              "value": "HsHCa1DV08WNlYMYGvgHZlX+AHVr9yhZQLo2cPmfy6A="
+            },
+            {
+              "key": "env.MAX_TRANSFER",
+              "form": 0,
+              "value": "MTAwMA=="
+            },
+            {
+              "key": "host.arch",
+              "form": 0,
+              "value": "YW1kNjQ="
+            },
+            {
+              "key": "host.kernel",
+              "form": 0,
+              "value": "Ni44LjAtNDUtZ2VuZXJpYw=="
+            },
+            {
+              "key": "host.mount./dev/shm",
+              "form": 0,
+              "value": "dG1wZnMgcncsbm9zdWlkLG5vZGV2"
+            },
+            {
+              "key": "host.os",
+              "form": 0,
+              "value": "bGludXg="
+            },
+            {
+              "key": "host.sessions.wfinfra",
+              "form": 0,
+              "value": "MQ=="
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "seq": 6,
+          "source": "test",
+          "position": "1",
+          "data": "Yg=="
+        },
+        {
+          "type": "clock",
+          "seq": 7,
+          "unix_nanos": 1001
+        },
+        {
+          "type": "output",
+          "seq": 8,
+          "sink": "sink",
+          "data": "b3V0LWI=",
+          "scope": 0
+        },
+        {
+          "type": "input",
+          "seq": 9,
+          "source": "test",
+          "position": "f",
+          "data": "YmFk"
+        },
+        {
+          "type": "clock",
+          "seq": 10,
+          "unix_nanos": 5
+        },
+        {
+          "type": "marker",
+          "seq": 11,
+          "kind": "panic",
+          "message": "late",
+          "data": "dHJhY2U="
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

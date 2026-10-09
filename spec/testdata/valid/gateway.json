@@ -1,0 +1,73 @@
+{
+  "major": 0,
+  "minor": 2,
+  "meta": {
+    "service": "conformance",
+    "start": "genesis",
+    "compression": "zstd",
+    "producer": "kavach-go/conformance"
+  },
+  "records": [
+    {
+      "type": "environment",
+      "flags": 1,
+      "seq": 0,
+      "facts": [
+        {
+          "key": "env.MODE",
+          "form": 0,
+          "value": "dGVzdA=="
+        },
+        {
+          "key": "host.os",
+          "form": 0,
+          "value": "bGludXg="
+        }
+      ]
+    },
+    {
+      "type": "input",
+      "seq": 1,
+      "source": "kafka:orders",
+      "position": "0:1",
+      "data": "bzE="
+    },
+    {
+      "type": "gateway",
+      "flags": 1,
+      "seq": 2,
+      "gateway": "fx-rates",
+      "request": "RVVSVVNE",
+      "response": "MS4wOA==",
+      "scope": 0
+    },
+    {
+      "type": "gateway",
+      "flags": 1,
+      "seq": 3,
+      "gateway": "postgres:accounts",
+      "request": "c2VsZWN0IDE=",
+      "error": "timeout",
+      "scope": 0
+    },
+    {
+      "type": "gateway",
+      "flags": 1,
+      "seq": 4,
+      "gateway": "shm:/dev/shm/orderbook",
+      "request": "cmVhZA==",
+      "error": "ENOENT",
+      "scope": 1
+    },
+    {
+      "type": "gateway",
+      "flags": 1,
+      "seq": 5,
+      "gateway": "shm:/dev/shm/orderbook",
+      "request": "cmVhZA==",
+      "response": "cm93cw==",
+      "scope": 1
+    }
+  ],
+  "truncated": false
+}

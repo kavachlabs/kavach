@@ -98,10 +98,10 @@ func TestMCPTools(t *testing.T) {
 	)
 	sc, text, isErr := toolOutput(t, resps[0])
 	incs := sc["incidents"].([]any)
-	if isErr || len(incs) != 1 || !strings.Contains(text, `"seq": 31`) {
+	if isErr || len(incs) != 1 || !strings.Contains(text, `"seq": 32`) {
 		t.Fatalf("list: %s", text)
 	}
-	if f := incs[0].(map[string]any)["failure"].(map[string]any); f["kind"] != "panic" || f["seq"] != 31.0 {
+	if f := incs[0].(map[string]any)["failure"].(map[string]any); f["kind"] != "panic" || f["seq"] != 32.0 {
 		t.Fatalf("failure: %v", f)
 	}
 	for i, want := range map[int]string{
@@ -117,7 +117,7 @@ func TestMCPTools(t *testing.T) {
 
 func TestListCommand(t *testing.T) {
 	code, out, _ := runCLI(t, "list", "../../examples")
-	if code != exitPass || !strings.Contains(out, "null-amount.kavach") || !strings.Contains(out, "panic at seq 31") {
+	if code != exitPass || !strings.Contains(out, "null-amount.kavach") || !strings.Contains(out, "panic at seq 32") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	code, out, _ = runCLI(t, "list", "--json", t.TempDir())

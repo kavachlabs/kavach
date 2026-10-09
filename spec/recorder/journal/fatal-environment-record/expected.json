@@ -1,0 +1,18 @@
+{
+  "exit": 1,
+  "control": [
+    {
+      "file": "conformance-test-run-000000.kavach",
+      "protocol": 1,
+      "recorder": "kavach-recorder/0.2.0",
+      "run": "test-run",
+      "t": "ready"
+    },
+    {
+      "fatal": true,
+      "message": "record frame holds a environment record; the recorder writes those",
+      "t": "error"
+    }
+  ],
+  "files": {}
+}

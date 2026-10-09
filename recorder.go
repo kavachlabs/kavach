@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/kavachlabs/kavach/internal/envfacts"
 	"github.com/kavachlabs/kavach/journal"
 )
 
@@ -93,6 +95,7 @@ type Recorder struct {
 	steps   int
 	lost    bool
 	env     recordEnv
+	facts   []journal.Fact // the environment, collected on the first step
 }
 
 // NewRecorder returns a Recorder that drives h.
@@ -139,6 +142,9 @@ func (r *Recorder) Step(in Input) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.nextSeq == 0 {
+		r.addEnvironment()
+	}
 	r.add(journal.Record{Type: journal.TypeInput, Source: in.Source, Position: in.Position, Data: clone(in.Data)})
 	r.env.outs = r.env.outs[:0]
 
@@ -219,6 +225,18 @@ func (r *Recorder) checkpoint() {
 	r.start = journal.StartSnapshot
 	r.steps = 0
 	r.add(journal.Record{Type: journal.TypeSnapshot, Flags: journal.FlagCritical, Data: data})
+	r.addEnvironment()
+}
+
+// addEnvironment adds a record holding every fact of the environment. The
+// facts are collected once: this recorder does not watch the host.
+func (r *Recorder) addEnvironment() {
+	if r.facts == nil {
+		r.facts = envfacts.New().Facts(nil)
+		r.facts = append(r.facts, journal.Fact{Key: "host.runtime", Form: journal.FactValue, Value: []byte(runtime.Version())})
+		journal.SortFacts(r.facts)
+	}
+	r.add(journal.Record{Type: journal.TypeEnvironment, Flags: journal.FlagCritical, Facts: r.facts})
 }
 
 // Flush writes the current window to a fixture marked with a trigger marker
@@ -279,7 +297,7 @@ func (e *recordEnv) Read(p []byte) (int, error) {
 
 func (e *recordEnv) Emit(sink string, data []byte) {
 	data = clone(data)
-	e.r.add(journal.Record{Type: journal.TypeOutput, Sink: sink, Data: data})
+	e.r.add(journal.Record{Type: journal.TypeOutput, Sink: sink, Data: data, Scope: journal.ScopeRemote})
 	e.outs = append(e.outs, Output{Sink: sink, Data: data})
 }
 

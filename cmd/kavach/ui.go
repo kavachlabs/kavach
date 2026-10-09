@@ -142,4 +142,8 @@ var typeColor = map[string]string{
 	"output":   ansiGreen,
 	"marker":   ansiRed,
 	"snapshot": ansiMagenta,
+
+	"gateway":     ansiBlue,
+	"config":      ansiDim,
+	"environment": ansiMagenta,
 }

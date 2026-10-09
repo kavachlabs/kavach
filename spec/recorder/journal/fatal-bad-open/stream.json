@@ -1,0 +1,14 @@
+{
+  "description": "An open object with an unsupported protocol is fatal.",
+  "frames": [
+    {
+      "frame": "open",
+      "open": {
+        "producer": "kavach-go/conformance",
+        "protocol": 2,
+        "service": "conformance",
+        "start": "genesis"
+      }
+    }
+  ]
+}

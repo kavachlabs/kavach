@@ -1,0 +1,18 @@
+{
+  "exit": 1,
+  "control": [
+    {
+      "file": "conformance-test-run-000000.kavach",
+      "protocol": 1,
+      "recorder": "kavach-recorder/0.2.0",
+      "run": "test-run",
+      "t": "ready"
+    },
+    {
+      "fatal": true,
+      "message": "the first frame after open must be a snapshot when start is \"snapshot\"",
+      "t": "error"
+    }
+  ],
+  "files": {}
+}
