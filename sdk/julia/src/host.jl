@@ -183,6 +183,7 @@ function query(env::HostEnv, gateway::AbstractString, request_bytes)
     request_bytes = to_bytes(request_bytes)
     gw = resolve_gateway(env.host.gateways, gateway)
     ans = request(env.host, (t="gateway", gateway=gateway, request=b64(request_bytes), scope=gw.islocal ? "local" : "remote"), "gateway")
+    get(ans, "live", false) === true && throw(Fatal("sandbox mode not supported"))
     if haskey(ans, "error") && !isempty(string(ans["error"]))
         err, resp = string(ans["error"]), UInt8[]
     else
