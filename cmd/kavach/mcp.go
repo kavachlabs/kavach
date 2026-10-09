@@ -20,8 +20,8 @@ const mcpLatestVersion = "2025-06-18"
 
 var mcpVersions = []string{mcpLatestVersion, "2025-03-26", "2024-11-05"}
 
-const mcpInstructions = `Kavach replays production crashes of journal-driven Go services from fixture files (*.kavach) and verifies fixes.
-Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; fix the handler, never the fixture; build old and new binaries; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.`
+const mcpInstructions = `Kavach replays production crashes of journal-driven services from fixture files (*.kavach) and verifies fixes.
+Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.`
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -183,12 +183,12 @@ var mcpTools = []map[string]any{
 	{
 		"name":  "kavach_replay",
 		"title": "Replay an incident",
-		"description": "Replay a fixture through a replay binary (a Go binary whose main calls kavach.MaybeReplay) and return the verdict. " +
+		"description": "Replay a fixture through a host command (a service in any language that implements the Kavach host protocol; kavach-host is appended) and return the verdict. " +
 			"Use it to reproduce an incident with the current build before changing code: expect still_failing@N, where N is the seq of the failing input. " +
 			"Verdicts: still_failing@N, invariant_violated(X)@N, diverged@N, nondeterministic@N, fixed, ok.",
 		"inputSchema": obj(map[string]any{
 			"fixture":       str("path to the .kavach fixture"),
-			"bin":           str("replay binary; defaults to $KAVACH_BIN"),
+			"bin":           str("host command, e.g. ./ledger or \"python -m ledger\"; defaults to $KAVACH_BIN"),
 			"include_steps": map[string]any{"type": "boolean", "description": "also return every step's outputs"},
 		}, "fixture"),
 		"annotations": map[string]any{"readOnlyHint": true},
@@ -201,8 +201,8 @@ var mcpTools = []map[string]any{
 			"unverified: too few variants reproduce the incident to check the fix. Any other verdict is the new binary's replay of the fixture itself.",
 		"inputSchema": obj(map[string]any{
 			"fixture": str("path to the .kavach fixture"),
-			"old":     str("replay binary built from the code that failed"),
-			"new":     str("replay binary built from the candidate fix"),
+			"old":     str("host command for the code that failed"),
+			"new":     str("host command for the candidate fix"),
 			"variants": map[string]any{"type": "integer", "minimum": 0,
 				"description": fmt.Sprintf("variants that must reproduce the incident and pass; default %d, 0 checks only the fixture", kavach.DefaultMinVariants)},
 			"keep": str("directory to save failing variants in; defaults to a new temporary directory"),
@@ -274,6 +274,12 @@ func mcpReplay(raw json.RawMessage) (map[string]any, error) {
 	}
 	if res.Variant != "" {
 		out["variant"] = res.Variant
+	}
+	if len(res.Drift) > 0 {
+		out["drift"] = res.Drift
+	}
+	if len(res.EnvChanges) > 0 {
+		out["environment_changes"] = res.EnvChanges
 	}
 	if a.IncludeSteps {
 		out["steps"] = res.Steps

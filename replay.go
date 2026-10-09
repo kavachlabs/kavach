@@ -46,9 +46,14 @@ type StepResult struct {
 	Outputs []Output `json:"outputs"`
 	Panic   string   `json:"panic,omitempty"`
 	Error   string   `json:"error,omitempty"`
-	// Synthesized counts clock and random reads that the journal could not
-	// serve. It is only ever non-zero for the step that failed when the journal
-	// was recorded: a fixed build may read more than the failing one did.
+	// Crash is set when the host process running the step exited during it
+	// (SPEC.md §9.5); it holds what happened.
+	Crash string `json:"crash,omitempty"`
+	// Synthesized counts reads that the journal could not serve: clock and
+	// random reads past the recorded ones, gateway queries answered by a
+	// record with a different request or by none, config values that no
+	// record of the step held. It is only ever non-zero for a lenient step
+	// (SPEC.md §6): a fixed build may read more than the failing one did.
 	Synthesized int `json:"synthesized_reads,omitempty"`
 }
 
@@ -66,6 +71,11 @@ type Result struct {
 	Recorded  *Failure     `json:"recorded_failure,omitempty"`
 	Variant   string       `json:"variant,omitempty"` // the mutation, when replaying a variant journal
 	Steps     []StepResult `json:"steps"`
+	// Drift and EnvChanges explain a status; they never change it (SPEC.md §6.2).
+	// Drift is set only when the replay ran in a host process that reported its
+	// environment.
+	Drift      []Drift     `json:"drift,omitempty"`
+	EnvChanges []EnvChange `json:"environment_changes,omitempty"`
 }
 
 // String formats the status as an agent-facing verdict, e.g. "diverged@12",
@@ -94,17 +104,36 @@ func ReplayFile(path string, newHandler func() Handler) (*Result, error) {
 }
 
 type step struct {
-	input   journal.Record
-	reads   []journal.Record // clock and rand, in order
-	outputs []Output
-	marker  *journal.Record // failure marker, if any
+	input    journal.Record
+	reads    []journal.Record // clock, rand, gateway and config, in order
+	outputs  []Output
+	marker   *journal.Record  // failure marker, if any
+	envAfter []journal.Record // environment records written after the step
 }
 
 // Replay re-runs every step of j against a fresh handler from newHandler,
-// serving clock and random reads from the journal and capturing outputs. It
-// returns an error only if the journal cannot be replayed at all.
+// serving reads from the journal and capturing outputs. It returns an error
+// only if the journal cannot be replayed at all.
 func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
-	h := newHandler()
+	return replayJournal(j, func(snapshot []byte) (Handler, error) {
+		h := newHandler()
+		if snapshot == nil {
+			return h, nil
+		}
+		s, ok := h.(Snapshotter)
+		if !ok {
+			return nil, errors.New("kavach: fixture starts from a snapshot but the handler does not implement Snapshotter")
+		}
+		if err := s.Restore(snapshot); err != nil {
+			return nil, fmt.Errorf("kavach: restoring snapshot: %w", err)
+		}
+		return h, nil
+	})
+}
+
+// replayJournal is the replay engine. open creates the handler the journal
+// starts from; snapshot is nil unless the journal starts from one.
+func replayJournal(j *journal.Journal, open func(snapshot []byte) (Handler, error)) (*Result, error) {
 	res := &Result{Service: j.Header.Meta.Service, Start: j.Header.Meta.Start, Records: len(j.Records), Steps: []StepResult{}}
 	// A variant never happened, so it has no recorded outputs to match and its
 	// recorded reads are only a source of plausible values: every step is lenient.
@@ -114,25 +143,13 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 	}
 
 	recs := j.Records
+	var snapshot []byte
 	if j.Header.Meta.Start == journal.StartSnapshot {
 		if len(recs) == 0 {
 			return nil, errors.New("kavach: snapshot journal has no snapshot record")
 		}
-		s, ok := h.(Snapshotter)
-		if !ok {
-			return nil, errors.New("kavach: fixture starts from a snapshot but the handler does not implement Snapshotter")
-		}
-		if err := s.Restore(recs[0].Data); err != nil {
-			return nil, fmt.Errorf("kavach: restoring snapshot: %w", err)
-		}
+		snapshot = append([]byte{}, recs[0].Data...)
 		recs = recs[1:]
-	}
-	// Gateway and config records are reads, which this replayer cannot serve.
-	// Environment records are not reads; splitSteps skips them.
-	for _, r := range recs {
-		if r.Type == journal.TypeGateway || r.Type == journal.TypeConfig {
-			return nil, fmt.Errorf("kavach: the journal holds a %s record at seq %d; replaying %s records is not supported yet", r.Type, r.Seq, r.Type)
-		}
 	}
 	if len(recs) > 0 && recs[0].Type == journal.TypeSnapshot {
 		return nil, errors.New("kavach: genesis journal contains a snapshot record")
@@ -148,8 +165,21 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 			break
 		}
 	}
+	hist := newHistory()
+	if g := genesisEnv(recs); g != nil {
+		hist.addFacts(*g)
+	}
+	for _, st := range steps {
+		for _, e := range st.envAfter {
+			res.EnvChanges = append(res.EnvChanges, newEnvChange(st.input.Seq, e))
+		}
+	}
 
-	env := &replayEnv{}
+	h, err := open(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	env := &replayEnv{hist: hist}
 	for _, st := range steps {
 		seq := st.input.Seq
 		env.reset(st, variant || st.marker != nil)
@@ -161,6 +191,14 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 		if nd, ok := pv.(nondeterminism); ok && panicked {
 			res.Steps = append(res.Steps, sr)
 			return res.set(StatusNondeterministic, nd.seq, string(nd.msg)), nil
+		}
+		if hf, ok := pv.(hostFailure); ok && panicked {
+			return nil, hf.err
+		}
+		if hc, ok := pv.(hostCrash); ok && panicked {
+			sr.Crash = string(hc)
+			res.Steps = append(res.Steps, sr)
+			return res.set(StatusStillFailing, seq, "crash: "+sr.Crash), nil
 		}
 		if panicked {
 			sr.Panic = fmt.Sprint(pv)
@@ -186,6 +224,7 @@ func Replay(j *journal.Journal, newHandler func() Handler) (*Result, error) {
 				return res.set(StatusDiverged, seq, d), nil
 			}
 		}
+		hist.addStep(st)
 	}
 	if res.Recorded != nil {
 		res.Status = StatusFixed
@@ -209,7 +248,7 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 		case journal.TypeInput:
 			cur = &step{input: rec}
 			steps = append(steps, cur)
-		case journal.TypeClock, journal.TypeRand:
+		case journal.TypeClock, journal.TypeRand, journal.TypeGateway, journal.TypeConfig:
 			if cur == nil {
 				return nil, fmt.Errorf("kavach: %s record at seq %d precedes the first input", rec.Type, rec.Seq)
 			}
@@ -219,6 +258,10 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 				return nil, fmt.Errorf("kavach: output record at seq %d precedes the first input", rec.Seq)
 			}
 			cur.outputs = append(cur.outputs, Output{Sink: rec.Sink, Data: rec.Data})
+		case journal.TypeEnvironment:
+			if cur != nil {
+				cur.envAfter = append(cur.envAfter, rec)
+			}
 		case journal.TypeMarker:
 			if cur != nil && cur.marker == nil && isFailure(rec.Kind) {
 				cur.marker = &recs[i]
@@ -226,6 +269,19 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 		}
 	}
 	return steps, nil
+}
+
+// genesisEnv returns the environment record before the first input, if any.
+func genesisEnv(recs []journal.Record) *journal.Record {
+	for i := range recs {
+		switch recs[i].Type {
+		case journal.TypeEnvironment:
+			return &recs[i]
+		case journal.TypeInput:
+			return nil
+		}
+	}
+	return nil
 }
 
 func isFailure(kind string) bool {
@@ -272,6 +328,68 @@ type nondeterminism struct {
 	msg string
 }
 
+// hostFailure and hostCrash are the panic values a host proxy uses to end a
+// step: the first makes the replay fail to run, the second is a step failure
+// of the host process itself (SPEC.md §9.5).
+type hostFailure struct{ err error }
+
+type hostCrash string
+
+// history is what earlier parts of a journal said about config values: the
+// last config record of each key, and the latest value of each environment
+// fact. Lenient steps fall back on it (SPEC.md §6).
+type history struct {
+	config map[string]journal.Record
+	facts  map[string]factAt
+}
+
+type factAt struct {
+	fact journal.Fact
+	seq  uint64
+}
+
+func newHistory() *history {
+	return &history{config: map[string]journal.Record{}, facts: map[string]factAt{}}
+}
+
+func (h *history) addFacts(env journal.Record) {
+	for _, f := range env.Facts {
+		h.facts[f.Key] = factAt{f, env.Seq}
+	}
+}
+
+func (h *history) addStep(st *step) {
+	for _, r := range st.reads {
+		if r.Type == journal.TypeConfig {
+			h.config[r.Key] = r
+		}
+	}
+	for _, e := range st.envAfter {
+		h.addFacts(e)
+	}
+}
+
+// lookup returns the value last recorded for key, whichever of a config record
+// and an environment fact came later. A key is also looked up as a flag. or
+// env. fact. SPEC: a change record holds only the facts that changed, so the
+// "latest environment record" is read as the latest record that holds the fact.
+func (h *history) lookup(key string) ([]byte, bool) {
+	best, bestSeq, found := journal.Record{}, uint64(0), false
+	if r, ok := h.config[key]; ok {
+		best, bestSeq, found = r, r.Seq, true
+	}
+	for _, k := range []string{key, "flag." + key, "env." + key} {
+		if f, ok := h.facts[k]; ok && (!found || f.seq > bestSeq) {
+			best = journal.Record{Present: f.fact.Form == journal.FactValue, Value: f.fact.Value}
+			bestSeq, found = f.seq, true
+		}
+	}
+	if !found || !best.Present {
+		return nil, false
+	}
+	return clone(best.Value), true
+}
+
 // replayEnv serves a step's recorded reads. Normally reads must match the
 // journal exactly. For the step that failed when recorded, it is lenient: a
 // fixed handler may go past the point where the old one failed, so reads are
@@ -287,11 +405,13 @@ type replayEnv struct {
 	randPos     int
 	lastClock   int64
 	synthesized int
+	used        []bool // lenient gateway and config reads already served
+	hist        *history
 }
 
 func (e *replayEnv) reset(st *step, lenient bool) {
 	e.input, e.reads, e.pos, e.outs = st.input.Seq, st.reads, 0, e.outs[:0]
-	e.lenient, e.clockPos, e.randPos, e.synthesized = lenient, 0, 0, 0
+	e.lenient, e.clockPos, e.randPos, e.synthesized, e.used = lenient, 0, 0, 0, nil
 }
 
 func (e *replayEnv) next(want journal.Type) journal.Record {
@@ -312,6 +432,20 @@ func (e *replayEnv) nextOfType(want journal.Type, pos *int) (journal.Record, boo
 		if e.reads[*pos].Type == want {
 			r := e.reads[*pos]
 			*pos++
+			return r, true
+		}
+	}
+	return journal.Record{}, false
+}
+
+// takeUnread marks and returns the first unserved read for which match is true.
+func (e *replayEnv) takeUnread(match func(journal.Record) bool) (journal.Record, bool) {
+	if e.used == nil {
+		e.used = make([]bool, len(e.reads))
+	}
+	for i, r := range e.reads {
+		if !e.used[i] && match(r) {
+			e.used[i] = true
 			return r, true
 		}
 	}
@@ -357,6 +491,50 @@ func fillDeterministic(p []byte, seq uint64, n int) {
 		sum := sha256.Sum256(block[:])
 		copy(p[i:], sum[:])
 	}
+}
+
+func (e *replayEnv) Query(gateway string, request []byte) ([]byte, error) {
+	var rec journal.Record
+	if !e.lenient {
+		rec = e.next(journal.TypeGateway)
+		if rec.Gateway != gateway || !bytes.Equal(rec.Request, request) {
+			panic(nondeterminism{rec.Seq, fmt.Sprintf("handler queried %s with %q, journal has a query of %s with %q at seq %d", gateway, request, rec.Gateway, rec.Request, rec.Seq)})
+		}
+	} else {
+		var ok bool
+		if rec, ok = e.takeUnread(func(r journal.Record) bool {
+			return r.Type == journal.TypeGateway && r.Gateway == gateway && bytes.Equal(r.Request, request)
+		}); !ok {
+			e.synthesized++
+			if rec, ok = e.takeUnread(func(r journal.Record) bool { return r.Type == journal.TypeGateway && r.Gateway == gateway }); !ok {
+				return nil, errors.New("kavach: no recorded response")
+			}
+		}
+	}
+	if rec.Error != "" {
+		return nil, errors.New(rec.Error)
+	}
+	return clone(rec.Response), nil
+}
+
+func (e *replayEnv) Config(key string) ([]byte, bool) {
+	var rec journal.Record
+	if !e.lenient {
+		rec = e.next(journal.TypeConfig)
+		if rec.Key != key {
+			panic(nondeterminism{rec.Seq, fmt.Sprintf("handler read config %q, journal has %q at seq %d", key, rec.Key, rec.Seq)})
+		}
+	} else {
+		var ok bool
+		if rec, ok = e.takeUnread(func(r journal.Record) bool { return r.Type == journal.TypeConfig && r.Key == key }); !ok {
+			e.synthesized++
+			return e.hist.lookup(key)
+		}
+	}
+	if !rec.Present {
+		return nil, false
+	}
+	return clone(rec.Value), true
 }
 
 func (e *replayEnv) Emit(sink string, data []byte) {
@@ -405,6 +583,8 @@ func Compare(old, new *Result) *Divergence {
 
 func failure(s StepResult) string {
 	switch {
+	case s.Crash != "":
+		return "crash: " + s.Crash
 	case s.Panic != "":
 		return "panic: " + s.Panic
 	case s.Error != "":

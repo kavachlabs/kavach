@@ -193,7 +193,7 @@ func TestCLI(t *testing.T) {
 	run(2, "replay")
 	run(2, "diff", paths[0], "--old", oldBin)
 	run(2, "frobnicate")
-	mustContain(run(3, "replay", paths[0], "--bin", cli), "kavach.MaybeReplay")
+	mustContain(run(3, "replay", paths[0], "--bin", cli), "host exited before ready")
 	os.WriteFile(filepath.Join(dir, "junk.kavach"), []byte("this is a plain text file, not a journal"), 0o644)
 	mustContain(run(3, "inspect", filepath.Join(dir, "junk.kavach")), "bad magic")
 	mustContain(run(0, "version"), "journal format 0.2")

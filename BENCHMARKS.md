@@ -45,7 +45,7 @@ invariants per step, compare outputs.
 
 **CLI end to end.** Wall time of
 `kavach replay examples/ledger/testdata/null-amount.kavach --bin <ledger>`,
-from process start to exit: starting the CLI, starting the replay binary,
+from process start to exit: starting the CLI, starting the host process,
 replaying, writing and reading the JSON result. Measured with:
 
 ```bash
@@ -66,7 +66,7 @@ EOF
 **Fix verification.** In process, `kavach.Verify` with the planted-bug ledger as
 the old build and the correct nil check as the new one, run serially. End to
 end, wall time of `kavach diff` from process start to exit, which starts a
-replay binary for each of the 87 replays, at most one per CPU at a time:
+host process for each of the 87 replays, at most one per CPU at a time:
 
 ```bash
 go build -o /tmp/ledger-new -tags ledgerfix ./examples/ledger

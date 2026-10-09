@@ -105,7 +105,7 @@ func TestMCPTools(t *testing.T) {
 		t.Fatalf("failure: %v", f)
 	}
 	for i, want := range map[int]string{
-		1: "no replay binary", 2: `unknown field "colour"`, 3: "fixture, old and new are required",
+		1: "no host command", 2: `unknown field "colour"`, 3: "fixture, old and new are required",
 		4: "variants must not be negative", 5: "no such file",
 	} {
 		_, text, isErr := toolOutput(t, resps[i])

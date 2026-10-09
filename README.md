@@ -94,9 +94,11 @@ declare invariants that are checked after every step, live and in replay. Use
    in-process flight recorder keeps recent journal events in memory and flushes
    them to a fixture file when the handler panics, returns an error, or you
    trigger it.
-2. **Replay.** `kavach replay <fixture> --bin <your-binary>` folds the recorded
-   inputs through your handler, serving every clock and random read from the fixture. Outputs are
-   captured as events, never executed, so replay touches no external system.
+2. **Replay.** `kavach replay <fixture> --bin <your-service>` runs your own
+   build as a host process (any language; `--bin "python -m ledger"` works too)
+   and folds the recorded inputs through its handler, serving every clock,
+   random, gateway and config read from the fixture. Outputs are captured as
+   events, never executed, so replay touches no external system.
 3. **Verify.** `kavach diff <fixture> --old <bin> --new <bin>` reports the first
    output where two builds diverge. A fix only counts when the original failure
    is gone, declared invariants hold, steps before the failure still produce

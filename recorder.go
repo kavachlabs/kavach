@@ -39,6 +39,12 @@ type Options struct {
 	Clock func() time.Time
 	// Rand is the source of randomness. Defaults to crypto/rand.Reader.
 	Rand io.Reader
+	// Gateway makes the query a handler asked of the external system named
+	// gateway. If nil, every query fails.
+	Gateway func(gateway string, request []byte) ([]byte, error)
+	// Config returns the current value of a config key and where it came
+	// from. Defaults to environment variables, with source "env".
+	Config func(key string) (value []byte, source string, ok bool)
 	// Deliver executes a step's outputs after the step succeeds. If nil,
 	// outputs are only recorded.
 	Deliver func(outs []Output) error
@@ -111,6 +117,12 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 	}
 	if opts.Rand == nil {
 		opts.Rand = rand.Reader
+	}
+	if opts.Config == nil {
+		opts.Config = func(key string) ([]byte, string, bool) {
+			v, ok := os.LookupEnv(key)
+			return []byte(v), "env", ok
+		}
 	}
 	if opts.SnapshotEvery <= 0 {
 		opts.SnapshotEvery = DefaultSnapshotEvery
@@ -293,6 +305,31 @@ func (e *recordEnv) Read(p []byte) (int, error) {
 	}
 	e.r.add(journal.Record{Type: journal.TypeRand, Data: clone(p)})
 	return len(p), nil
+}
+
+func (e *recordEnv) Query(gateway string, request []byte) ([]byte, error) {
+	var resp []byte
+	err := errors.New("kavach: no gateway configured")
+	if e.r.opts.Gateway != nil {
+		resp, err = e.r.opts.Gateway(gateway, request)
+	}
+	rec := journal.Record{Type: journal.TypeGateway, Flags: journal.FlagCritical, Gateway: gateway, Request: clone(request), Scope: journal.ScopeRemote}
+	if err != nil {
+		rec.Error = err.Error()
+	} else {
+		rec.Response = clone(resp)
+	}
+	e.r.add(rec)
+	return resp, err
+}
+
+func (e *recordEnv) Config(key string) ([]byte, bool) {
+	v, source, ok := e.r.opts.Config(key)
+	if !ok {
+		v = nil
+	}
+	e.r.add(journal.Record{Type: journal.TypeConfig, Flags: journal.FlagCritical, Key: key, Present: ok, Value: clone(v), Source: source})
+	return v, ok
 }
 
 func (e *recordEnv) Emit(sink string, data []byte) {
