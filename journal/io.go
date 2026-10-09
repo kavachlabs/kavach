@@ -394,8 +394,8 @@ func (r *Reader) read() (Record, error) {
 	return rec, nil
 }
 
-// cut records that the file ended inside a frame, n bytes after the last
-// complete one.
+// cut records that the file ended inside a frame, and how many bytes after the
+// last complete one it did.
 func (r *Reader) cut() {
 	r.done = true
 	r.ignored = r.pos - r.good

@@ -50,7 +50,7 @@ first offset. With a local broker (for example
 
 The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
 and it still replays with no broker running. The demo is its own Go module, so
-the `kavach` library itself has no dependencies.
+the `kavach` library itself has one dependency, `github.com/klauspost/compress`.
 
 ## With an AI agent
 
