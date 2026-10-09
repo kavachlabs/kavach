@@ -47,7 +47,6 @@ mutable struct Host
     wr::IO
     gateways::Any
     environment::Function
-    mode::String
     aborted::Bool
 end
 
@@ -125,8 +124,7 @@ end
 
 function hello(h::Host, msg::Dict)
     get(msg, "protocol", nothing) == PROTOCOL || throw(Fatal("unsupported protocol $(get(msg, "protocol", nothing))"))
-    h.mode = something(get(msg, "mode", nothing), "process")
-    h.mode == "sandbox" && throw(Fatal("sandbox mode not supported"))
+    get(msg, "mode", nothing) == "sandbox" && throw(Fatal("sandbox mode not supported"))
     handler = try
         h.factory()
     catch e
@@ -185,10 +183,7 @@ function query(env::HostEnv, gateway::AbstractString, request_bytes)
     request_bytes = to_bytes(request_bytes)
     gw = resolve_gateway(env.host.gateways, gateway)
     ans = request(env.host, (t="gateway", gateway=gateway, request=b64(request_bytes), scope=gw.islocal ? "local" : "remote"), "gateway")
-    if get(ans, "live", false) === true
-        resp, err = call_gateway(gw, request_bytes)
-        send(env.host, isempty(err) ? (t="observed", response=b64(resp)) : (t="observed", error=err))
-    elseif haskey(ans, "error") && !isempty(string(ans["error"]))
+    if haskey(ans, "error") && !isempty(string(ans["error"]))
         err, resp = string(ans["error"]), UInt8[]
     else
         err, resp = "", unb64(get(ans, "response", ""))
@@ -230,7 +225,7 @@ function maybe_host(args, factory::Function; gateways=nothing, environment=colle
     devnull_fd = ccall(:open, Cint, (Cstring, Cint), "/dev/null", 0)
     ccall(:dup2, Cint, (Cint, Cint), devnull_fd, 0)
     ccall(:close, Cint, (Cint,), devnull_fd)
-    code = run_host(Host(factory, proto_in, proto_out, gateways, environment, "process", false))
+    code = run_host(Host(factory, proto_in, proto_out, gateways, environment, false))
     try; close(proto_out); catch; end
     flush(stderr)
     exit(code)

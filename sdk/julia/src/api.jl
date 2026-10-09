@@ -150,7 +150,6 @@ function call_gateway(gw::Gateway, request::Vector{UInt8})
     try
         return to_bytes(gw.connection(request)), ""
     catch e
-        e isa Aborted && rethrow()
         msg = e isa GatewayError ? e.error : sprint(showerror, e)
         return UInt8[], msg
     end

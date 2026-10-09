@@ -57,7 +57,7 @@ function session(factory, msgs)
         write(driver, Json.stringify(m), '\n')
     end
     close(driver)
-    code = Kavach.run_host(Host(factory, driver, out, nothing, () -> Dict{String,Any}(), "process", false))
+    code = Kavach.run_host(Host(factory, driver, out, nothing, () -> Dict{String,Any}(), false))
     close(out)
     return code, [Json.parse(l) for l in eachline(out)]
 end
