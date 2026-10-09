@@ -33,8 +33,8 @@ import System.Posix.Files (setFdSize)
 import System.Posix.IO
 import System.Posix.Process (getProcessID)
 
-foreign import ccall unsafe "mmap"
-  c_mmap :: Ptr () -> CSize -> CInt -> CInt -> CInt -> Int -> IO (Ptr ())
+foreign import ccall unsafe "kavach_ring_map"
+  c_ring_map :: CInt -> CSize -> CSize -> IO (Ptr ())
 
 foreign import ccall unsafe "munmap"
   c_munmap :: Ptr () -> CSize -> IO CInt
@@ -57,7 +57,7 @@ data Ring = Ring
   }
 
 headerBytes, offWrite, offRead :: Int
-headerBytes = 256
+headerBytes = 65536
 offWrite = 64
 offRead = 128
 
@@ -79,11 +79,10 @@ createRing cap = do
   fd <- openFd path ReadWrite defaultFileFlags {creat = Just 0o600, exclusive = True}
   ( ( do
       setFdSize fd (fromIntegral size)
-      -- PROT_READ|PROT_WRITE = 3, MAP_SHARED = 1 on every unix
-      p <- c_mmap nullPtr (fromIntegral size) 3 1 (fromIntegral fd) 0
-      if p == nullPtr `plusPtr` (-1) then ioError (userError "mmap failed") else do
+      p <- c_ring_map (fromIntegral fd) (fromIntegral headerBytes) (fromIntegral cap)
+      if p == nullPtr then ioError (userError "mmap failed") else do
         let mem = castPtr p :: Ptr Word8
-        mapM_ (uncurry (pokeByteOff mem)) (zip [0 ..] (BS.unpack "KVRING01"))
+        mapM_ (uncurry (pokeByteOff mem)) (zip [0 ..] (BS.unpack "KVRING02"))
         pokeByteOff mem 8 (fromIntegral cap :: Word64)
         belled <- newIORef False
         pure (Ring mem cap path belled)
@@ -110,17 +109,15 @@ tryPublish g bs = do
         | len <= cap = 0
         | otherwise = free
   if n == 0 then pure (0, used) else do
+    -- the data area is mapped twice, so a wrapping run is one contiguous copy
     let off = fromIntegral (w `mod` fromIntegral cap)
-        first = min n (cap - off)
-        dat = ringMem g `plusPtr` headerBytes
-    unsafeUseAsCStringLen bs $ \(src, _) -> do
-      copyBytes (dat `plusPtr` off) (castPtr src) first
-      copyBytes dat (castPtr src `plusPtr` first) (n - first)
+    unsafeUseAsCStringLen bs $ \(src, _) ->
+      copyBytes (ringMem g `plusPtr` (headerBytes + off)) (castPtr src) n
     storeRelease wp (w + fromIntegral n)
     pure (n, used + n)
 
 -- | Publish @n@ bytes written by @w@ straight into the ring, when they fit in
--- the free space without wrapping. Returns the unread bytes afterwards, or
+-- the free space. Returns the unread bytes afterwards, or
 -- Nothing if the caller must use 'tryPublish'.
 tryPublishDirect :: Ring -> Int -> (Ptr Word8 -> IO ()) -> IO (Maybe Int)
 tryPublishDirect g n w = do
@@ -131,7 +128,7 @@ tryPublishDirect g n w = do
   rd <- loadAcquire rp
   let used = fromIntegral (wr - rd) :: Int
       off = fromIntegral (wr `mod` fromIntegral cap)
-  if n > cap - used || n > cap - off then pure Nothing else do
+  if n > cap - used then pure Nothing else do
     w (ringMem g `plusPtr` (headerBytes + off))
     storeRelease wp (wr + fromIntegral n)
     pure (Just (used + n))
@@ -140,7 +137,7 @@ tryPublishDirect g n w = do
 destroyRing :: Ring -> IO ()
 destroyRing g = do
   removeQuiet (ringPath g)
-  _ <- c_munmap (castPtr (ringMem g)) (fromIntegral (headerBytes + ringCap g))
+  _ <- c_munmap (castPtr (ringMem g)) (fromIntegral (headerBytes + 2 * ringCap g))
   pure ()
 
 removeQuiet :: FilePath -> IO ()

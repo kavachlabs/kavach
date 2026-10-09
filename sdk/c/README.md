@@ -143,9 +143,10 @@ On Linux the pipe is enlarged with `F_SETPIPE_SZ` (1 MiB).
 ### Transport (SPEC §10.7)
 
 The record stream goes over a shared-memory ring by default: a step costs a few
-memory copies and no system call. The SDK creates the ring file in `/dev/shm`
-(else `$TMPDIR`, else `/tmp`), unlinks it at once, maps it, and passes it to the
-recorder as file descriptor 3. `no_ring = 1` (C++: `no_ring = true`) forces the
+memory copies and no system call. The SDK creates the ring file (`memfd_create`
+on Linux, else in `/dev/shm`, `$TMPDIR` or `/tmp`, unlinked at once), maps its
+data area twice back to back so a wrapped frame is one copy, and passes it to
+the recorder as file descriptor 3. `no_ring = 1` (C++: `no_ring = true`) forces the
 pipe; `ring_bytes` sets the capacity (a power of two of at least 64 KiB, default
 8 MiB). If the ring cannot be set up, the SDK logs that and records over the pipe.
 The ring needs a little-endian host.

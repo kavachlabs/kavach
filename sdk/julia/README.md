@@ -3,7 +3,7 @@
 The Julia SDK for [Kavach](../../README.md): a flight recorder
 ([SPEC.md §10](../../SPEC.md#10-recorder-protocol)) and a replay host
 ([§9](../../SPEC.md#9-host-protocol)). Julia 1.10 or later, standard library
-only (`Base64`, `Dates`, `Logging`, `Mmap`, `Random`).
+only (`Base64`, `Dates`, `Logging`, `Random`).
 
 ```bash
 julia --project=sdk/julia -e 'using Pkg; Pkg.test()'
@@ -71,7 +71,8 @@ messages are logged with `@warn` (and passed to `on_fixture`). `host.runtime`
 is `julia-<VERSION>`.
 
 On Unix the record stream travels over a shared-memory ring (§10.7): a file
-in `/dev/shm` (else `tempdir()`), created owner-only and mapped shared, which
+in `/dev/shm` (else `tempdir()`), created owner-only and mapped shared with libc `mmap` (the data area
+twice, back to back, so a frame that wraps is one copy), which
 the recorder opens by name (`ring_path`; Julia cannot pass a child descriptor 3)
 and unlinks. `ring_bytes` sets its capacity (default 8 MiB); `ring=false`
 forces the pipe, which is also the fallback, with a `@warn`, when the ring

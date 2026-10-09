@@ -202,7 +202,7 @@ rawWrite r bs = case rRing r of
   Just g -> publish r g bs
 
 -- | 'rawWrite' for an encoded step: over the ring it is written in place, with
--- no intermediate buffer, unless it would wrap or the ring is nearly full.
+-- no intermediate buffer, unless the ring is nearly full.
 rawWriteEnc :: Recorder s -> Enc -> IO ()
 rawWriteEnc r enc@(Enc n w) = case rRing r of
   Nothing -> rawWrite r (encBytes enc)
@@ -231,6 +231,8 @@ publish r g b = do
       then do
         -- Full: the recorder drains the ring on the doorbell. If it has
         -- exited, the control loop stops recording and ends the wait.
+        -- TODO: a writer that outruns the recorder blocks the service here;
+        -- handling that (drop and mark, §3.6) is deferred.
         pipeWrite r (BS.singleton 1)
         wait
       else afterPublish r g used >> publish r g (BS.drop n b)

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -43,7 +44,7 @@ extern char** environ;
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "the shared-memory ring needs a little-endian host"
 #endif
-#define RING_HEADER 256
+#define RING_HEADER 65536
 #define RING_OFF_WRITE 64
 #define RING_OFF_READ 128
 #define RING_MIN (64u << 10)
@@ -187,15 +188,15 @@ static int ring_publish(kavach_recorder* r, const uint8_t* p, size_t n) {
     size_t k = n;
     if (k > room) k = n <= r->ring_cap ? 0 : (size_t)room;
     if (k == 0) {
+      /* TODO: a writer that outruns the recorder blocks the service here;
+       * handling that (drop and mark, SPEC 3.6) is deferred. */
       ring_bell(r);
       struct timespec nap = {0, 20 * 1000L};
       nanosleep(&nap, NULL);
       continue;
     }
-    size_t off = (size_t)(r->ring_wpos & (r->ring_cap - 1));
-    size_t first = r->ring_cap - off < k ? (size_t)(r->ring_cap - off) : k;
-    memcpy(r->ring_mem + RING_HEADER + off, p, first);
-    memcpy(r->ring_mem + RING_HEADER, p + first, k - first);
+    /* the data area is mapped twice, so a wrapping run is one contiguous copy */
+    memcpy(r->ring_mem + RING_HEADER + (size_t)(r->ring_wpos & (r->ring_cap - 1)), p, k);
     r->ring_wpos += k;
     atomic_store_explicit(r->ring_w, r->ring_wpos, memory_order_release);
     used += k;
@@ -495,28 +496,55 @@ static void ring_release(kavach_recorder* r) {
   r->use_ring = 0;
 }
 
-/* Creates the unlinked, mapped ring file and returns its descriptor (above 3),
- * or -1 with a reason in why. */
-static int ring_create(kavach_recorder* r, uint64_t cap, char* why, size_t whycap) {
-  if (cap < RING_MIN || (cap & (cap - 1))) {
-    snprintf(why, whycap, "ring_bytes must be a power of two of at least 64 KiB");
-    return -1;
-  }
+/* The ring file: anonymous where the platform has memfd_create, otherwise
+ * created and unlinked at once. */
+static int ring_file(char* why, size_t whycap) {
+  int fd = -1;
+#if defined(__linux__) && defined(SYS_memfd_create)
+  fd = (int)syscall(SYS_memfd_create, "kavach-ring", 1u /* MFD_CLOEXEC */);
+#endif
+  if (fd >= 0) return fd;
   struct stat st;
   const char* dir = stat("/dev/shm", &st) == 0 && S_ISDIR(st.st_mode) ? "/dev/shm" : getenv("TMPDIR");
   if (!dir || !*dir) dir = "/tmp";
   char path[1024];
   snprintf(path, sizeof path, "%s/kavach-ring-XXXXXX", dir);
-  int fd = mkstemp(path);
+  fd = mkstemp(path);
   if (fd < 0) {
     snprintf(why, whycap, "mkstemp %s: %s", path, strerror(errno));
     return -1;
   }
   unlink(path);
   fcntl(fd, F_SETFD, FD_CLOEXEC);
+  return fd;
+}
+
+/* Maps the header and data area, then the data area again right after it,
+ * inside one reserved region so nothing else can land between them. */
+static void* ring_map(int fd, size_t cap) {
+  size_t len = RING_HEADER + cap;
+  char* mem = mmap(NULL, len + cap, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (mem == MAP_FAILED) return MAP_FAILED;
+  const int prot = PROT_READ | PROT_WRITE, flags = MAP_SHARED | MAP_FIXED;
+  if (mmap(mem, len, prot, flags, fd, 0) == MAP_FAILED ||
+      mmap(mem + len, cap, prot, flags, fd, RING_HEADER) == MAP_FAILED) {
+    munmap(mem, len + cap);
+    return MAP_FAILED;
+  }
+  return mem;
+}
+
+/* Creates the mapped ring file and returns its descriptor (above 3), or -1
+ * with a reason in why. */
+static int ring_create(kavach_recorder* r, uint64_t cap, char* why, size_t whycap) {
+  if (cap < RING_MIN || (cap & (cap - 1))) {
+    snprintf(why, whycap, "ring_bytes must be a power of two of at least 64 KiB");
+    return -1;
+  }
+  int fd = ring_file(why, whycap);
+  if (fd < 0) return -1;
   size_t len = RING_HEADER + (size_t)cap;
-  void* mem = ftruncate(fd, (off_t)len) == 0 ? mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-                                              : MAP_FAILED;
+  void* mem = ftruncate(fd, (off_t)len) == 0 ? ring_map(fd, (size_t)cap) : MAP_FAILED;
   if (mem == MAP_FAILED) {
     snprintf(why, whycap, "cannot map the ring: %s", strerror(errno));
     close(fd);
@@ -524,14 +552,14 @@ static int ring_create(kavach_recorder* r, uint64_t cap, char* why, size_t whyca
   }
   fd = fd_high(fd);
   if (fd < 0) {
-    munmap(mem, len);
+    munmap(mem, len + (size_t)cap);
     snprintf(why, whycap, "cannot allocate file descriptors");
     return -1;
   }
-  memcpy(mem, "KVRING01", 8);
+  memcpy(mem, "KVRING02", 8);
   memcpy((char*)mem + 8, &cap, 8);
   r->ring_mem = mem;
-  r->ring_map_len = len;
+  r->ring_map_len = len + (size_t)cap;
   r->ring_cap = cap;
   r->ring_w = (_Atomic uint64_t*)((char*)mem + RING_OFF_WRITE);
   r->ring_r = (_Atomic uint64_t*)((char*)mem + RING_OFF_READ);

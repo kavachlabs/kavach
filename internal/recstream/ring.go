@@ -11,13 +11,14 @@ import (
 )
 
 // The shared-memory ring (SPEC.md §10.7): a header of RingHeader bytes, then
-// the data area. write and read sit on cache lines of their own.
+// the data area. write and read sit on cache lines of their own. The data area
+// is mapped twice back to back, so any run of at most cap bytes is contiguous.
 const (
-	ringMagic    = "KVRING01"
+	ringMagic    = "KVRING02"
 	offCapacity  = 8
 	offWrite     = 64
 	offRead      = 128
-	RingHeader   = 256
+	RingHeader   = 65536
 	MinRing      = 64 << 10
 	DefaultRing  = 8 << 20
 	ringPollTime = 5 * time.Millisecond
@@ -26,8 +27,8 @@ const (
 // Ring is a mapped ring. The SDK publishes into it and the recorder consumes
 // from it; neither writes the other's header word.
 type Ring struct {
-	mem   []byte
-	data  []byte
+	mem   []byte // the header, then the data area twice
+	data  []byte // the data area twice
 	cap   uint64
 	write *atomic.Uint64
 	read  *atomic.Uint64
@@ -60,8 +61,7 @@ func (g *Ring) TryPublish(p []byte) (n int, used uint64) {
 		n = int(free)
 	}
 	off := w & (g.cap - 1)
-	c := copy(g.data[off:], p[:n])
-	copy(g.data, p[c:n])
+	copy(g.data[off:], p[:n])
 	g.write.Store(w + uint64(n))
 	return n, used + uint64(n)
 }
@@ -113,8 +113,7 @@ func (rr *RingReader) Read(p []byte) (int, error) {
 		case w > rr.pos:
 			n := min(uint64(len(p)), w-rr.pos)
 			off := rr.pos & (g.cap - 1)
-			c := copy(p[:n], g.data[off:])
-			copy(p[c:n], g.data)
+			copy(p[:n], g.data[off:])
 			rr.pos += n
 			g.read.Store(rr.pos)
 			return int(n), nil

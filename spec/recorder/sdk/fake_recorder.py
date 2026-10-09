@@ -136,12 +136,12 @@ def decode_frame(kind, payload):
 class Ring:
     """The record stream in the ring of SPEC.md §10.7, read like a file."""
 
-    HEADER = 256
+    HEADER = 65536
 
     def __init__(self, fd, capacity):
         self.cap = capacity
         self.mem = mmap.mmap(fd, self.HEADER + capacity)
-        if self.mem[:8] != b"KVRING01" or struct.unpack_from("<Q", self.mem, 8)[0] != capacity:
+        if self.mem[:8] != b"KVRING02" or struct.unpack_from("<Q", self.mem, 8)[0] != capacity:
             raise Malformed("bad ring header")
         self.pos = 0
         self.ended = threading.Event()

@@ -126,7 +126,7 @@ func TestRingByPath(t *testing.T) {
 	}
 	defer f.Close()
 	f.Truncate(recstream.RingHeader + recstream.MinRing)
-	f.WriteAt(append([]byte("KVRING01"), binary.LittleEndian.AppendUint64(nil, recstream.MinRing)...), 0)
+	f.WriteAt(append([]byte("KVRING02"), binary.LittleEndian.AppendUint64(nil, recstream.MinRing)...), 0)
 	g, err := recstream.OpenRing(f, recstream.MinRing)
 	if err != nil {
 		t.Fatal(err)

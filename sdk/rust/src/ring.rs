@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sys;
 
-const MAGIC: &[u8; 8] = b"KVRING01";
+const MAGIC: &[u8; 8] = b"KVRING02";
 const OFF_CAPACITY: usize = 8;
 const OFF_WRITE: usize = 64;
 const OFF_READ: usize = 128;
-const HEADER: usize = 256;
+const HEADER: usize = 65536;
 pub const MIN_CAPACITY: usize = 64 << 10;
 pub const DEFAULT_CAPACITY: usize = 8 << 20;
 
@@ -23,10 +23,39 @@ pub struct Ring {
     cap: u64,
 }
 
+/// The ring file: anonymous where the platform has it, else created owner-only
+/// and unlinked at once.
+fn ring_file() -> io::Result<File> {
+    #[cfg(target_os = "linux")]
+    if let Ok(f) = sys::memfd() {
+        return Ok(f);
+    }
+    let dir = if std::path::Path::new("/dev/shm").is_dir() {
+        std::path::PathBuf::from("/dev/shm")
+    } else {
+        std::env::temp_dir()
+    };
+    static N: AtomicU64 = AtomicU64::new(0);
+    let name = dir.join(format!(
+        "kavach-ring-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&name)?;
+    let _ = std::fs::remove_file(&name);
+    Ok(f)
+}
+
 impl Ring {
-    /// Creates the ring file in `/dev/shm` if there is one, else the temporary
-    /// directory, unlinks it at once, maps it and initializes the header. The
-    /// returned file is what the recorder inherits as descriptor 3.
+    /// Creates the ring file, anonymous (`memfd_create`) where the platform has
+    /// it, else in `/dev/shm` if there is one or the temporary directory, and
+    /// unlinked at once. Maps it, the data area twice, and initializes the
+    /// header. The returned file is what the recorder inherits as descriptor 3.
     pub fn create(capacity: usize) -> io::Result<(Ring, File)> {
         if capacity < MIN_CAPACITY || !capacity.is_power_of_two() {
             return Err(io::Error::new(
@@ -34,28 +63,10 @@ impl Ring {
                 format!("ring capacity {capacity} is not a power of two of at least 64 KiB"),
             ));
         }
-        let dir = if std::path::Path::new("/dev/shm").is_dir() {
-            std::path::PathBuf::from("/dev/shm")
-        } else {
-            std::env::temp_dir()
-        };
-        static N: AtomicU64 = AtomicU64::new(0);
-        let name = dir.join(format!(
-            "kavach-ring-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&name)?;
-        let _ = std::fs::remove_file(&name);
-        let size = HEADER + capacity;
-        f.set_len(size as u64)?;
-        let mem = sys::map_shared(f.as_raw_fd(), size)?;
-        // SAFETY: the mapping is HEADER + capacity bytes and nobody else has it yet.
+        let f = ring_file()?;
+        f.set_len((HEADER + capacity) as u64)?;
+        let mem = sys::map_ring(f.as_raw_fd(), HEADER, capacity)?;
+        // SAFETY: the mapping is larger than the header and nobody else has it yet.
         unsafe {
             std::ptr::copy_nonoverlapping(MAGIC.as_ptr(), mem, MAGIC.len());
             std::ptr::copy_nonoverlapping(
@@ -102,13 +113,11 @@ impl Ring {
             n = free as usize;
         }
         let off = (w & (self.cap - 1)) as usize;
-        let first = n.min(self.cap as usize - off);
-        // SAFETY: both ranges lie in the data area, and the recorder does not
-        // read bytes beyond `write`, which is not yet advanced.
+        // SAFETY: the data area is mapped twice back to back, so off + n lies in
+        // the mapping however it wraps, and the recorder does not read bytes
+        // beyond `write`, which is not yet advanced.
         unsafe {
-            let data = self.mem.add(HEADER);
-            std::ptr::copy_nonoverlapping(p.as_ptr(), data.add(off), first);
-            std::ptr::copy_nonoverlapping(p.as_ptr().add(first), data, n - first);
+            std::ptr::copy_nonoverlapping(p.as_ptr(), self.mem.add(HEADER + off), n);
         }
         write.store(w + n as u64, Ordering::Release);
         (n, used + n as u64)
@@ -118,6 +127,32 @@ impl Ring {
 impl Drop for Ring {
     fn drop(&mut self) {
         // SAFETY: mem was mapped with this length and is not used again.
-        unsafe { sys::unmap(self.mem, HEADER + self.cap as usize) }
+        unsafe { sys::unmap(self.mem, HEADER + 2 * self.cap as usize) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frame straddling the end of the data area lands whole in both halves.
+    #[test]
+    fn wrapped_publish_is_one_copy() {
+        let (ring, _f) = Ring::create(MIN_CAPACITY).unwrap();
+        let first = vec![1u8; MIN_CAPACITY - 10];
+        assert_eq!(ring.try_publish(&first).0, first.len());
+        // The recorder consumes it, so the next frame starts 10 bytes before the end.
+        ring.word(OFF_READ)
+            .store(first.len() as u64, Ordering::Release);
+        let frame: Vec<u8> = (0..100u8).collect();
+        assert_eq!(ring.try_publish(&frame).0, frame.len());
+        // SAFETY: the offsets lie in the data area, which this test owns.
+        let (tail, head) = unsafe {
+            (
+                std::slice::from_raw_parts(ring.mem.add(HEADER + MIN_CAPACITY - 10), 10),
+                std::slice::from_raw_parts(ring.mem.add(HEADER), 90),
+            )
+        };
+        assert_eq!((tail, head), (&frame[..10], &frame[10..]));
     }
 }

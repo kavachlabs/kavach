@@ -18,7 +18,7 @@ import java.nio.file.attribute.PosixFilePermissions;
  * descriptor 3 to a child.
  */
 final class Ring {
-    static final int HEADER = 256;
+    static final int HEADER = 65536;
     static final int MIN = 64 << 10;
     static final int DEFAULT = 8 << 20;
     private static final int OFF_CAPACITY = 8;
@@ -50,7 +50,7 @@ final class Ring {
                 dir, "kavach-ring-", "", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
         try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             MappedByteBuffer mem = ch.map(FileChannel.MapMode.READ_WRITE, 0, HEADER + (long) capacity);
-            mem.put(0, "KVRING01".getBytes(StandardCharsets.US_ASCII));
+            mem.put(0, "KVRING02".getBytes(StandardCharsets.US_ASCII));
             WORD.set(mem, OFF_CAPACITY, (long) capacity);
             return new Ring(path, capacity, mem);
         } catch (IOException | RuntimeException e) {
@@ -90,6 +90,7 @@ final class Ring {
         }
         int at = HEADER + (int) (write & (capacity - 1));
         int first = Math.min(n, HEADER + capacity - at);
+        // shortcut: a wrapped run is two copies; mapping the data area twice needs Java 22's FFM, upgrade when the target does.
         mem.put(at, p, off, first);
         mem.put(HEADER, p, off + first, n - first);
         write += n;
