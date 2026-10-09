@@ -82,9 +82,8 @@ const rec = await Recorder.start({
     if (b.length !== n) throw new Error(`case rand answer has ${b.length} bytes, handler asked for ${n}`);
     return b;
   },
-  config: (key) => {
+  config: () => {
     const v = next<{ value?: string; unset?: boolean }>("config");
-    void key;
     return v.unset ? undefined : { value: new Uint8Array(Buffer.from(v.value ?? "", "base64")), source: "test" };
   },
   flags: c.flags ? () => c.flags! : undefined,

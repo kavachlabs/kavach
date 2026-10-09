@@ -280,8 +280,6 @@ export class Recorder {
         for (const w of ws) w(true);
         break;
       }
-      case "segment":
-        break;
       case "fixture":
         this.log(`wrote fixture ${String(m.file)} for ${String(m.failure)} at input ${String(m.seq)}`);
         break;

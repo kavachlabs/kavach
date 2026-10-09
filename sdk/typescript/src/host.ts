@@ -4,20 +4,13 @@ import { spawnSync } from "node:child_process";
 import { readSync, writeSync } from "node:fs";
 import { GatewayError, KavachAbort } from "./errors.js";
 import { checkInvariants, errorMessage, mapFailure } from "./failure.js";
-import type { EmitOptions, Env, Failure, Gateway, Handler, Input, Output, Scope } from "./types.js";
+import type { EmitOptions, Env, Failure, Gateway, Handler, Input, Scope } from "./types.js";
 import { SDK_NAME } from "./version.js";
-import { toBytes, u8 } from "./wire.js";
+import { u8 } from "./wire.js";
 
 export interface HostOptions {
-  /**
-   * Local setup (SPEC §6.3): creates local resources the handler uses. Run in
-   * `sandbox` mode before `ready`. Must not reach the network.
-   */
-  localSetup?: () => void | Promise<void>;
-  /** Gateways by name: their `scope` is reported to the driver, and local ones are executed when the driver answers `live`. */
+  /** Gateways by name: their `scope` is reported to the driver. */
   gateways?: Record<string, Gateway>;
-  /** Delivers a successful step's local outputs in `sandbox` mode, as in production. */
-  deliver?: (outputs: Output[]) => void | Promise<void>;
   /** argv of `kavach-recorder`, used only for its `facts` command. Else `KAVACH_RECORDER`, else PATH. */
   recorderCommand?: string[];
   /** Override `process.argv` (tests). */
@@ -26,7 +19,7 @@ export interface HostOptions {
 
 /** True when the last argument is `kavach-host`. */
 export function isHost(argv: string[] = process.argv): boolean {
-  return argv.length > 0 && argv[argv.length - 1] === "kavach-host";
+  return argv[argv.length - 1] === "kavach-host";
 }
 
 /**
@@ -139,12 +132,10 @@ export function collectEnvironment(recorderCommand?: string[]): Record<string, u
 class Host {
   private readonly ch = new Channel();
   private handler!: Handler;
-  private sandbox = false;
 
   // Per-step state.
   private aborted = false;
   private abortDetail = "";
-  private livePending = false;
 
   constructor(
     private readonly factory: () => Handler | Promise<Handler>,
@@ -178,9 +169,8 @@ class Host {
     if (!hello) return;
     if (hello.t !== "hello") this.fatal(`expected hello, got ${String(hello.t)}`);
     if (hello.protocol !== 1) this.fatal(`unsupported protocol ${String(hello.protocol)}`);
-    this.sandbox = hello.mode === "sandbox";
+    if (hello.mode === "sandbox") this.fatal("sandbox mode not supported");
     try {
-      if (this.sandbox && this.o.localSetup) await this.o.localSetup();
       this.handler = await this.factory();
       if (hello.start === "snapshot") {
         if (!this.handler.restore) throw new Error("handler cannot restore a snapshot");
@@ -208,14 +198,12 @@ class Host {
   private async step(m: Msg): Promise<void> {
     this.aborted = false;
     this.abortDetail = "";
-    this.livePending = false;
     const input: Input = {
       source: String(m.source ?? ""),
       position: String(m.position ?? ""),
       data: fromB64(m.data),
     };
-    const outputs: Output[] = [];
-    const env = new HostEnv(this, outputs);
+    const env = new HostEnv(this);
     let failure: Failure | undefined;
     try {
       await this.handler.handle(env, input);
@@ -229,16 +217,6 @@ class Host {
       return;
     }
     failure ??= checkInvariants(this.handler);
-    if (!failure && this.sandbox && this.o.deliver) {
-      const local = outputs.filter((o) => o.scope === "local");
-      if (local.length) {
-        try {
-          await this.o.deliver(local);
-        } catch (e) {
-          console.error(`kavach: delivering local outputs failed: ${errorMessage(e)}`);
-        }
-      }
-    }
     if (!failure) {
       this.ch.send({ t: "done", outcome: "ok" });
       return;
@@ -253,9 +231,6 @@ class Host {
   /** @internal Sends a request and waits for its answer. */
   request(msg: Msg, expect: string): Msg {
     if (this.aborted) throw new KavachAbort(this.abortDetail);
-    if (this.livePending) {
-      throw new Error("kavach: a live local query is still pending; await it before other reads");
-    }
     this.ch.send(msg);
     const r = this.read();
     if (r === null) {
@@ -268,6 +243,7 @@ class Host {
       throw new KavachAbort(this.abortDetail);
     }
     if (r.t !== expect) this.fatal(`expected ${expect}, got ${String(r.t)}`);
+    if (r.live === true) this.fatal("live gateway answers are not supported");
     return r;
   }
 
@@ -281,19 +257,11 @@ class Host {
   gateway(name: string): Gateway | undefined {
     return this.o.gateways?.[name];
   }
-
-  /** @internal */
-  setLive(v: boolean): void {
-    this.livePending = v;
-  }
 }
 
 class HostEnv implements Env {
   done = false;
-  constructor(
-    private readonly host: Host,
-    private readonly outputs: Output[],
-  ) {}
+  constructor(private readonly host: Host) {}
 
   private live(): void {
     if (this.done) throw new Error("kavach: env used after its step ended");
@@ -329,42 +297,23 @@ class HostEnv implements Env {
     const scope: Scope = options.local ? "local" : "remote";
     const copy = new Uint8Array(data);
     this.host.send({ t: "emit", sink, data: b64(copy), scope });
-    this.outputs.push({ sink, data: copy, scope });
   }
 
   query(gateway: string, request: Uint8Array): Promise<Uint8Array> {
     // The exchange happens inside this call, so reads keep call order even
-    // under Promise.all; the returned promise is already settled (except for
-    // a live local query, which has to run).
+    // under Promise.all; the returned promise is already settled.
     try {
       this.live();
       const gw = this.host.gateway(gateway);
       const scope: Scope = gw?.scope === "local" ? "local" : "remote";
       const req = new Uint8Array(request);
       const r = this.host.request({ t: "gateway", gateway, request: b64(req), scope }, "gateway");
-      if (r.live === true) return this.runLive(gateway, gw, req);
       if (typeof r.error === "string") return Promise.reject(new GatewayError(r.error));
       return Promise.resolve(fromB64(r.response));
     } catch (e) {
       const p = Promise.reject(e);
       if (e instanceof KavachAbort) p.catch(() => undefined); // an unobserved abort must not crash the process
       return p;
-    }
-  }
-
-  private async runLive(name: string, gw: Gateway | undefined, req: Uint8Array): Promise<Uint8Array> {
-    this.host.setLive(true);
-    try {
-      if (!gw) throw new Error(`no local gateway registered as "${name}"`);
-      const resp = toBytes(await gw.call(new Uint8Array(req)));
-      this.host.setLive(false);
-      this.host.send({ t: "observed", response: b64(resp) });
-      return new Uint8Array(resp);
-    } catch (e) {
-      this.host.setLive(false);
-      const msg = errorMessage(e);
-      this.host.send({ t: "observed", error: msg });
-      throw new GatewayError(msg);
     }
   }
 }
