@@ -2,6 +2,7 @@ using Test
 using Kavach
 using Kavach: Json, Wire, Failure, Host
 using Logging
+using Base64: base64encode
 
 const PKG = dirname(@__DIR__)
 const SPEC = get(ENV, "KAVACH_SPEC_DIR", normpath(joinpath(@__DIR__, "..", "..", "..", "spec")))
@@ -12,6 +13,9 @@ using .KavachConformance
 
 struct Thrower end
 Kavach.handle!(::Thrower, env::Kavach.Env, in::Input) = sum(nothing)
+
+struct Echo end
+Kavach.handle!(::Echo, env::Env, in::Input) = emit!(env, "out", in.data)
 
 @testset "Json" begin
     @test Json.parse("""{"a":[1,2.5,"x\\u00e9\\ud83d\\ude00\\n",true,null],"b":{}}""") ==
@@ -89,16 +93,71 @@ end
     end
 end
 
+@testset "a process killed during a step leaves a crash fixture" begin
+    root = normpath(joinpath(PKG, "..", ".."))
+    if Sys.which("go") === nothing || !isdir(joinpath(root, "cmd", "kavach-recorder"))
+        @warn "go or the repository is missing; skipping the crash test"
+    else
+        mktempdir() do bin
+            for cmd in ("kavach-recorder", "kavach")
+                run(Cmd(`go build -o $(joinpath(bin, cmd)) ./cmd/$cmd`; dir=root))
+            end
+            @testset "a ring smaller than its frames loses nothing" begin
+              mktempdir() do dir
+                withenv("KAVACH_RECORDER" => joinpath(bin, "kavach-recorder")) do
+                    rec = Recorder(Echo(); service="small", dir, ring_bytes=64 << 10, required=true)
+                    big = fill(UInt8('b'), 200 << 10)
+                    for i in 0:399
+                        step!(rec, Input("t", "p", i % 100 == 7 ? big : Vector{UInt8}(codeunits("small"))))
+                    end
+                    flush!(rec; durable=true)
+                    recs = Json.parse(read(`$(joinpath(bin, "kavach")) inspect --json $(rec.file)`, String))
+                    recs = recs isa Dict ? recs["records"] : recs
+                    close(rec)
+                    inputs = filter(r -> r["type"] == "input", recs)
+                    @test length(inputs) == 400 && count(r -> length(r["data"]) > 200_000, inputs) == 4
+                end
+              end
+            end
+            for transport in ("ring", "pipe")
+                @testset "$transport" begin
+                mktempdir() do dir
+                    child = addenv(`$(Base.julia_exename()) --project=$PKG $(joinpath(@__DIR__, "killed.jl")) $dir $transport`,
+                                   "KAVACH_RECORDER" => joinpath(bin, "kavach-recorder"))
+                    p = run(ignorestatus(child))
+                    @test p.termsignal == 9
+                    # The recorder is no child of the test: it finishes on its own.
+                    fixtures = String[]
+                    timedwait(10.0; pollint=0.02) do
+                        fixtures = isdir(joinpath(dir, "fixtures")) ? filter(endswith(".kavach"), readdir(joinpath(dir, "fixtures"); join=true)) : String[]
+                        length(fixtures) == 1
+                    end
+                    @test length(fixtures) == 1
+                    if length(fixtures) == 1
+                        recs = Json.parse(read(`$(joinpath(bin, "kavach")) inspect --json $(only(fixtures))`, String))
+                        recs = recs isa Dict ? recs["records"] : recs
+                        @test recs[end]["type"] == "marker" && recs[end]["kind"] == "crash"
+                        @test any(r -> r["type"] == "input" && r["data"] == base64encode("die"), recs)
+                    end
+                end
+                end
+            end
+        end
+    end
+end
+
 if PYTHON === nothing || !isdir(SPEC)
     @warn "python3 or the spec directory is missing; skipping the transcript and recorder-case conformance tests" SPEC
 else
     @testset "recorder cases (spec/recorder/sdk)" begin
         include(joinpath(PKG, "conformance", "recorder_case.jl"))
         for path in sort(filter(endswith(".json"), readdir(joinpath(SPEC, "recorder", "sdk"); join=true)))
-            @testset "$(basename(path))" begin
-                result = run_case(path)
-                @test get(result, "pass", false) === true
-                get(result, "pass", false) === true || @info result["error"]
+            for ring in (false, true)
+                @testset "$(basename(path)) $(ring ? "ring" : "pipe")" begin
+                    result = run_case(path; ring)
+                    @test get(result, "pass", false) === true
+                    get(result, "pass", false) === true || @info result["error"]
+                end
             end
         end
     end
