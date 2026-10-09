@@ -741,6 +741,8 @@ static int fail_new(char** err, const char* msg) {
   return KAVACH_ERROR;
 }
 
+#define READY_WAIT_MS 2000
+
 int kavach_recorder_new(const kavach_handler* h, const kavach_recorder_options* o, kavach_recorder** out,
                         char** err) {
   if (err) *err = NULL;
@@ -808,8 +810,11 @@ int kavach_recorder_new(const kavach_handler* h, const kavach_recorder_options* 
     goto unavailable_started;
   }
 
-  if (o->required) {
-    int ms = o->startup_timeout_ms > 0 ? o->startup_timeout_ms : 5000;
+  /* Waiting here, not in a step, keeps a slow-starting recorder from finding a
+   * full ring or pipe at its first read (SPEC 10.1). Without required, a recorder
+   * that stays silent only delays this call; recording goes on. */
+  {
+    int ms = o->required ? (o->startup_timeout_ms > 0 ? o->startup_timeout_ms : 5000) : READY_WAIT_MS;
     struct timespec ts;
     deadline(&ts, ms);
     pthread_mutex_lock(&r->mu);
@@ -818,7 +823,7 @@ int kavach_recorder_new(const kavach_handler* h, const kavach_recorder_options* 
     }
     int ok = r->ready && atomic_load(&r->active);
     pthread_mutex_unlock(&r->mu);
-    if (!ok) {
+    if (!ok && o->required) {
       snprintf(why, sizeof why, "the recorder did not become ready");
       goto unavailable_started;
     }

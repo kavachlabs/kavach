@@ -26,6 +26,12 @@ static void nap_ms(long ms) {
   nanosleep(&ts, NULL);
 }
 
+static double now_s(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
 /* Kills its own process, as an abort or the OOM killer would, once the step's
  * input is on record. */
 static int killer(void* state, kavach_env* env, const kavach_input* in) {
@@ -166,6 +172,20 @@ static void dead_recorder(void) {
   kavach_recorder_free(r);
 }
 
+/* A recorder that never says ready delays construction once, by the startup
+ * bound, and steps after that do not wait (SPEC 10.1). */
+static void silent_recorder(void) {
+  const char* argv[] = {"sleep", "4", NULL};
+  double t0 = now_s();
+  kavach_recorder* r = start(argv, sink, "/tmp/kavach-ring-test-unused", 0, 0);
+  double d = now_s() - t0;
+  CHECK(d > 1.0 && d < 3.0);
+  t0 = now_s();
+  for (int i = 0; i < 100; i++) step(r, i, "x", 1);
+  CHECK(now_s() - t0 < 0.5);
+  kavach_recorder_free(r);
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: %s kavach-recorder\n", argv[0]);
@@ -175,6 +195,7 @@ int main(int argc, char** argv) {
   killed_service(argv[1], 1);
   small_ring(argv[1]);
   dead_recorder();
+  silent_recorder();
   if (failures) {
     fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;
