@@ -251,6 +251,8 @@ function publish(rec::Recorder, g::Ring, data::Vector{UInt8}, last::Int)
         if n == 0
             # Full: the recorder drains the ring on the doorbell. If it has
             # exited, the control task stops recording and ends the wait.
+            # TODO: a writer outrunning the recorder blocks the service here;
+            # handling that is deferred.
             ring_bell(rec)
             while n == 0 && rec.active[]
                 sleep(0.0001)
