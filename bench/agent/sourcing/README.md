@@ -409,6 +409,15 @@ The rate is the share of audited first-pass outs that the verified pass found to
 - I estimate about 25 of the 373 unaudited outs are missed fits, nearly all of them transforms.
 - In the other direction, first-pass precision on candidates was 115/138 for SWE-bench Multilingual and 36/40 for Multi-SWE-bench.
 
+## Selection
+
+`selection.csv` lists the tasks chosen for the first benchmark runs, in run order within each track. The maintainer chose them on 2026-10-10 by reviewing the proposed shortlist.
+- **A, incident fixes:** the 14 best candidates below, in rank order.
+- **B, feature contracts:** 10 DeepSWE feature tasks (see "Feature track (DeepSWE)").
+- **C, FrontierSWE ports:** run verilog-simulator-in-swift first, then libexpat, dart-style, and the Lean 4 kernel. Cranelift is optional. See `frontierswe.md`.
+
+Everything else in the ledger stays in the pool. Being unselected is not a verdict.
+
 ## Best candidates (14)
 
 I picked these on five criteria, in order:
