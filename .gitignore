@@ -12,3 +12,4 @@ coverage.*
 .claude/
 __pycache__/
 /graphify-out*/
+/bench/agent/results/
