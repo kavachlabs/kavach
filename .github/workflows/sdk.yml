@@ -1,0 +1,167 @@
+# Every SDK must pass the host transcripts (SPEC.md §9.6) and the recorder
+# cases (§10.6); an SDK with the shared-memory ring passes them over both
+# transports (§10.7). One job per SDK because the toolchains share nothing;
+# kavach-tools builds the recorder they all talk to. Separate from ci.yml so
+# the Go jobs stay fast and each SDK's result is readable on its own.
+name: sdk
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  c:
+    name: c, c++ (ctest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - name: Build
+        run: |
+          cmake -S sdk/c -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+      - name: Test (host, recorder over pipe and ring, ring, api)
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+  rust:
+    name: rust (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rust
+      - working-directory: sdk/rust
+        run: cargo test --all-features
+
+  haskell:
+    name: haskell (cabal test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.8"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal/packages
+            ~/.cabal/store
+            sdk/haskell/dist-newstyle
+          key: cabal-${{ runner.os }}-${{ hashFiles('sdk/haskell/kavach.cabal') }}
+          restore-keys: cabal-${{ runner.os }}-
+      - working-directory: sdk/haskell
+        run: |
+          cabal build all
+          cabal test --test-show-details=direct
+
+  java:
+    name: java (build.sh test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - working-directory: sdk/java
+        run: ./build.sh test
+
+  julia:
+    name: julia (Pkg.test, ledger protocol)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v2
+      - run: julia --project=sdk/julia -e 'using Pkg; Pkg.test()'
+      - run: examples/ledger/protocol/check.sh
+
+  python:
+    name: python (unittest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - working-directory: sdk/python
+        run: python3 -m unittest -v
+
+  typescript:
+    name: typescript (npm test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+  ruby:
+    name: ruby (bin/test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - run: sdk/ruby/bin/test -v
+
+  php:
+    name: php (bin/test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - run: sdk/php/bin/test
+
+  elixir:
+    name: elixir (mix test, transcripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.17"
+      - working-directory: sdk/elixir
+        run: |
+          mix test
+          mix escript.build
+          python3 ../../spec/host/run.py --host "$PWD/kavach_conformance"
+
+  ocaml:
+    name: ocaml (dune test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kavach-tools
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+      - working-directory: sdk/ocaml
+        run: |
+          opam install -y dune
+          opam exec -- dune test --force

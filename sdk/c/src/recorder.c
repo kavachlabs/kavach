@@ -511,7 +511,7 @@ static int ring_file(char* why, size_t whycap) {
   snprintf(path, sizeof path, "%s/kavach-ring-XXXXXX", dir);
   fd = mkstemp(path);
   if (fd < 0) {
-    snprintf(why, whycap, "mkstemp %s: %s", path, strerror(errno));
+    snprintf(why, whycap, "mkstemp %.200s: %s", path, strerror(errno));
     return -1;
   }
   unlink(path);
