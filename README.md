@@ -23,9 +23,9 @@ needs Go; your service does not.
 ```bash
 git clone https://github.com/kavachlabs/kavach && cd kavach
 go install ./cmd/kavach ./cmd/kavach-recorder   # the recorder is a separate process the SDK starts
-go build -o ledger-old ./examples/ledger
-go build -tags ledgerfix -o ledger-new ./examples/ledger   # the fixed build
-go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger  # a fix that is too narrow
+go build -o ledger-old ./examples/ledger/sdk
+go build -tags ledgerfix -o ledger-new ./examples/ledger/sdk   # the fixed build
+go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger/sdk  # a fix that is too narrow
 
 ./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes kavach/fixtures/ledger-*.kavach
 kavach inspect kavach/fixtures/ledger-*.kavach                 # what happened, record by record
@@ -142,7 +142,7 @@ shows how to speak them directly.
 | [sdk](sdk) | The SDKs, one per language |
 | [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
-| [examples/ledger](examples/ledger) | The demo service |
+| [examples/ledger](examples/ledger) | The demo service: [sdk](examples/ledger/sdk) with the Go SDK, [protocol](examples/ledger/protocol) in Julia with no SDK |
 | [bench](bench) | Ten planted bugs, each with a correct and a too-narrow fix |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute (DCO sign-off required) |
 

@@ -28,7 +28,7 @@ func fakeKafka(t *testing.T) []string {
 	t.Cleanup(c.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	n, err := seedKafka(ctx, c.ListenAddrs(), topic, "testdata/events.jsonl")
+	n, err := seedKafka(ctx, c.ListenAddrs(), topic, "../testdata/events.jsonl")
 	if err != nil || n != 9 {
 		t.Fatalf("seeded %d events: %v", n, err)
 	}
@@ -139,7 +139,7 @@ func TestKafkaBinary(t *testing.T) {
 	}
 
 	// -seed needs -kafka.
-	if out, err := exec.Command(bin, "-seed", "testdata/events.jsonl").CombinedOutput(); err == nil ||
+	if out, err := exec.Command(bin, "-seed", "../testdata/events.jsonl").CombinedOutput(); err == nil ||
 		!strings.Contains(string(out), "-seed needs -kafka") {
 		t.Fatalf("seed without kafka: %v\n%s", err, out)
 	}
