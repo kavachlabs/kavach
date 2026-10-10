@@ -11,3 +11,4 @@ coverage.*
 /ledger-new
 .claude/
 __pycache__/
+/graphify-out*/
