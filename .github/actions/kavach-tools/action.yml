@@ -1,0 +1,14 @@
+name: kavach-tools
+description: Install Go and build kavach-recorder and kavach, on PATH and in KAVACH_RECORDER.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - shell: bash
+      run: |
+        bin="$RUNNER_TEMP/kavach-bin"
+        go build -o "$bin/" ./cmd/kavach-recorder ./cmd/kavach
+        echo "$bin" >> "$GITHUB_PATH"
+        echo "KAVACH_RECORDER=$bin/kavach-recorder" >> "$GITHUB_ENV"
