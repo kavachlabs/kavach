@@ -16,7 +16,7 @@ import (
 	"github.com/kavachlabs/kavach/sdk/go/kavachtest"
 )
 
-const fixture = "testdata/null-amount.kavach"
+const fixture = "../testdata/null-amount.kavach"
 
 func newHandler() kavach.Handler { return NewLedger() }
 
@@ -42,7 +42,7 @@ func TestRegressionFixtures(t *testing.T) {
 	if !fixNullAmount {
 		t.Skip("the demo ships with the bug planted; run with -tags ledgerfix")
 	}
-	kavachtest.Run(t, "testdata/*.kavach", newHandler)
+	kavachtest.Run(t, "../testdata/*.kavach", newHandler)
 }
 
 func TestInvariantsHoldOnCleanInput(t *testing.T) {
@@ -90,7 +90,7 @@ func TestCLI(t *testing.T) {
 
 	// The buggy service crashes and leaves a fixture behind.
 	fx := filepath.Join(dir, "journal")
-	if err := exec.Command(oldBin, "-in", "testdata/events.jsonl", "-fixtures", fx).Run(); err == nil {
+	if err := exec.Command(oldBin, "-in", "../testdata/events.jsonl", "-fixtures", fx).Run(); err == nil {
 		t.Fatal("expected the buggy ledger to crash")
 	}
 	paths, _ := filepath.Glob(filepath.Join(fx, "fixtures", "*.kavach"))

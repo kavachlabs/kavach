@@ -2,8 +2,8 @@
 // folds a stream of JSON events into balances. It reads events from a file or
 // from a Kafka topic:
 //
-//	ledger -in testdata/events.jsonl
-//	ledger -kafka localhost:9092 -seed testdata/events.jsonl   # load the topic once
+//	ledger -in ../testdata/events.jsonl
+//	ledger -kafka localhost:9092 -seed ../testdata/events.jsonl   # load the topic once
 //	ledger -kafka localhost:9092
 //
 // One upstream event has "amount": null, which crashes the handler. The flight

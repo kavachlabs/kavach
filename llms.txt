@@ -18,7 +18,8 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 
 ## Code
 
-- [examples/ledger](examples/ledger): the demo service, in Go, with a fixture (`testdata/null-amount.kavach`), the planted bug, a correct fix (`-tags ledgerfix`) and a too-narrow one (`-tags ledgerpartialfix`).
+- [examples/ledger/sdk](examples/ledger/sdk): the demo service, in Go with the Go SDK, with the planted bug, a correct fix (`-tags ledgerfix`) and a too-narrow one (`-tags ledgerpartialfix`). Its fixture and events are in [examples/ledger/testdata](examples/ledger/testdata).
+- [examples/ledger/protocol](examples/ledger/protocol): the same service in Julia, speaking the host and recorder protocols directly with no SDK, as INTEGRATING.md describes.
 - [bench](bench): ten planted bugs, each with a correct and a too-narrow fix, run with `go test ./bench -v`.
 - [sdk](sdk): the SDKs, one per language (Go, Python, TypeScript, Rust, Java, C and C++, Julia, Ruby, PHP, Elixir, Haskell, OCaml), each with a port of the ledger demo.
 - [replay](replay): the replay engine, host-protocol driver and fix verification behind the CLI.

@@ -8,7 +8,9 @@ SDK.
 
 [SPEC.md](SPEC.md) is the contract. This file tells you which parts of it you
 implement, in what order, and how you know you are done. Where the two
-disagree, SPEC.md wins.
+disagree, SPEC.md wins. [examples/ledger/protocol](examples/ledger/protocol)
+is a worked example: a service that speaks both protocols directly, with no
+SDK.
 
 ## What you implement, and what you don't
 
