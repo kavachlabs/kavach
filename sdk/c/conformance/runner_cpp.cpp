@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "recorder: %s\n", e.what());
     return 1;
   }
-  int rc = case_check_result(argv[3]);
+  int rc = case_check_result(argv[3], o.no_ring ? "pipe" : "ring");
   case_free(c);
   return bad || rc;
 }

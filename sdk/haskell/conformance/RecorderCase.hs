@@ -99,10 +99,15 @@ runCase noRing spec casePath = do
     else do
       res <- BS.readFile resultPath >>= either die' pure . parseJson
       removeFile resultPath
+      let want = if noRing then "pipe" else "ring"
+          got = field "transport" res >>= asText
       pure $
-        if field "pass" res == Just (JBool True)
-          then Nothing
-          else Just (maybe "failed" T.unpack (field "error" res >>= asText))
+        if field "pass" res /= Just (JBool True)
+          then Just (maybe "failed" T.unpack (field "error" res >>= asText))
+          else
+            if got == Just want
+              then Nothing
+              else Just ("the case ran over the " ++ maybe "unknown transport" T.unpack got ++ ", want the " ++ T.unpack want)
   where
     act r answers a
       | Just s <- field "step" a = do

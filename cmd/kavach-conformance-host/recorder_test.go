@@ -172,19 +172,21 @@ func recorderCases(t *testing.T, noRing bool) {
 				t.Fatalf("the fake recorder wrote no result: %v", err)
 			}
 			var res struct {
-				Pass   bool   `json:"pass"`
-				Error  string `json:"error"`
-				Frames []struct {
-					Open map[string]any `json:"open"`
-				} `json:"frames"`
+				Pass      bool   `json:"pass"`
+				Error     string `json:"error"`
+				Transport string `json:"transport"`
 			}
 			json.Unmarshal(out, &res)
 			if !res.Pass {
 				t.Fatal(res.Error)
 			}
-			// The fake read the ring only if the open frame named one.
-			if _, ring := res.Frames[0].Open["ring"]; ring == noRing {
-				t.Fatalf("open frame ring = %v with NoRing = %v", ring, noRing)
+			// The SDK falls back to the pipe if it cannot set up the ring.
+			want := "ring"
+			if noRing {
+				want = "pipe"
+			}
+			if res.Transport != want {
+				t.Fatalf("the case ran over the %q, want %q", res.Transport, want)
 			}
 		})
 	}

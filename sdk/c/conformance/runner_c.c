@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
   }
   kavach_recorder_free(rec);
   conf_state_clear(&st);
-  int rc = case_check_result(argv[3]);
+  int rc = case_check_result(argv[3], o.no_ring ? "pipe" : "ring");
   case_free(c);
   return bad || rc;
 }

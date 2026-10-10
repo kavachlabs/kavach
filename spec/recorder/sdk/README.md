@@ -51,6 +51,11 @@ perhaps `ring_path`, which the cases do not list.
 5. The case passes if `result.json` has `"pass": true`. On failure, its
    `error` names the first frame that differed, and `frames` holds everything
    received.
+6. An SDK that offers the ring also checks `result.json`'s `"transport"`, which
+   is `"ring"` if the fake read the stream from the ring and `"pipe"` if it
+   read standard input. The case fails unless it is `"ring"` in a ring run and
+   `"pipe"` in a pipe run. An SDK falls back to the pipe when it cannot set up
+   the ring, so `pass` alone does not show that the ring was used.
 
 ## Expected frames
 

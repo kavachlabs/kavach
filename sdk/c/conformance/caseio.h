@@ -45,7 +45,8 @@ typedef struct case_t {
 
 case_t* case_load(const char* path, char* err, size_t errcap);
 void case_free(case_t* c);
-/* Reads result.json written by the fake recorder; returns 0 if pass. Prints the error. */
-int case_check_result(const char* path);
+/* Reads result.json written by the fake recorder; returns 0 if it passed and read the stream over
+ * `transport` ("pipe" or "ring"). Prints the error. */
+int case_check_result(const char* path, const char* transport);
 
 #endif
