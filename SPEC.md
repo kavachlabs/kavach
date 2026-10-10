@@ -234,9 +234,9 @@ handler ─▶ SDK: encode ─▶ OS pipe ─▶ recorder: number ▸ batch ▸ 
             (in the step)              (a separate process, §10)
 ```
 
-**The process end** is the SDK, inside the service. It encodes each record
-and writes it into the pipe. It MUST NOT wait on compression or on the disk;
-it waits only if the pipe is full.
+**The process end** is the SDK (or any code in the service that speaks §10),
+inside the service. It encodes each record and writes it into the pipe. It MUST
+NOT wait on compression or on the disk; it waits only if the pipe is full.
 
 **The recorder end** is a separate process, `kavach-recorder`, that the SDK
 starts and speaks to as §10 describes. It is written once, for every
@@ -1023,7 +1023,9 @@ name environment variables the host is to be started with.
 
 The SDK inside a service and `kavach-recorder` are the two ends of the flight
 recorder's pipe (§3.6). This section is the contract between them. An SDK
-implements its half in each language; the recorder is written once.
+implements its half in each language; the recorder is written once. In this
+section "the SDK" means whatever code in the service speaks this protocol:
+an SDK library, or the service's own code (see `INTEGRATING.md`).
 
 ### 10.1 Starting the recorder
 
@@ -1289,10 +1291,9 @@ recorder cases over both.
   rejected: bugs in translating an upstream response would not replay.
   Recording network traffic was rejected: it is bulky, tied to a transport,
   and too low-level to mutate meaningfully in variants.
-- **Self-replay.** Go binaries can also replay a fixture themselves
-  (`<bin> kavach-replay <fixture> <out.json>`), which the CLI uses today. Once
-  the Go SDK speaks the host protocol, the CLI should use it for every
-  language, and self-replay becomes a Go convenience outside this spec.
+- **Self-replay** — *resolved in 0.2 by the host protocol (§9).* The CLI
+  replays every language, Go included, through it, so no separate self-replay
+  mode exists.
 - **Concurrency inside a step.** 0.2 assumes the handler makes its reads from
   one thread at a time, or at least issues them in a
   deterministic order. Concurrent queries whose issue order depends on
@@ -1331,10 +1332,8 @@ recorder cases over both.
   too, losing its open block. Running the recorder outside the service's
   cgroup, as a node-level daemon receiving the pipe, would close this gap at
   the cost of deployment.
-- **Pipe cost.** Each step costs the SDK one or two writes into the pipe. For
-  handlers whose steps take microseconds, a shared-memory ring between SDK
-  and recorder may be needed; it would replace the record stream's transport,
-  not its frames.
+- **Pipe cost** — *resolved in 0.2 by the shared-memory transport (§10.7).*
+  The ring replaced the record stream's transport and kept its frames.
 - **Cost of continuous recording.** Writing every record of every step, rather
   than keeping a window in memory, costs disk bandwidth and storage in
   proportion to traffic. The compression ratio of real journals, and the

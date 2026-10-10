@@ -1,0 +1,103 @@
+@page {
+  size: A4;
+  margin: 22mm 22mm 20mm 22mm;
+  @top-left { content: "Kavach"; font: 9pt Charter, serif; color: #555; border-bottom: 0.4pt solid #999; vertical-align: bottom; padding-bottom: 2mm; }
+  @top-right { content: "A Guided Tour of the Repository"; font: 9pt Charter, serif; color: #555; border-bottom: 0.4pt solid #999; vertical-align: bottom; padding-bottom: 2mm; }
+  @bottom-center { content: counter(page); font: 9.5pt Charter, serif; color: #333; }
+}
+@page cover { margin: 0; @top-left { content: none; border: none; } @top-right { content: none; border: none; } @bottom-center { content: none; } }
+
+:root { --navy: #1f3a5f; --rule: #1f3a5f; --codebg: #f5f6f8; --trap: #a65a00; --note: #2f6b4f; --try: #3a4f8a; }
+html { font-family: Charter, "Iowan Old Style", Georgia, serif; font-size: 10.6pt; line-height: 1.42; color: #1a1a1a; }
+body { margin: 0; background: #fff; }
+p { margin: 0 0 0.62em; text-align: justify; hyphens: auto; }
+a { color: inherit; text-decoration: none; }
+code, pre, .hl { font-family: Menlo, "SF Mono", monospace; }
+p code, li code, td code { font-size: 0.86em; background: #f1f2f4; padding: 0 2px; border-radius: 2px; }
+ul, ol { margin: 0.2em 0 0.7em; padding-left: 1.4em; }
+li { margin: 0.12em 0; }
+strong { font-weight: 700; }
+
+/* cover */
+.cover { page: cover; height: 297mm; display: flex; flex-direction: column; align-items: center; text-align: center; break-after: page; }
+.cover .top { margin-top: 62mm; }
+.cover h1 { font-size: 34pt; color: var(--navy); margin: 0 0 6mm; letter-spacing: 0.5px; }
+.cover h2 { font-size: 18pt; margin: 0 0 9mm; font-weight: 700; color: #111; }
+.cover .lede { font-size: 11pt; max-width: 135mm; margin: 0 auto; color: #222; }
+.cover .art { margin-top: 34mm; }
+.cover .bottom { margin-top: auto; margin-bottom: 30mm; font-size: 11pt; }
+.cover .bottom div + div { font-size: 9.5pt; margin-top: 4mm; }
+
+/* contents */
+.toc { break-after: page; }
+.toch { font-size: 24pt; color: var(--navy); margin: 0 0 8mm; }
+.toc-ch { display: flex; font-weight: 700; margin: 4.5mm 0 1.5mm; font-size: 11pt; }
+.toc-s { display: flex; margin: 0.6mm 0 0.6mm 7mm; }
+.toc .n { width: 9mm; flex: none; }
+.toc-s .n { width: 10mm; }
+.toc .t { flex: none; max-width: 125mm; }
+.toc .dots { flex: 1; border-bottom: 1px dotted #888; margin: 0 2mm 1.2mm; }
+.toc-ch .t { flex: 1; max-width: none; }
+.toc .p { width: 9mm; text-align: right; flex: none; }
+
+.preface { break-after: page; }
+.preface h1 { font-size: 24pt; color: var(--navy); margin: 0 0 6mm; }
+.preface h2 { font-size: 13.5pt; color: var(--navy); margin: 6mm 0 2mm; }
+
+/* chapters */
+.chapter { break-before: page; }
+.chapnum { margin-top: 10mm; text-align: right; font-weight: 700; font-size: 12pt; letter-spacing: 1.5px; color: var(--navy); text-transform: uppercase; border-bottom: 1.2pt solid var(--rule); padding-bottom: 1.5mm; }
+.chapter h1 { font-size: 27pt; line-height: 1.12; color: var(--navy); margin: 5mm 0 3mm; }
+.chapsub { font-style: italic; color: #444; margin-bottom: 8mm; }
+.chapter h2 { font-size: 14.5pt; color: var(--navy); margin: 8mm 0 2.5mm; break-after: avoid; }
+.chapter h3 { font-size: 11.5pt; color: var(--navy); margin: 5mm 0 1.5mm; break-after: avoid; }
+.secnum { margin-right: 4mm; }
+
+/* tables */
+table { border-collapse: collapse; margin: 2mm 0 4mm; font-size: 9.4pt; width: 100%; break-inside: auto; }
+th, td { border-bottom: 0.4pt solid #bbb; padding: 1.2mm 2mm; text-align: left; vertical-align: top; }
+th { border-bottom: 0.9pt solid #333; border-top: 0.9pt solid #333; }
+tr { break-inside: avoid; }
+
+/* code */
+.code { margin: 2.5mm 0 4.5mm; }
+.code-title { font: 8.4pt Menlo, monospace; color: #fff; background: #3c4a5c; padding: 1mm 2.5mm; border-radius: 2px 2px 0 0; break-after: avoid; }
+.code .hl, .codehilite, .hl { background: var(--codebg); }
+.code pre, .hl pre { margin: 0; padding: 2mm 2.5mm; font-size: 7.9pt; line-height: 1.38; white-space: pre-wrap; word-break: break-all; }
+.chapter > .hl pre, .preface .hl pre, .callout .hl pre { font-size: 8.3pt; }
+.hl .linenos { color: #9aa3ad; padding-right: 2.5mm; user-select: none; }
+.hl { border-radius: 0 0 2px 2px; }
+.chapter > .hl, .callout .hl { border-radius: 2px; margin: 2mm 0 4mm; }
+
+/* spec excerpts */
+.spec { border-left: 2.4pt solid var(--navy); background: #f4f7fb; padding: 2mm 4mm 1mm; margin: 3mm 0 5mm; }
+.spec-title { font-weight: 700; color: var(--navy); font-size: 9.5pt; letter-spacing: 0.3px; margin-bottom: 2mm; text-transform: none; }
+.spec p, .spec li, .spec td { font-size: 9.6pt; }
+.spec h4, .spec h5, .spec h6 { color: var(--navy); font-size: 10.2pt; margin: 3mm 0 1mm; }
+.spec .hl { background: #e9eef5; }
+
+/* callouts */
+.callout { border: 0.8pt solid; border-radius: 3px; margin: 3mm 0 5mm; break-inside: avoid; }
+.callout-title { color: #fff; font-weight: 700; font-size: 9.6pt; padding: 1.2mm 3mm; }
+.callout-body { padding: 2mm 3mm 0.5mm; }
+.callout.trap { border-color: var(--trap); background: #fffaf0; }
+.callout.trap .callout-title { background: var(--trap); }
+.callout.note { border-color: var(--note); background: #f4faf6; }
+.callout.note .callout-title { background: var(--note); }
+.callout.try { border-color: var(--try); background: #f5f7fd; }
+.callout.try .callout-title { background: var(--try); }
+
+/* figures */
+figure.flow { margin: 4mm 0 5mm; break-inside: avoid; }
+.boxes { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 1.5mm; }
+.box { border: 0.7pt solid #667; border-radius: 3px; background: #eef3fa; padding: 2mm 3mm; font-size: 9pt; text-align: center; }
+.arrow { font-size: 12pt; color: #333; }
+.caption { font-size: 9pt; margin-top: 2.5mm; color: #222; text-align: left; }
+figure.diagram { margin: 4mm 0 5mm; break-inside: avoid; text-align: center; }
+figure.diagram svg { max-width: 100%; }
+.hl pre, pre { tab-size: 4; -moz-tab-size: 4; }
+blockquote { margin: 3mm 8mm; font-weight: 700; color: var(--navy); }
+figure.graph { margin: 4mm 0 5mm; }
+figure.graph svg { max-width: 100%; max-height: 210mm; height: auto; width: auto; }
+figure.graph .caption { text-align: left; }
+.graphify .code-title { background: #2f6b4f; }
