@@ -146,13 +146,17 @@ The A1 traffic uses none of these.
 | `incident.kavach` | The recorded fixture agents receive |
 | `candidates/*.patch` | Candidate fixes, applied on top of the integration |
 | `hidden/test.patch` | The upstream test, from SWE-bench; never shown to the agent |
-| `run.sh` | Builds, records, replays and grades everything above |
+| `run.sh` | Builds, records, replays and grades everything above, on the host |
+| `Dockerfile` | The agent images for each arm and the grader image (see `../../harness`) |
+| `grade.sh` | Grades one agent attempt in the grader image |
+
+In the containers, the five builds grade exactly as in the table above, in both
+arms.
 
 ## Not done yet
 
-- **Containers.** There is no Docker image. Agent runs need one per task, and
-  grading should use SWE-bench's own image
-  (`swebench/sweb.eval.x86_64.redis_1776_redis-10068`). On macOS, building
-  Redis of this age needs the two compiler flags in `run.sh`.
-- **The harness.** Nothing yet runs a model on `task.md`. The harness must be
-  model-agnostic, so open-weight and frontier models run under the same tools.
+- **No model has run.** `../../harness/run.sh` runs any model on this task in
+  Docker; it has only been checked against a dead endpoint so far.
+- **Grading** uses this task's own grader image, not SWE-bench's
+  (`swebench/sweb.eval.x86_64.redis_1776_redis-10068`). Both run the same
+  hidden test.

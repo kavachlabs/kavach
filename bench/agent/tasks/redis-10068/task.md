@@ -27,13 +27,14 @@ record `redis__redis-10068`.)
 This checkout has the Kavach integration applied (`redis-kavach.patch`); do not
 change `src/kavach.c` or `src/kavach.h`. Production runs this Redis with Kavach
 recording. The incident was recorded:
-`incident.kavach` is the fixture. The `kavach` tools are available as an MCP
+`/task/incident.kavach` is the fixture, and `/opt/redis-old/redis-server` is
+the build that failed. The `kavach` tools are available as an MCP
 server (`kavach mcp`) and on the command line:
 
 ```
-kavach inspect incident.kavach
-kavach replay  incident.kavach --bin ./src/redis-server
-kavach diff    incident.kavach --old <build that failed> --new ./src/redis-server
+kavach inspect /task/incident.kavach
+kavach replay  /task/incident.kavach --bin ./src/redis-server
+kavach diff    /task/incident.kavach --old /opt/redis-old/redis-server --new ./src/redis-server
 ```
 
 `./src/redis-server` acts as a replay host when its last argument is
