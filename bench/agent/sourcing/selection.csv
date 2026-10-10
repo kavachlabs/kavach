@@ -1,0 +1,30 @@
+track,order,id,source,repo,language,call,gap,note
+A,1,redis__redis-10068,SWE-bench Multilingual,redis/redis,c,firm,none,
+A,2,redis__redis-11734,SWE-bench Multilingual,redis/redis,c,firm,invariant-leaks-bug;variants-cannot-reach,
+A,3,redis__redis-13115,SWE-bench Multilingual,redis/redis,c,firm,invariant-leaks-bug;variants-cannot-reach,
+A,4,valkey-io__valkey-1499,SWE-bench Multilingual,valkey-io/valkey,c,firm,invariant-leaks-bug;variants-cannot-reach,
+A,5,redis__redis-10764,SWE-bench Multilingual,redis/redis,c,firm,none,
+A,6,tokio-rs__axum-1934,SWE-bench Multilingual,tokio-rs/axum,rust,firm,variants-cannot-reach,
+A,7,laravel__framework-48573,SWE-bench Multilingual,laravel/framework,php,soft,invariant-leaks-bug,
+A,8,prometheus__prometheus-10633,SWE-bench Multilingual,prometheus/prometheus,go,firm,invariant-leaks-bug;variants-cannot-reach,
+A,9,cli__cli-3517,Multi-SWE-bench,cli/cli,go,firm,invariant-leaks-bug;variants-cannot-reach,
+A,10,axios__axios-5892,SWE-bench Multilingual,axios/axios,javascript,soft,invariant-leaks-bug;variants-cannot-reach,
+A,11,axios__axios-5085,SWE-bench Multilingual,axios/axios,javascript,soft,invariant-leaks-bug;variants-cannot-reach,
+A,12,django__django-16255,Multi-SWE-bench,django/django,python,firm,variants-cannot-reach,
+A,13,fluent__fluentd-3640,SWE-bench Multilingual,fluent/fluentd,ruby,soft,invariant-leaks-bug;feature-needs-diff-acceptance;variants-cannot-reach,
+A,14,tokio-rs__axum-691,SWE-bench Multilingual,tokio-rs/axum,rust,firm,invariant-leaks-bug;variants-cannot-reach,
+B,1,httpx-deterministic-cookie-store,DeepSWE,encode/httpx,python,soft,feature-needs-diff-acceptance,
+B,2,kombu-virtual-queue-dead-lettering,DeepSWE,celery/kombu,python,soft,feature-needs-diff-acceptance,
+B,3,kombu-single-active-consumer-priority,DeepSWE,celery/kombu,python,soft,feature-needs-diff-acceptance,
+B,4,updo-policy-alerting,DeepSWE,Owloops/updo,go,soft,feature-needs-diff-acceptance,
+B,5,go-genai-streamed-function-args,DeepSWE,googleapis/go-genai,go,firm,feature-needs-diff-acceptance,
+B,6,arktype-json-schema-refs-dependencies,DeepSWE,arktypeio/arktype,typescript,firm,feature-needs-diff-acceptance,
+B,7,ytt-jsonpath-query-api,DeepSWE,carvel-dev/ytt,go,firm,feature-needs-diff-acceptance,
+B,8,csstree-shorthand-expansion-compression,DeepSWE,csstree/csstree,javascript,firm,feature-needs-diff-acceptance,
+B,9,prometheus-typed-label-sorting,DeepSWE,prometheus/prometheus,go,firm,feature-needs-diff-acceptance,
+B,10,pest-character-class-coalescing,DeepSWE,pest-parser/pest,rust,firm,feature-needs-diff-acceptance,
+C,1,verilog-simulator-in-swift,FrontierSWE v2,,swift (port); C++ (Icarus Verilog reference),,variants-cannot-reach;filesystem-state;argv-startup-config,exact contract
+C,2,libexpat-optimization,FrontierSWE v2,,x86-64 assembly (port); C (libexpat reference),,timing-hang-leak,exact contract
+C,3,dart-style-in-haskell,FrontierSWE v2,,haskell (port); dart (reference),,variants-cannot-reach,exact contract
+C,4,lean-4-kernel-type-checker-in-pascal,FrontierSWE v2,,pascal (port); C++ (Lean kernel reference),,variants-cannot-reach,exact contract
+C,5,cranelift-codegen-opt,FrontierSWE v2,,rust,,filesystem-state;argv-startup-config,exact contract
