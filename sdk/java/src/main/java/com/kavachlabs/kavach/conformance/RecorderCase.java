@@ -148,7 +148,15 @@ public final class RecorderCase {
                 r.put("error", "the fake recorder wrote no result (did the SDK close it?)");
                 return r;
             }
-            return (Map<?, ?>) Json.parse(Files.readString(resultPath));
+            Map<?, ?> result = (Map<?, ?>) Json.parse(Files.readString(resultPath));
+            String want = ring ? "ring" : "pipe";
+            if (Boolean.TRUE.equals(result.get("pass")) && !want.equals(result.get("transport"))) {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("pass", false);
+                r.put("error", "the case ran over the " + result.get("transport") + ", want the " + want);
+                return r;
+            }
+            return result;
         } finally {
             try (Stream<Path> files = Files.walk(tmp)) {
                 files.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());

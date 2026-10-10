@@ -61,7 +61,12 @@ function run_case(path::AbstractString; ring::Bool=true, fake=joinpath(spec_dir(
         end
         close(rec)
         isfile(result_path) || return Dict{String,Any}("pass" => false, "error" => "the fake recorder wrote no result (did the SDK close it?)")
-        return Json.parse(read(result_path, String))
+        result = Json.parse(read(result_path, String))
+        want = ring ? "ring" : "pipe"
+        if get(result, "pass", false) === true && get(result, "transport", nothing) != want
+            return Dict{String,Any}("pass" => false, "error" => "the case ran over the $(get(result, "transport", "unknown transport")), want the $want")
+        end
+        return result
     end
 end
 

@@ -135,7 +135,7 @@ void case_free(case_t* c) {
   free(c);
 }
 
-int case_check_result(const char* path) {
+int case_check_result(const char* path, const char* transport) {
   size_t n;
   char* text = slurp(path, &n);
   if (!text) {
@@ -153,6 +153,11 @@ int case_check_result(const char* path) {
   if (!pass) {
     const char* e = kj_str(kj_get(r, "error"));
     fprintf(stderr, "case failed: %s\n", e ? e : "(no error)");
+  }
+  const char* got = kj_str(kj_get(r, "transport"));
+  if (pass && (!got || strcmp(got, transport) != 0)) {
+    fprintf(stderr, "case ran over the %s, expected the %s\n", got ? got : "(unknown transport)", transport);
+    pass = 0;
   }
   kj_free(r);
   return pass ? 0 : 1;

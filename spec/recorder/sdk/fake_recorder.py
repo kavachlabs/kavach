@@ -10,7 +10,7 @@ descriptor 3 (§10.7), with standard input as the doorbell,
 answers on standard output as the recorder would (§10.3), sending the control
 messages the case scripts, and when the stream closes compares every frame it
 received with the case's `frames`. It writes {"pass": bool, "error": str,
-"frames": [...]} to result.json and exits 0 if the frames match, 1 if not.
+"transport": "pipe"|"ring", "frames": [...]} to result.json and exits 0 if the frames match, 1 if not.
 Standard library only, Python 3.10 or later.
 """
 
@@ -230,6 +230,7 @@ def main():
         sys.stdout.flush()
 
     frames, error, steps, records = [], None, 0, 0
+    transport = "pipe"
     stdin = sys.stdin.buffer
     try:
         while True:
@@ -248,8 +249,10 @@ def main():
                     fd = os.open(f["open"]["ring_path"], os.O_RDWR)
                     os.unlink(f["open"]["ring_path"])
                     stdin = Ring(fd, f["open"]["ring"])
+                    transport = "ring"
                 elif f["open"].get("ring"):
                     stdin = Ring(3, f["open"]["ring"])
+                    transport = "ring"
                 say({"t": "ready", "protocol": 1, "recorder": "fake-recorder", "run": "conformance", "file": "/dev/null"})
             elif f["frame"] == "record":
                 records += 1
@@ -267,7 +270,7 @@ def main():
     if error is None:
         error = compare(case["frames"], frames)
     with open(result_path, "w") as out:
-        json.dump({"pass": error is None, "error": error, "frames": frames}, out, indent=2)
+        json.dump({"pass": error is None, "error": error, "transport": transport, "frames": frames}, out, indent=2)
     if error:
         sys.stderr.write(f"fake-recorder: {case.get('description', '')}\n{error}\n")
     if frames and frames[-1]["frame"] == "close":

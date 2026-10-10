@@ -158,7 +158,14 @@ fn run(case_path: &str, result_path: &str, no_ring: bool) -> Result<(), String> 
         &std::fs::read_to_string(result_path).map_err(|e| format!("no verdict: {e}"))?,
     )?;
     if result.get("pass").and_then(Value::as_bool) == Some(true) {
-        Ok(())
+        let want = if no_ring { "pipe" } else { "ring" };
+        match result.str_field("transport") {
+            Some(got) if got == want => Ok(()),
+            got => Err(format!(
+                "the case ran over the {}, want the {want}",
+                got.unwrap_or("unknown transport")
+            )),
+        }
     } else {
         Err(result
             .str_field("error")
