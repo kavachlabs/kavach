@@ -1,0 +1,13 @@
+diff --git a/src/t_stream.c b/src/t_stream.c
+index c49889abe..1cfeefd57 100644
+--- a/src/t_stream.c
++++ b/src/t_stream.c
+@@ -797,7 +797,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
+             p = lpNext(lp, p); /* Skip flags. */
+             int to_skip;
+ 
+-            int ms_delta = lpGetInteger(p);
++            int64_t ms_delta = lpGetInteger(p);
+             p = lpNext(lp, p); /* Skip ID ms delta */
+             int seq_delta = lpGetInteger(p);
+             p = lpNext(lp, p); /* Skip ID seq delta */

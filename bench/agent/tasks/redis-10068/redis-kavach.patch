@@ -1,0 +1,677 @@
+diff --git a/src/Makefile b/src/Makefile
+index 2a0d74d82..9b815373e 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -118,6 +118,12 @@ endif
+ FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
+ FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
+ FINAL_LIBS=-lm
++
++# Kavach (https://github.com/kavachlabs/kavach): KAVACH_SDK is sdk/c, KAVACH_LIB the built libkavach.a
++KAVACH_SDK?=../../kavach/sdk/c
++KAVACH_LIB?=../../kavach-c/libkavach.a
++FINAL_CFLAGS+= -I$(KAVACH_SDK)/include
++FINAL_LIBS+= $(KAVACH_LIB) -lpthread
+ DEBUG=-g -ggdb
+ 
+ # Linux ARM32 needs -latomic at linking time
+@@ -316,7 +322,7 @@ endif
+ 
+ REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
+ REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
+-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o connection.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o
++REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o connection.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o kavach.o
+ REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
+ REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o
+ REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
+diff --git a/src/kavach.c b/src/kavach.c
+new file mode 100644
+index 000000000..459358e2a
+--- /dev/null
++++ b/src/kavach.c
+@@ -0,0 +1,552 @@
++/* Kavach integration: record commands as steps and replay them as a host.
++ *
++ * Each command that reaches call() from a network client is one Kavach step.
++ * The step's input is the command's argv as JSON, {"argv":["XADD","s","*",...]},
++ * with "db":N first when the client has selected a database other than 0,
++ * and its output is the RESP2 reply. The command runs on a shadow client, the
++ * same way RM_Call runs one, both when recording and when replaying, so the two
++ * execute the same code. The live client then receives the shadow's reply.
++ *
++ * Clock reads made during a step (ustime(), and so mstime() and the cached
++ * server time) go through Kavach. Nothing else is routed: random(), the
++ * monotonic clock, and the LRU clock that serverCron caches are not.
++ *
++ * Recording starts when KAVACH_REDIS_DIR names a journal directory and the
++ * dataset is empty at startup. `redis-server ... kavach-host` replays: it starts
++ * without listening or persistence and serves the Kavach host protocol. */
++
++#include "server.h"
++#include "stream.h"
++#include "kavach.h"
++
++#include <kavach/kavach.h>
++
++void freeClientArgv(client *c);
++
++static kavach_env *cur_env = NULL;
++static int host_mode = 0;
++static int saved_stdout = -1;
++static kavach_recorder *recorder = NULL;
++
++/* ---- clock ---- */
++
++int kavachClock(long long *us) {
++    if (!cur_env) return 0;
++    *us = kavach_now_ns(cur_env) / 1000;
++    return 1;
++}
++
++/* ---- input encoding: {"db":N,"argv":[...]} with bytes >= 0x80 as \u00XX ---- */
++
++static sds encodeArgv(int db, robj **argv, int argc) {
++    sds s = db ? sdscatprintf(sdsempty(), "{\"db\":%d,\"argv\":[", db) : sdsnew("{\"argv\":[");
++    for (int i = 0; i < argc; i++) {
++        robj *o = getDecodedObject(argv[i]);
++        const unsigned char *p = o->ptr;
++        size_t n = sdslen(o->ptr);
++        if (i) s = sdscatlen(s, ",", 1);
++        s = sdscatlen(s, "\"", 1);
++        for (size_t j = 0; j < n; j++) {
++            unsigned char ch = p[j];
++            if (ch == '"' || ch == '\\') s = sdscatprintf(s, "\\%c", ch);
++            else if (ch < 0x20 || ch >= 0x7f) s = sdscatprintf(s, "\\u%04x", ch);
++            else s = sdscatlen(s, (char *)&ch, 1);
++        }
++        s = sdscatlen(s, "\"", 1);
++        decrRefCount(o);
++    }
++    return sdscat(s, "]}");
++}
++
++static const char *skipWs(const char *p, const char *e) {
++    while (p < e && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
++    return p;
++}
++
++static int hexval(char c) {
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++/* Parses a JSON string at *pp into an sds. Escapes above ÿ are rejected. */
++static sds parseString(const char **pp, const char *e) {
++    const char *p = *pp;
++    if (p >= e || *p != '"') return NULL;
++    p++;
++    sds s = sdsempty();
++    while (p < e && *p != '"') {
++        if (*p != '\\') { s = sdscatlen(s, p++, 1); continue; }
++        if (++p >= e) break;
++        char c = *p++, out;
++        switch (c) {
++        case '"': case '\\': case '/': out = c; break;
++        case 'b': out = '\b'; break;
++        case 'f': out = '\f'; break;
++        case 'n': out = '\n'; break;
++        case 'r': out = '\r'; break;
++        case 't': out = '\t'; break;
++        case 'u': {
++            int v = 0;
++            for (int k = 0; k < 4; k++) {
++                int h = p < e ? hexval(*p++) : -1;
++                if (h < 0) { sdsfree(s); return NULL; }
++                v = v * 16 + h;
++            }
++            if (v > 0xff) { sdsfree(s); return NULL; }
++            out = (char)v;
++            break;
++        }
++        default: sdsfree(s); return NULL;
++        }
++        s = sdscatlen(s, &out, 1);
++    }
++    if (p >= e) { sdsfree(s); return NULL; }
++    *pp = p + 1;
++    return s;
++}
++
++/* Decodes {"db":N,"argv":[...]}, where db is optional. Returns argc, or -1. */
++static int decodeArgv(const uint8_t *data, size_t len, int *dbp, robj ***argvp) {
++    const char *p = (const char *)data, *e = p + len;
++    robj **argv = NULL;
++    int argc = -1;
++    p = skipWs(p, e);
++    if (p >= e || *p++ != '{') return -1;
++    for (;;) {
++        p = skipWs(p, e);
++        if (p < e && *p == '}') break;
++        sds key = parseString(&p, e);
++        if (!key) goto fail;
++        p = skipWs(p, e);
++        if (p >= e || *p++ != ':') { sdsfree(key); goto fail; }
++        p = skipWs(p, e);
++        int is_argv = !strcmp(key, "argv"), is_db = !strcmp(key, "db");
++        sdsfree(key);
++        if (is_db) {
++            char *end;
++            long v = strtol(p, &end, 10);
++            if (end == p || end > e || v < 0 || v >= server.dbnum) goto fail;
++            *dbp = (int)v;
++            p = skipWs(end, e);
++            if (p < e && *p == ',') p++;
++            continue;
++        }
++        if (!is_argv || p >= e || *p != '[') goto fail; /* only db and argv are defined */
++        p++;
++        if (argc >= 0) goto fail;
++        argc = 0;
++        for (;;) {
++            p = skipWs(p, e);
++            if (p < e && *p == ']') { p++; break; }
++            if (argc) {
++                if (p >= e || *p++ != ',') goto fail;
++                p = skipWs(p, e);
++            }
++            sds a = parseString(&p, e);
++            if (!a) goto fail;
++            argv = zrealloc(argv, sizeof(robj *) * (argc + 1));
++            argv[argc++] = createObject(OBJ_STRING, a);
++        }
++        p = skipWs(p, e);
++        if (p < e && *p == ',') { p++; continue; }
++    }
++    if (argc <= 0) goto fail;
++    *argvp = argv;
++    return argc;
++fail:
++    for (int i = 0; i < argc; i++) decrRefCount(argv[i]);
++    zfree(argv);
++    return -1;
++}
++
++/* ---- the stream trimming contract ----
++ *
++ * XTRIM, and XADD with a trimming option, evict entries with IDs below a MINID
++ * threshold, or the oldest entries beyond MAXLEN. Trimming never removes
++ * more than asked. It may remove fewer when asked to trim approximately (~) or
++ * with LIMIT; otherwise it removes exactly what was asked. Before such a
++ * command runs, the handler notes what it must keep; afterwards the invariant
++ * checks both directions. */
++
++typedef struct {
++    int active;
++    sds cmd, key, strategy, threshold;
++    int minid, exact;
++    streamID min;
++    long long maxlen;
++    streamID *keep;     /* MINID: IDs at or above the threshold, ascending */
++    long nkeep;
++    long long len_before;
++} trimCheck;
++
++static trimCheck trim;
++
++static void trimReset(void) {
++    sdsfree(trim.cmd); sdsfree(trim.key); sdsfree(trim.strategy); sdsfree(trim.threshold);
++    zfree(trim.keep);
++    memset(&trim, 0, sizeof trim);
++}
++
++/* Returns a malloc'd copy of s and frees s. */
++static char *detailOf(sds s) {
++    char *d = strdup(s);
++    sdsfree(s);
++    return d;
++}
++
++static int parseID(const char *s, streamID *id) {
++    char buf[128];
++    size_t n = strlen(s);
++    if (n == 0 || n >= sizeof buf) return 0;
++    memcpy(buf, s, n + 1);
++    char *dash = strchr(buf, '-');
++    unsigned long long ms, seq = 0;
++    if (dash) {
++        *dash = '\0';
++        if (!string2ull(dash + 1, &seq)) return 0;
++    }
++    if (!string2ull(buf, &ms)) return 0;
++    id->ms = ms;
++    id->seq = seq;
++    return 1;
++}
++
++static client *shadowClient(void);
++
++/* Before the command, inside the step: an expired key is deleted here exactly
++ * as the command would delete it, reading the step's clock. */
++static stream *lookupStream(robj *key) {
++    robj *o = lookupKeyReadWithFlags(shadowClient()->db, key,
++                                     LOOKUP_NOTOUCH|LOOKUP_NONOTIFY|LOOKUP_NOSTATS);
++    return (o && o->type == OBJ_STREAM) ? o->ptr : NULL;
++}
++
++/* After the step the clock is no longer the step's, so look the key up without
++ * the expiry check, which would read the real clock and could delete it. */
++static stream *peekStream(sds key) {
++    dictEntry *de = dictFind(shadowClient()->db->dict, key);
++    robj *o = de ? dictGetVal(de) : NULL;
++    return (o && o->type == OBJ_STREAM) ? o->ptr : NULL;
++}
++
++/* Calls fn for each entry of s with an ID at or above min. */
++static void forEachFrom(stream *s, streamID *min, void (*fn)(streamID *, void *), void *arg) {
++    streamIterator si;
++    streamID id;
++    int64_t numfields;
++    streamIteratorStart(&si, s, min, NULL, 0);
++    while (streamIteratorGetID(&si, &id, &numfields)) {
++        while (numfields--) {
++            unsigned char *f, *v;
++            int64_t fl, vl;
++            streamIteratorGetField(&si, &f, &v, &fl, &vl);
++        }
++        fn(&id, arg);
++    }
++    streamIteratorStop(&si);
++}
++
++/* Sets *id to the first live entry of s; returns 0 if s has none. */
++static int firstEntry(stream *s, streamID *id) {
++    streamIterator si;
++    int64_t numfields;
++    streamIteratorStart(&si, s, NULL, NULL, 0);
++    int found = streamIteratorGetID(&si, id, &numfields);
++    streamIteratorStop(&si);
++    return found;
++}
++
++static void collectKeep(streamID *id, void *arg) {
++    UNUSED(arg);
++    trim.keep = zrealloc(trim.keep, sizeof(streamID) * (trim.nkeep + 1));
++    trim.keep[trim.nkeep++] = *id;
++}
++
++/* Notes what a trimming command must keep. argv[0] is XTRIM or XADD. */
++static void trimBefore(robj **argv, int argc) {
++    trimReset();
++    const char *cmd = argv[0]->ptr;
++    int xadd = !strcasecmp(cmd, "xadd");
++    if (!xadd && strcasecmp(cmd, "xtrim")) return;
++    /* Options come in any order, as streamParseAddOrTrimArgs accepts them; for
++     * XADD they end at the ID. */
++    const char *strategy = NULL, *threshold = NULL;
++    int exact = 1;
++    for (int i = 2; i < argc; i++) {
++        const char *opt = argv[i]->ptr;
++        if (xadd && !strcasecmp(opt, "nomkstream")) continue;
++        if ((!strcasecmp(opt, "maxlen") || !strcasecmp(opt, "minid")) && i + 1 < argc) {
++            strategy = opt;
++            if (!strcmp(argv[i + 1]->ptr, "~") || !strcmp(argv[i + 1]->ptr, "=")) {
++                if (!strcmp(argv[i + 1]->ptr, "~")) exact = 0;
++                i++;
++            }
++            if (i + 1 >= argc) return;
++            threshold = argv[++i]->ptr;
++        } else if (!strcasecmp(opt, "limit") && i + 1 < argc) {
++            exact = 0;
++            i++;
++        } else {
++            break;
++        }
++    }
++    if (!strategy) return;
++    int minid = !strcasecmp(strategy, "minid");
++    if (minid) {
++        if (!parseID(threshold, &trim.min)) return;
++    } else {
++        if (!string2ll(threshold, strlen(threshold), &trim.maxlen) || trim.maxlen < 0) return;
++    }
++    stream *s = lookupStream(argv[1]);
++    if (!s) return;
++    trim.active = 1;
++    trim.minid = minid;
++    trim.exact = exact;
++    trim.cmd = sdsnew(cmd);
++    sdstoupper(trim.cmd);
++    trim.key = sdsdup(argv[1]->ptr);
++    trim.strategy = sdsnew(strategy);
++    sdstoupper(trim.strategy);
++    trim.threshold = sdsnew(threshold);
++    trim.len_before = s->length;
++    if (minid) forEachFrom(s, &trim.min, collectKeep, NULL);
++}
++
++typedef struct { long i, missing; streamID first_missing; } keepCursor;
++
++static void matchKeep(streamID *id, void *arg) {
++    keepCursor *k = arg;
++    while (k->i < trim.nkeep && streamCompareID(&trim.keep[k->i], id) < 0) {
++        if (k->missing++ == 0) k->first_missing = trim.keep[k->i];
++        k->i++;
++    }
++    if (k->i < trim.nkeep && streamCompareID(&trim.keep[k->i], id) == 0) k->i++;
++}
++
++static sds last_reply = NULL;
++
++static int trimInvariant(void *state, void *arg, char **detail) {
++    UNUSED(state); UNUSED(arg);
++    /* A command that replied with an error trimmed nothing, and owes nothing. */
++    if (!trim.active || (last_reply && last_reply[0] == '-')) return KAVACH_OK;
++    stream *s = peekStream(trim.key);
++    if (trim.minid) {
++        keepCursor k = {0};
++        if (s) forEachFrom(s, &trim.min, matchKeep, &k);
++        if (k.i < trim.nkeep) {
++            if (k.missing == 0) k.first_missing = trim.keep[k.i];
++            k.missing += trim.nkeep - k.i;
++        }
++        if (k.missing == 0) {
++            streamID first;
++            if (!trim.exact || !s || !firstEntry(s, &first)) return KAVACH_OK;
++            if (streamCompareID(&first, &trim.min) >= 0) return KAVACH_OK;
++            *detail = detailOf(sdscatprintf(sdsempty(),
++                "%s %s MINID %s kept entry %llu-%llu below the threshold",
++                trim.cmd, trim.key, trim.threshold,
++                (unsigned long long)first.ms, (unsigned long long)first.seq));
++            return KAVACH_ERROR;
++        }
++        *detail = detailOf(sdscatprintf(sdsempty(),
++            "%s %s MINID %s removed %ld of the %ld entries at or above the threshold, first %llu-%llu",
++            trim.cmd, trim.key, trim.threshold, k.missing, trim.nkeep,
++            (unsigned long long)k.first_missing.ms, (unsigned long long)k.first_missing.seq));
++        return KAVACH_ERROR;
++    }
++    long long after = s ? (long long)s->length : 0;
++    long long want = trim.len_before < trim.maxlen ? trim.len_before : trim.maxlen;
++    if (trim.exact && after > trim.maxlen) {
++        *detail = detailOf(sdscatprintf(sdsempty(),
++            "%s %s MAXLEN %s left %lld entries", trim.cmd, trim.key, trim.threshold, after));
++        return KAVACH_ERROR;
++    }
++    if (after >= want) return KAVACH_OK;
++    *detail = detailOf(sdscatprintf(sdsempty(),
++        "%s %s MAXLEN %s left %lld entries of %lld, fewer than %lld",
++        trim.cmd, trim.key, trim.threshold, after, trim.len_before, want));
++    return KAVACH_ERROR;
++}
++
++static const kavach_invariant invariants[] = {
++    {"stream-trim-contract", trimInvariant, NULL},
++};
++
++/* ---- the handler ---- */
++
++static client *shadow = NULL;
++
++static client *shadowClient(void) {
++    if (!shadow) {
++        shadow = createClient(NULL);
++        shadow->flags |= CLIENT_MODULE|CLIENT_DENY_BLOCKING;
++        shadow->user = NULL; /* root */
++        shadow->resp = 2;
++        selectDb(shadow, 0);
++    }
++    return shadow;
++}
++
++static int handle(void *state, kavach_env *env, const kavach_input *in) {
++    UNUSED(state);
++    robj **argv;
++    int db = 0;
++    int argc = decodeArgv(in->data, in->len, &db, &argv);
++    if (argc < 0) return kavach_error(env, "input is not {\"db\":N,\"argv\":[...]}");
++
++    client *c = shadowClient();
++    selectDb(c, db);
++    c->argv = argv;
++    c->argc = argc;
++    c->argv_len = argc;
++    sdsfree(last_reply);
++
++    struct redisCommand *cmd = lookupCommand(argv, argc);
++    cur_env = env;
++    if (!cmd) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR unknown command '%.128s'\r\n", (char *)argv[0]->ptr);
++    } else if ((cmd->arity > 0 && cmd->arity != argc) || argc < -cmd->arity) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR wrong number of arguments for '%s' command\r\n", cmd->name);
++    } else {
++        trimBefore(argv, argc);
++        c->cmd = c->lastcmd = cmd;
++        client *old = server.current_client;
++        server.current_client = c;
++        call(c, CMD_CALL_FULL);
++        server.current_client = old;
++        last_reply = sdsnewlen(c->buf, c->bufpos);
++        c->bufpos = 0;
++        while (listLength(c->reply)) {
++            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
++            last_reply = sdscatlen(last_reply, o->buf, o->used);
++            listDelNode(c->reply, listFirst(c->reply));
++        }
++        c->reply_bytes = 0;
++    }
++    cur_env = NULL;
++    freeClientArgv(c);
++    return kavach_emit(env, "reply", last_reply, sdslen(last_reply), KAVACH_LOCAL);
++}
++
++static kavach_handler makeHandler(void) {
++    kavach_handler h = {0};
++    h.handle = handle;
++    h.invariants = invariants;
++    h.n_invariants = sizeof invariants / sizeof invariants[0];
++    return h;
++}
++
++/* ---- recording ---- */
++
++int kavachWantsCall(client *c) {
++    if (!recorder || c->resp != 2) return 0;
++    if ((c->flags & (CLIENT_MULTI|CLIENT_SLAVE|CLIENT_MASTER|CLIENT_PUBSUB))) return 0;
++    /* Commands whose effect is on the connection, or that may block, run as usual. */
++    if (c->cmd->flags & (CMD_PUBSUB|CMD_NOSCRIPT|CMD_ADMIN)) return 0;
++    static const char *own[] = {
++        "multi", "exec", "discard", "watch", "unwatch", "select", "reset", "quit", "hello",
++        "auth", "client", "readonly", "readwrite", "asking", "wait",
++        "blpop", "brpop", "brpoplpush", "blmove", "blmpop", "bzpopmin", "bzpopmax", "bzmpop", NULL};
++    for (int i = 0; own[i]; i++)
++        if (!strcasecmp(c->cmd->name, own[i])) return 0;
++    if (!strcasecmp(c->cmd->name, "xread") || !strcasecmp(c->cmd->name, "xreadgroup"))
++        for (int i = 1; i < c->argc; i++)
++            if (!strcasecmp(c->argv[i]->ptr, "block")) return 0;
++    return 1;
++}
++
++/* Runs the client's command as a recorded step and replies to the client. */
++void kavachCall(client *c) {
++    sds data = encodeArgv(c->db->id, c->argv, c->argc);
++    char pos[32];
++    ll2string(pos, sizeof pos, (long long)c->id);
++    kavach_input in = {"client", pos, (const uint8_t *)data, sdslen(data)};
++    kavach_result res;
++    kavach_recorder_step(recorder, &in, &res);
++    if (res.outcome != KAVACH_OK)
++        serverLog(LL_WARNING, "kavach: step failed: %s%s%s", res.message ? res.message : "",
++                  res.detail ? ": " : "", res.detail ? res.detail : "");
++    kavach_result_clear(&res);
++    sdsfree(data);
++    if (last_reply) addReplyProto(c, last_reply, sdslen(last_reply));
++}
++
++static void kavachStopRecorder(void) {
++    if (recorder) kavach_recorder_free(recorder);
++    recorder = NULL;
++}
++
++void kavachStartRecorder(void) {
++    const char *dir = getenv("KAVACH_REDIS_DIR");
++    if (!dir || !*dir) return;
++    long long keys = 0;
++    for (int j = 0; j < server.dbnum; j++) keys += dictSize(server.db[j].dict);
++    if (keys) {
++        serverLog(LL_WARNING, "kavach: not recording: the dataset is not empty at startup");
++        return;
++    }
++    kavach_handler h = makeHandler();
++    kavach_recorder_options o = {0};
++    o.service = "redis";
++    o.dir = dir;
++    o.handler_id = redisGitSHA1();
++    char *err = NULL;
++    if (kavach_recorder_new(&h, &o, &recorder, &err) != KAVACH_OK) {
++        serverLog(LL_WARNING, "kavach: not recording: %s", err ? err : "unknown error");
++        kavach_free(err);
++        recorder = NULL;
++        return;
++    }
++    atexit(kavachStopRecorder); /* SHUTDOWN ends the process with exit() */
++    serverLog(LL_NOTICE, "kavach: recording into %s", dir);
++}
++
++/* ---- host mode ---- */
++
++int kavachHostArgs(int *argc, char **argv) {
++    if (*argc < 2 || strcmp(argv[*argc - 1], "kavach-host")) return 0;
++    host_mode = 1;
++    argv[--(*argc)] = NULL;
++    /* Keep stdout for the protocol; Redis logs to stderr until the host starts. */
++    saved_stdout = dup(1);
++    dup2(2, 1);
++    return 1;
++}
++
++int kavachHostMode(void) { return host_mode; }
++
++/* Host mode overrides: no listening, no persistence, no background. */
++void kavachHostConfig(void) {
++    if (!host_mode) return;
++    server.port = 0;
++    server.tls_port = 0;
++    zfree(server.unixsocket);
++    server.unixsocket = NULL;
++    resetServerSaveParams();
++    server.aof_enabled = 0;
++    server.aof_state = AOF_OFF;
++    server.daemonize = 0;
++    server.cluster_enabled = 0;
++    zfree(server.pidfile);
++    server.pidfile = NULL;
++}
++
++static int factory(void *user, kavach_handler *out) {
++    UNUSED(user);
++    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
++    if (shadow) { freeClient(shadow); shadow = NULL; }
++    trimReset();
++    *out = makeHandler();
++    return KAVACH_OK;
++}
++
++void kavachRunHost(char *argv0) {
++    char *argv[] = {argv0, "kavach-host", NULL};
++    kavach_host_options o = {0};
++    o.sdk = "kavach-c+redis/0.1.0";
++    dup2(saved_stdout, 1);
++    close(saved_stdout);
++    kavach_maybe_host(2, argv, factory, &o);
++    exit(1); /* not reached */
++}
+diff --git a/src/kavach.h b/src/kavach.h
+new file mode 100644
+index 000000000..c32052973
+--- /dev/null
++++ b/src/kavach.h
+@@ -0,0 +1,15 @@
++#ifndef __REDIS_KAVACH_H
++#define __REDIS_KAVACH_H
++
++struct client;
++
++int kavachClock(long long *us);
++int kavachHostArgs(int *argc, char **argv);
++int kavachHostMode(void);
++void kavachHostConfig(void);
++void kavachRunHost(char *argv0);
++void kavachStartRecorder(void);
++int kavachWantsCall(struct client *c);
++void kavachCall(struct client *c);
++
++#endif
+diff --git a/src/server.c b/src/server.c
+index a1d0f1cc5..d256ffcdf 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -29,6 +29,7 @@
+ 
+ #include "server.h"
+ #include "monotonic.h"
++#include "kavach.h"
+ #include "cluster.h"
+ #include "slowlog.h"
+ #include "bio.h"
+@@ -189,6 +190,7 @@ long long ustime(void) {
+     struct timeval tv;
+     long long ust;
+ 
++    if (kavachClock(&ust)) return ust;
+     gettimeofday(&tv, NULL);
+     ust = ((long long)tv.tv_sec)*1000000;
+     ust += tv.tv_usec;
+@@ -2371,7 +2373,7 @@ void initServer(void) {
+     }
+ 
+     /* Abort if there are no listening sockets at all. */
+-    if (server.ipfd.count == 0 && server.tlsfd.count == 0 && server.sofd < 0) {
++    if (server.ipfd.count == 0 && server.tlsfd.count == 0 && server.sofd < 0 && !kavachHostMode()) {
+         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
+         exit(1);
+     }
+@@ -3657,7 +3659,8 @@ int processCommand(client *c) {
+         queueMultiCommand(c);
+         addReply(c,shared.queued);
+     } else {
+-        call(c,CMD_CALL_FULL);
++        if (kavachWantsCall(c)) kavachCall(c);
++        else call(c,CMD_CALL_FULL);
+         c->woff = server.master_repl_offset;
+         if (listLength(server.ready_keys))
+             handleClientsBlockedOnKeys();
+@@ -6380,6 +6383,8 @@ int main(int argc, char **argv) {
+     int j;
+     char config_from_stdin = 0;
+ 
++    kavachHostArgs(&argc, argv);
++
+ #ifdef REDIS_TEST
+     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
+         int flags = 0;
+@@ -6532,6 +6537,7 @@ int main(int argc, char **argv) {
+         sdsfree(options);
+     }
+     if (server.sentinel_mode) sentinelCheckConfigFile();
++    kavachHostConfig();
+     server.supervised = redisIsSupervised(server.supervised_mode);
+     int background = server.daemonize && !server.supervised;
+     if (background) daemonize();
+@@ -6583,6 +6589,7 @@ int main(int argc, char **argv) {
+         moduleLoadFromQueue();
+         ACLLoadUsersAtStartup();
+         InitServerLast();
++        if (kavachHostMode()) kavachRunHost(argv[0]);
+         aofLoadManifestFromDisk();
+         loadDataFromDisk();
+         aofOpenIfNeededOnServerStart();
+@@ -6625,6 +6632,7 @@ int main(int argc, char **argv) {
+     redisSetCpuAffinity(server.server_cpulist);
+     setOOMScoreAdj(-1);
+ 
++    kavachStartRecorder();
+     aeMain(server.el);
+     aeDeleteEventLoop(server.el);
+     return 0;

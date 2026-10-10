@@ -1,0 +1,17 @@
+diff --git a/src/t_stream.c b/src/t_stream.c
+index c49889abe..97379659c 100644
+--- a/src/t_stream.c
++++ b/src/t_stream.c
+@@ -553,6 +553,12 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
+             }
+         }
+     }
++    if (lp != NULL) {
++        /* Start a new node when the ms delta would not fit an int. */
++        streamID tail_master;
++        streamDecodeID(ri.key,&tail_master);
++        if (id.ms - tail_master.ms > INT32_MAX) lp = NULL;
++    }
+ 
+     int flags = STREAM_ITEM_FLAG_NONE;
+     if (lp == NULL) {
