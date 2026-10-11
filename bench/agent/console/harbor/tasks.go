@@ -59,7 +59,7 @@ func FindTasks(dir string) ([]Task, error) {
 }
 
 // firstLine returns the first non-empty line of a Markdown file, without its
-// heading marks.
+// heading marks or a "Task:" label.
 func firstLine(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -68,7 +68,8 @@ func firstLine(path string) string {
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		if l := strings.TrimSpace(strings.TrimLeft(sc.Text(), "#")); l != "" {
+		l := strings.TrimSpace(strings.TrimLeft(sc.Text(), "#"))
+		if l = strings.TrimSpace(strings.TrimPrefix(l, "Task:")); l != "" {
 			return l
 		}
 	}

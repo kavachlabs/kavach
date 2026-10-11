@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -312,6 +313,9 @@ func (r *Reader) readJob(id string) Job {
 		}
 	case res.Stats.NCancelled > 0:
 		j.Status = JobStopped
+	case time.Since(lastWrite(dir)) > staleAfter:
+		j.Status = JobStopped
+		j.Error = "Harbor stopped writing to this job " + staleAfter.String() + " ago without finishing it"
 	}
 	if launched && j.Started == nil {
 		j.Started = r.Runs.started(id)
@@ -329,6 +333,17 @@ func (r *Reader) readJob(id string) Job {
 	}
 	j.Trials = number(j.Trials, lock.Trials, id, j.Status == JobRunning)
 
+	planned := 0
+	if len(lock.Trials) == 0 && launched {
+		var tasks, models []string
+		tasks, j.Agent, models, planned = r.Runs.planned(id)
+		for _, t := range tasks {
+			j.Tasks = appendNew(j.Tasks, t)
+		}
+		for _, m := range models {
+			j.Models = appendNew(j.Models, m)
+		}
+	}
 	for _, t := range lock.Trials {
 		if j.Agent == "" {
 			j.Agent = agentName(t.Agent)
@@ -347,8 +362,45 @@ func (r *Reader) readJob(id string) Job {
 			j.Cost += *t.Cost
 		}
 	}
-	j.Total = max(len(lock.Trials), res.NTotal, len(j.Trials))
+	j.Total = max(len(lock.Trials), res.NTotal, len(j.Trials), planned)
+	// Harbor writes finished_at within seconds of its last trial; a job
+	// with every trial done and no finished_at for longer lost its Harbor.
+	if j.Status == JobRunning && !launched && j.Total > 0 && j.Done == j.Total && time.Since(lastWrite(dir)) > finishGrace {
+		j.Status = JobStopped
+		j.Error = "Harbor exited after the last trial without finishing the job"
+	}
 	return j
+}
+
+// staleAfter is how long a job that bench did not start (so has no pid to
+// check) may go without a write to its folder before it counts as stopped.
+// Harbor writes as trials start and finish and agents log every event; the
+// longest quiet stretch is building a task's image (redis-10068 allows 30
+// minutes).
+const staleAfter = 45 * time.Minute
+
+// finishGrace is how long a job whose trials have all finished may wait for
+// Harbor to mark it finished.
+const finishGrace = 2 * time.Minute
+
+// lastWrite is the newest modification time in a job's folder. OpenCode's
+// own database (agent/opencode) is skipped: it is large and written only
+// along with the event log.
+func lastWrite(dir string) time.Time {
+	var last time.Time
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == "opencode" {
+			return filepath.SkipDir
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().After(last) {
+			last = info.ModTime()
+		}
+		return nil
+	})
+	return last
 }
 
 func startOf(t Trial) time.Time {

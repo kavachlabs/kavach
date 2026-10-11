@@ -201,17 +201,24 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJob(w, http.StatusOK, r.PathValue("id"))
 }
 
-// writeJob writes a job with its trials, an empty list rather than none.
+// writeJob writes a job with its trials.
 func (s *Server) writeJob(w http.ResponseWriter, code int, id string) {
 	j, err := s.reader.Job(id)
 	if err != nil {
 		writeReadError(w, err)
 		return
 	}
-	if j.Trials == nil {
-		j.Trials = []harbor.Trial{}
+	// harbor.Job omits empty trials, for the job list; here they are always
+	// sent. The outer field shadows the embedded one.
+	type withTrials struct {
+		harbor.Job
+		Trials []harbor.Trial `json:"trials"`
 	}
-	writeJSON(w, code, j)
+	out := withTrials{j, j.Trials}
+	if out.Trials == nil {
+		out.Trials = []harbor.Trial{}
+	}
+	writeJSON(w, code, out)
 }
 
 func (s *Server) getCompare(w http.ResponseWriter, r *http.Request) {
