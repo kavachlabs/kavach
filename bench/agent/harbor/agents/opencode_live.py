@@ -126,8 +126,6 @@ class KavachOpenCode(OpenCode):
         # lacks newer models, whose prices give the trajectory its cost.
         await environment.exec(f"{nvm}opencode models >/dev/null 2>&1 || true")
 
-    # -- model endpoint ----------------------------------------------------
-
     def _upstream(self) -> tuple[str, str, str, str]:
         """(upstream base URL, API key, OpenCode provider id, OpenCode model)."""
         if not self.model_name or "/" not in self.model_name:
@@ -191,8 +189,6 @@ class KavachOpenCode(OpenCode):
         if self.options.disable_web_search:
             config["permission"].update(websearch="deny", webfetch="deny")
         return config
-
-    # -- proxy container -----------------------------------------------------
 
     def _netns_owner(self, environment: BaseEnvironment) -> dict[str, Any]:
         """The container whose network namespace the task container uses: the
@@ -267,8 +263,6 @@ class KavachOpenCode(OpenCode):
             await asyncio.sleep(0.2)
         raise RuntimeError("the model proxy did not start; see proxy.log")
 
-    # -- live file -----------------------------------------------------------
-
     def _write_live(self, data: dict[str, Any]) -> None:
         path = self.logs_dir / LIVE_FILE
         tmp = path.with_suffix(".tmp")
@@ -302,8 +296,6 @@ class KavachOpenCode(OpenCode):
             await asyncio.sleep(0.5)
         self._session = session
         self._write_live({"url": url, "session": session, "started": started, "dir": directory})
-
-    # -- run -----------------------------------------------------------------
 
     @override
     @with_prompt_template

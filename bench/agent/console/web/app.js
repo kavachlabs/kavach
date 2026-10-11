@@ -1,7 +1,7 @@
 // The web console of kavach bench: a client of the API in ../API.md, served
 // by the same server.
 
-// [kavach, bench] per line, from the approved mock-up.
+// The wordmark, as [kavach, bench] pairs, one per text line.
 const LOGO = [["█  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █   ", "█    ▄▀▀▀ █▀▀▄ █▀▀▀ █   "], ["█▄▀  █▀▀█ █  █ █▀▀█ █    █▀▀▄", "█▀▀█ █▀▀▀ █  █ █    █▀▀▄"], ["█ ▀▄ ▀▀▀▀  ▀▀  ▀▀▀▀ ▀▀▀▀ ▀  ▀", "▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀"]];
 
 const COMMANDS = [
@@ -33,8 +33,6 @@ const state = {
   picker: { open: false, q: "", list: null, err: "" },
   confirmStop: false, stopErr: "", note: "", noteErr: false, starting: false,
 };
-
-// --- small helpers
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -132,8 +130,6 @@ function arrow(a, b, fmt) {
   return `${fmt(a)} → ${fmt(b)}`;
 }
 
-// --- job shape
-
 function jobShape(job, compact) {
   const bases = [...new Set(job.tasks.map(base))];
   const arms = new Set(job.tasks.map((t) => (t.match(/-(control|kavach)$/) || [])[1] || "")).size;
@@ -151,8 +147,6 @@ const jobTitle = (job) => {
   const { name, shape } = jobShape(job, false);
   return shape ? `${name} · ${shape}` : name;
 };
-
-// --- routing
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
@@ -184,8 +178,6 @@ async function onRoute() {
   renderAll();
   if (current.job) await refreshJob();
 }
-
-// --- data
 
 async function loadStatus() {
   try {
@@ -296,8 +288,6 @@ function connectEvents() {
   });
 }
 
-// --- top bar, nav and sidebar
-
 function statusDot(name, check) {
   if (!check) return null;
   const word = check.ok ? `${name} ${check.version}` : `${name} down`;
@@ -391,8 +381,6 @@ function renderSide() {
   }
   side.replaceChildren(...kids);
 }
-
-// --- views
 
 function renderAll() {
   renderTop();
@@ -677,8 +665,6 @@ function addModel(id) {
   renderView();
 }
 
-// --- model picker
-
 let pickerTimer = 0;
 function openPicker(q) {
   const p = state.picker;
@@ -758,8 +744,6 @@ function pickerFoot() {
   return `Prices in USD per million tokens. The agent needs tool calls.${more} · Esc closes`;
 }
 
-// --- start
-
 function canRun() {
   const f = state.form;
   if (!state.tasks || !state.tasks.length) return "No task to run.";
@@ -787,8 +771,6 @@ async function startRun() {
     state.starting = false;
   }
 }
-
-// --- runs: matrix and attempt
 
 function armsOf(trials) {
   const present = new Set(trials.map((t) => t.arm));
@@ -1109,8 +1091,6 @@ async function stopJob() {
   renderAll();
 }
 
-// --- results
-
 function compareGroups(rows) {
   const groups = new Map();
   for (const r of rows) {
@@ -1194,8 +1174,6 @@ function exportCSV() {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-
-// --- start
 
 document.getElementById("menu").addEventListener("click", () => {
   state.side = !sideOpen();
