@@ -14,7 +14,9 @@
 #   transcript.jsonl  OpenCode's events (--format json), with token use
 #   agent.log         OpenCode's stderr
 #   patch.diff        the agent's change
-#   agent.json        exit status (124 is the timeout) and wall time
+#   agent.json        exit status (124 is the timeout), wall time, and the
+#                     API error that ended the run, if any: such an attempt
+#                     says nothing about the model and should be rerun
 #   grade.json        hidden test result and kavach diff verdict
 #   grade.log         build, test and diff output
 # and the OpenCode config used is <out>/<task>/opencode-<arm>.json.
