@@ -175,6 +175,10 @@ func (m *Model) start(tasks, models []string) tea.Cmd {
 		m.fail("Docker isn't running: start Colima with `colima start`.")
 		return nil
 	}
+	if m.status != nil && m.status.JobsWarning != "" {
+		m.fail("%s", m.status.JobsWarning)
+		return nil
+	}
 	req := harbor.RunRequest{Tasks: tasks, Attempts: m.set.Runs, Agent: m.set.Agent, TimeoutSec: float64(m.set.Timeout * 60)}
 	if m.needsModel() {
 		for _, id := range models {

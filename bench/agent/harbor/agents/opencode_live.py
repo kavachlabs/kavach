@@ -103,6 +103,10 @@ class KavachOpenCode(OpenCode):
     options_model = KavachOpenCodeOptions
     options: KavachOpenCodeOptions
 
+    @staticmethod
+    def name() -> str:
+        return "opencode-live"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Harbor passes version=None when -ak version is not given.

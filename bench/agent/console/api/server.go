@@ -21,12 +21,16 @@ import (
 
 // Config locates what the server reads and runs.
 type Config struct {
-	JobsDir   string // absolute
-	TasksDir  string
-	EnvFile   string // bench/agent/.env; passed to Harbor, never read
-	Harbor    string // the harbor command; default "harbor"
-	ModelsURL string // default OpenRouter's model list
-	Web       fs.FS  // the web app, served at /; nil serves only the API
+	JobsDir  string // absolute
+	TasksDir string
+	EnvFile  string // bench/agent/.env; passed to Harbor, never read
+	Harbor   string // the harbor command; default "harbor"
+	Root     string // the kavach repository; when set, runs use its OpenCode agent
+	// JobsWarning, when set, says why runs in JobsDir can't be graded; the
+	// consoles show it and refuse to start runs.
+	JobsWarning string
+	ModelsURL   string // default OpenRouter's model list
+	Web         fs.FS  // the web app, served at /; nil serves only the API
 }
 
 // Server is the API's http.Handler.
@@ -51,7 +55,7 @@ func New(cfg Config) *Server {
 	if cfg.ModelsURL == "" {
 		cfg.ModelsURL = openRouterModels
 	}
-	runner := &harbor.Runner{Harbor: cfg.Harbor, JobsDir: cfg.JobsDir, TasksDir: cfg.TasksDir, EnvFile: cfg.EnvFile}
+	runner := &harbor.Runner{Harbor: cfg.Harbor, JobsDir: cfg.JobsDir, TasksDir: cfg.TasksDir, EnvFile: cfg.EnvFile, Root: cfg.Root}
 	reader := &harbor.Reader{Dir: cfg.JobsDir, Runs: runner}
 	s := &Server{
 		cfg:    cfg,
@@ -120,6 +124,9 @@ type Status struct {
 	TasksDir string `json:"tasks_dir"`
 	Tasks    int    `json:"tasks"`    // benchmark tasks, each with its arms
 	EnvFile  bool   `json:"env_file"` // bench/agent/.env exists
+	Root     string `json:"root,omitempty"`
+	// JobsWarning says why runs in JobsDir may fail to grade.
+	JobsWarning string `json:"jobs_warning,omitempty"`
 }
 
 // Check is whether a tool works, with its version or why not.
@@ -136,7 +143,7 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	if time.Since(s.statusTime) > statusTTL {
-		st := Status{JobsDir: s.cfg.JobsDir, TasksDir: s.cfg.TasksDir}
+		st := Status{JobsDir: s.cfg.JobsDir, TasksDir: s.cfg.TasksDir, Root: s.cfg.Root, JobsWarning: s.cfg.JobsWarning}
 		st.Docker = check(r.Context(), "docker", "version", "--format", "{{.Server.Version}}")
 		st.Harbor = check(r.Context(), s.cfg.Harbor, "--version")
 		tasks, _ := harbor.FindTasks(s.cfg.TasksDir)

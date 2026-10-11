@@ -221,3 +221,39 @@ while :; do sleep 0.05; done
 		t.Fatalf("second stop: %v", err)
 	}
 }
+
+func TestStartLiveAgent(t *testing.T) {
+	runner, dir := fakeHarbor(t, `pwd > "$OUT/pwd"; echo "$PYTHONPATH" > "$OUT/pythonpath"`)
+	t.Setenv("OUT", t.TempDir())
+	runner.Root = t.TempDir()
+	if _, err := runner.Start(RunRequest{Tasks: []string{"hello-world-kavach"}, Models: []string{"openrouter/a/b"}, Name: "live"}); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("live")
+	var cfg struct {
+		Agents []map[string]any `json:"agents"`
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err := json.Unmarshal(b, &cfg); err != nil || len(cfg.Agents) != 1 || cfg.Agents[0]["import_path"] != LiveAgent || cfg.Agents[0]["name"] != nil {
+		t.Errorf("agents %s", b)
+	}
+	out := os.Getenv("OUT")
+	for file, want := range map[string]string{"pwd": runner.Root, "pythonpath": runner.Root} {
+		got, _ := os.ReadFile(filepath.Join(out, file))
+		if g, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got))); g != mustEval(t, want) {
+			t.Errorf("%s = %q, want %q", file, got, want)
+		}
+	}
+	if _, agent, _, _ := runner.planned("live"); agent != "opencode" {
+		t.Errorf("planned agent %q, want opencode", agent)
+	}
+}
+
+func mustEval(t *testing.T, path string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

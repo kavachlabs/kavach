@@ -173,7 +173,8 @@ Otherwise the job counts as `stopped`, and its unfinished trials become
   - `finished` is `null` while the attempt's OpenCode server is up.
   - `export` is the path of `opencode-session.json` (an `opencode export`),
     when that file exists. Open a finished attempt with
-    `opencode import <export>`.
+    `<root>/bench/agent/harbor/show.sh <trial folder>`, which imports it into
+    a separate OpenCode data folder.
 
 ### Step
 
@@ -222,13 +223,19 @@ Cached for 10 seconds.
   "jobs_dir": "/Users/me/kavach/bench/agent/results/harbor",
   "tasks_dir": "/Users/me/kavach/bench/agent/harbor/tasks",
   "tasks": 1,
-  "env_file": true
+  "env_file": true,
+  "root": "/Users/me/kavach"
 }
 ```
 
 - When a check fails, it reads `{"ok": false, "error": "Cannot connect to the Docker daemon…"}`.
 - `tasks`: the number of benchmark tasks (base names).
 - `env_file`: whether `bench/agent/.env` exists.
+- `root`: the kavach repository.
+- `jobs_warning`: present when attempts in `jobs_dir` can't be graded. On a
+  Mac, Colima shares only the home folder with Docker, so a jobs folder
+  outside it reaches the verifier empty. The consoles show the warning and
+  start no runs.
 
 ### GET /api/tasks
 
@@ -380,7 +387,7 @@ rejected.
 | `tasks` | required. Task folders: names under the tasks directory (from `/api/tasks`, `arms[].task`), or absolute paths. Give one arm or both |
 | `models` | the agent's models. Leave it out for `oracle` and `nop` |
 | `attempts` | per task and model, 1–100. Default 1 (Harbor's `n_attempts`) |
-| `agent` | a Harbor agent name, or a custom agent's import path (`module.path:ClassName`). Default `opencode` |
+| `agent` | a Harbor agent name, or a custom agent's import path (`module.path:ClassName`). Default `opencode`, which runs the repository's OpenCode agent (`bench.agent.harbor.agents:KavachOpenCode`) rather than Harbor's: the model key stays out of the task container, and each attempt can be watched in OpenCode. Jobs list it as `opencode` |
 | `timeout_sec` | overrides the tasks' agent timeout when it is above 0 |
 | `concurrent` | trials at once, 1–32. Default 1 |
 | `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default the start time, `2006-01-02__15-04-05`, as Harbor names jobs |

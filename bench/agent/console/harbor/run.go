@@ -60,10 +60,18 @@ type Runner struct {
 	JobsDir  string // absolute: Harbor mounts trial folders into containers
 	TasksDir string
 	EnvFile  string // given to Harbor as --env-file if it exists; never read here
+	// Root is the kavach repository. When set, Harbor runs there with it on
+	// PYTHONPATH, and the opencode agent is LiveAgent rather than Harbor's
+	// own: the model key stays out of the task container and each attempt
+	// can be watched in OpenCode.
+	Root string
 
 	mu   sync.Mutex
 	runs map[string]*run
 }
+
+// LiveAgent is the import path of the repository's OpenCode agent for Harbor.
+const LiveAgent = "bench.agent.harbor.agents:KavachOpenCode"
 
 // run is a Harbor process this Runner started and must reap.
 type run struct {
@@ -107,6 +115,10 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 	}
 	cmd := exec.Command(r.Harbor, args...)
 	cmd.Stdout, cmd.Stderr = log, log
+	if r.Root != "" {
+		cmd.Dir = r.Root
+		cmd.Env = append(os.Environ(), "PYTHONPATH="+r.Root)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(log, "harbor: %v\n", err)
@@ -179,11 +191,15 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 	if len(models) == 0 {
 		models = []string{""}
 	}
+	agent := req.Agent
+	if agent == "opencode" && r.Root != "" {
+		agent = LiveAgent
+	}
 	var agents []map[string]any
 	for _, m := range models {
-		a := map[string]any{"name": req.Agent}
-		if strings.Contains(req.Agent, ":") {
-			a = map[string]any{"import_path": req.Agent}
+		a := map[string]any{"name": agent}
+		if strings.Contains(agent, ":") {
+			a = map[string]any{"import_path": agent}
 		}
 		if m = strings.TrimSpace(m); m != "" {
 			a["model_name"] = m
