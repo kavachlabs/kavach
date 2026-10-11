@@ -1,0 +1,34 @@
+
+  ┃
+  ┃  # redis-10068 · 1 model × 2 arms × 2 runs                                          2 of 4 done   $0.10
+  ┃
+
+  › /compare
+    model           control              kavach            median time    median tokens    cost / attempt
+    z-ai/glm-5.3    – (1 err, 1 left)    1 / 1 (1 left)    – → 4m 09s     – → 171k         – → $0.08
+
+    control → kavach. A pass is the hidden upstream test passing.
+    Tokens are fresh: input not served from cache, plus output.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  Type / for commands…  "/run"
+  ┃
+  ┃  Kavach  redis-10068  GLM 5.3 OpenRouter  × 1 run
+  ┃
+  ■ · · · · · · ·                                 /show open an attempt   /jobs other runs   ctrl+p commands
+
