@@ -31,7 +31,12 @@ const fixtures = "../harbor/testdata"
 func newTestModel(t *testing.T) (*Model, *[]harbor.RunRequest) {
 	t.Helper()
 	lipgloss.SetColorProfile(termenv.Ascii)
-	jobs, _ := filepath.Abs(fixtures + "/jobs")
+	// A copy keeps the files fresh: a running job whose folder has not
+	// changed for 45 minutes counts as stopped.
+	jobs := filepath.Join(t.TempDir(), "jobs")
+	if err := os.CopyFS(jobs, os.DirFS(fixtures+"/jobs")); err != nil {
+		t.Fatal(err)
+	}
 	tasks, _ := filepath.Abs("../../harbor/tasks")
 	srv := api.New(api.Config{JobsDir: jobs, TasksDir: tasks, Harbor: "true", ModelsURL: modelsServer(t)})
 	var posted []harbor.RunRequest

@@ -21,6 +21,7 @@ type command struct {
 var commands = []command{
 	{"api", "serve the console's HTTP API on 127.0.0.1 (see API.md)", cmdAPI},
 	{"", "open the terminal console (serving the API itself if none is running)", cmdConsole},
+	{"web", "open the web console, serving the API unless a server already runs", cmdWeb},
 }
 
 func main() {

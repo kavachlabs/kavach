@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ type Config struct {
 	EnvFile   string // bench/agent/.env; passed to Harbor, never read
 	Harbor    string // the harbor command; default "harbor"
 	ModelsURL string // default OpenRouter's model list
+	Web       fs.FS  // the web app, served at /; nil serves only the API
 }
 
 // Server is the API's http.Handler.
@@ -72,6 +74,9 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/grade", s.getGrade)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
+	if cfg.Web != nil {
+		s.mux.Handle("GET /", http.FileServerFS(cfg.Web))
+	}
 	return s
 }
 

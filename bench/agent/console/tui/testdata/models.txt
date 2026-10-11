@@ -1,6 +1,6 @@
 
   ┃
-  ┃  # redis-10068                                    Task: XTRIM MINID deletes entries above the threshold
+  ┃  # redis-10068                                          XTRIM MINID deletes entries above the threshold
   ┃
 
   › /models nemotron

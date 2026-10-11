@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
@@ -241,6 +242,42 @@ func TestHostCheck(t *testing.T) {
 		if w.Code != want {
 			t.Errorf("%s: %d, want %d", host, w.Code, want)
 		}
+	}
+}
+
+func TestWeb(t *testing.T) {
+	web := fstest.MapFS{"index.html": {Data: []byte("<title>kavach bench</title>")}, "app.js": {Data: []byte("export {}")}}
+	_, ts := newServer(t, Config{Web: web})
+	for path, want := range map[string]string{"/": "<title>kavach bench</title>", "/app.js": "export {}"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || string(body) != want {
+			t.Errorf("%s: %d %q", path, resp.StatusCode, body)
+		}
+	}
+	var jobs []harbor.Job
+	if code := get(t, ts.URL+"/api/jobs", &jobs); code != 200 || len(jobs) == 0 {
+		t.Fatalf("API behind the web app: %d %v", code, jobs)
+	}
+	if code, _ := post(t, ts.URL+"/", "application/json", "{}"); code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /: %d", code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "evil.example:4810"
+	w := httptest.NewRecorder()
+	New(Config{Web: web}).ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Fatalf("web app on a foreign host: %d", w.Code)
+	}
+
+	_, bare := newServer(t, Config{})
+	if code := get(t, bare.URL+"/", nil); code != 404 {
+		t.Fatalf("no web app: / is %d", code)
 	}
 }
 
