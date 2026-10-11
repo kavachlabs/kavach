@@ -12,3 +12,6 @@ coverage.*
 .claude/
 __pycache__/
 /graphify-out*/
+/bench/agent/results/
+/bench/agent/.env
+/bench/agent/harbor/jobs/

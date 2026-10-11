@@ -1,0 +1,9 @@
+{
+    "task": {
+        "path": "bench/agent/harbor/tasks/redis-10068-control",
+        "source": "tasks"
+    },
+    "trial_name": "redis-10068-control__VVTwpDP",
+    "trials_dir": "/home/user/kavach/bench/agent/results/harbor/oracle",
+    "job_id": "8af999ba-70a7-4cd2-af77-7f497ad3df2b"
+}

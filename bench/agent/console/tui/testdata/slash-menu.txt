@@ -1,0 +1,34 @@
+
+
+
+
+
+
+
+
+                            █  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █    █    ▄▀▀▀ █▀▀▄ █▀▀▀ █
+                            █▄▀  █▀▀█ █  █ █▀▀█ █    █▀▀▄ █▀▀█ █▀▀▀ █  █ █    █▀▀▄
+                            █ ▀▄ ▀▀▀▀  ▀▀  ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀
+
+
+
+                   /model    Choose the model, an OpenRouter id
+                   /models   List OpenRouter models with prices
+
+                 ┃
+                 ┃  /mo
+                 ┃
+                 ┃  Kavach  redis-10068  GLM 5.3 OpenRouter  × 1 run
+                 ┃
+                                             ↑↓ select   tab complete   enter run   esc close
+
+
+
+
+
+
+
+
+
+
+  ⊙ docker ready  harbor 0.24.0  1 task  7 runs saved in /jobs                                           dev

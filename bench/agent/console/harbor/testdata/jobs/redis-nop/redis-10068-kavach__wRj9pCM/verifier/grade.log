@@ -1,0 +1,109 @@
+cd src && make all
+make[1]: Entering directory '/grade-kavach/src'
+    [34mCC[0m [33mMakefile.dep[0m
+
+Hint: It's a good idea to run 'make test' ;)
+
+make[1]: Leaving directory '/grade-kavach/src'
+Cleanup: may take some time... OK
+Starting test server at port 21079
+[ready]: 231
+Testing unit/type/stream
+[ready]: 232
+[ready]: 233
+[ready]: 234
+[ready]: 235
+[ready]: 236
+[ready]: 237
+[ready]: 239
+[ready]: 238
+[ready]: 241
+[ready]: 242
+[ready]: 243
+[ready]: 244
+[ready]: 245
+[ready]: 246
+[ready]: 240
+[skip]: XADD can add entries into a stream that XRANGE can fetch
+[skip]: XADD IDs are incremental
+[skip]: XADD IDs are incremental when ms is the same as well
+[skip]: XADD IDs correctly report an error when overflowing
+[skip]: XADD auto-generated sequence is incremented for last ID
+[skip]: XADD auto-generated sequence is zero for future timestamp ID
+[skip]: XADD auto-generated sequence can't be smaller than last ID
+[skip]: XADD auto-generated sequence can't overflow
+[skip]: XADD 0-* should succeed
+[skip]: XADD with MAXLEN option
+[skip]: XADD with MAXLEN option and the '=' argument
+[skip]: XADD with MAXLEN option and the '~' argument
+[skip]: XADD with NOMKSTREAM option
+[skip]: XADD with MINID option
+[ok]: XTRIM with MINID option (1 ms)
+[err]: XTRIM with MINID option, big delta from master record in tests/unit/type/stream.tcl
+Expected '' to be equal to '{1641544570597-0 {f v}} {1641544570597-1 {f v}}' (context: type eval line 7 cmd {assert_equal [r XRANGE mystream - +] {{1641544570597-0 {f v}} {1641544570597-1 {f v}}}} proc ::test)
+[skip]: XADD mass insertion and XLEN
+[skip]: XADD with ID 0-0
+[skip]: XADD with LIMIT delete entries no more than limit
+[skip]: XRANGE COUNT works as expected
+[skip]: XREVRANGE COUNT works as expected
+[skip]: XRANGE can be used to iterate the whole stream
+[skip]: XREVRANGE returns the reverse of XRANGE
+[skip]: XRANGE exclusive ranges
+[skip]: XREAD with non empty stream
+[skip]: Non blocking XREAD with empty streams
+[skip]: XREAD with non empty second stream
+[skip]: Blocking XREAD waiting new data
+[skip]: Blocking XREAD waiting old data
+[skip]: Blocking XREAD will not reply with an empty array
+[skip]: Blocking XREAD for stream that ran dry (issue #5299)
+[skip]: XREAD: XADD + DEL should not awake client
+[skip]: XREAD: XADD + DEL + LPUSH should not awake client
+[skip]: XREAD with same stream name multiple times should work
+[skip]: XREAD + multiple XADD inside transaction
+[skip]: XDEL basic test
+[skip]: XDEL fuzz test
+[skip]: XRANGE fuzzing
+[skip]: XREVRANGE regression test for issue #5006
+[skip]: XREAD streamID edge (no-blocking)
+[skip]: XREAD streamID edge (blocking)
+[skip]: XADD streamID edge
+[ok]: XTRIM with MAXLEN option basic test (42 ms)
+[skip]: XADD with LIMIT consecutive calls
+[ok]: XTRIM with ~ is limited (3 ms)
+[ok]: XTRIM without ~ is not limited (3 ms)
+[ok]: XTRIM without ~ and with LIMIT (3 ms)
+[ok]: XTRIM with LIMIT delete entries no more than limit (0 ms)
+[skip]: XADD with MAXLEN > xlen can propagate correctly
+[skip]: XADD with MINID > lastid can propagate correctly
+[skip]: XADD with ~ MAXLEN can propagate correctly
+[skip]: XADD with ~ MAXLEN and LIMIT can propagate correctly
+[skip]: XADD with ~ MINID can propagate correctly
+[skip]: XADD with ~ MINID and LIMIT can propagate correctly
+[ok]: XTRIM with ~ MAXLEN can propagate correctly (10 ms)
+[skip]: XADD can CREATE an empty stream
+[skip]: XSETID can set a specific ID
+[skip]: XSETID cannot SETID with smaller ID
+[skip]: XSETID cannot SETID on non-existent key
+[skip]: Empty stream can be rewrite into AOF correctly
+[skip]: Stream can be rewrite into AOF correctly after XDEL lastid
+[skip]: XGROUP HELP should not have unexpected options
+[skip]: XINFO HELP should not have unexpected options
+[1/1 done]: unit/type/stream (2 seconds)
+
+                   The End
+
+Execution time of different units:
+  2 seconds - unit/type/stream
+
+!!! WARNING The following tests failed:
+
+*** [err]: XTRIM with MINID option, big delta from master record in tests/unit/type/stream.tcl
+Expected '' to be equal to '{1641544570597-0 {f v}} {1641544570597-1 {f v}}' (context: type eval line 7 cmd {assert_equal [r XRANGE mystream - +] {{1641544570597-0 {f v}} {1641544570597-1 {f v}}}} proc ::test)
+Cleanup: may take some time... OK
+fixture   /task/incident.kavach
+old       invariant_violated(stream-trim-contract)@73
+new       invariant_violated(stream-trim-contract)@73
+          XTRIM orders MINID 1791631483565-0 removed 7 of the 7 entries at or above the threshold, first 1791631483565-0
+outputs   identical at every step
+verdict   invariant_violated(stream-trim-contract)@73
+wall      12.9 ms for 2 replays

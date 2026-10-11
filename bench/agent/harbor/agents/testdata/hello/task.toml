@@ -1,0 +1,19 @@
+schema_version = "1.4"
+
+[metadata]
+description = "Smoke test for the kavach OpenCode agent: write /app/hello.txt."
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+# Turns on Harbor's egress control for the agent phase; the agent then
+# allows only its model proxy. Setup (installing OpenCode) keeps the
+# environment's public network.
+network_mode = "no-network"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+os = "linux"

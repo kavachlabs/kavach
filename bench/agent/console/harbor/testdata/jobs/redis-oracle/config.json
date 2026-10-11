@@ -1,0 +1,10 @@
+{
+    "job_name": "oracle",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "n_concurrent_trials": 2,
+    "datasets": [
+        {
+            "path": "bench/agent/harbor/tasks"
+        }
+    ]
+}

@@ -1,0 +1,10 @@
+{
+    "job_name": "sigterm-test",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "quiet": true,
+    "tasks": [
+        {
+            "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-kavach"
+        }
+    ]
+}

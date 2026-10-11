@@ -1,0 +1,13 @@
+{
+    "job_name": "oracle-both",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "n_attempts": 2,
+    "tasks": [
+        {
+            "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-control"
+        },
+        {
+            "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-kavach"
+        }
+    ]
+}
