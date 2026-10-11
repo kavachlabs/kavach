@@ -46,7 +46,7 @@ bench/agent/harbor/check-candidates.sh
 ```
 
 The first run builds the images (a few minutes); afterwards a trial takes about
-a minute plus the agent's time. `check-candidates.sh` runs the oracle on a copy
+a minute plus the agent's time, and `check-candidates.sh` about four. `check-candidates.sh` runs the oracle on a copy
 of each task for each patch in `../tasks/redis-10068/candidates/` and an empty
 change, and prints the reward and Kavach's verdict for each:
 
