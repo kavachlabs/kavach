@@ -3,7 +3,9 @@ package harbor
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,5 +149,75 @@ func TestStartRejects(t *testing.T) {
 	}
 	if err := runner.Stop("nope"); !errors.Is(err, ErrNotRunning) {
 		t.Error(err)
+	}
+}
+
+// startAndExit is the test binary acting as a console that starts a run and
+// exits at once: spec is "<harbor> <jobs> <tasks>".
+func startAndExit(spec string) int {
+	f := strings.Fields(spec)
+	r := &Runner{Harbor: f[0], JobsDir: f[1], TasksDir: f[2]}
+	if _, err := r.Start(RunRequest{Tasks: []string{"hello-world-control"}, Agent: "oracle", Name: "outlive"}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// A run keeps going after the console that started it exits, and writes
+// its output: to a pipe, Harbor would die on its first write.
+func TestRunOutlivesConsole(t *testing.T) {
+	runner, _ := fakeHarbor(t, `
+until [ -e "$JOBS/go" ]; do sleep 0.05; done
+i=0; while [ $i -lt 200 ]; do echo "progress line $i"; i=$((i+1)); done
+mkdir -p "$JOBS/outlive"
+echo '{"started_at": "2026-10-11T10:00:00Z", "finished_at": "2026-10-11T10:01:00Z", "n_total_trials": 0}' > "$JOBS/outlive/result.json"
+`)
+	t.Setenv("JOBS", runner.JobsDir)
+	tasks, _ := filepath.Abs(runner.TasksDir)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "BENCH_TEST_START="+runner.Harbor+" "+runner.JobsDir+" "+tasks)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	// The console has exited; a new one finds the run, then sees it finish.
+	later := &Runner{Harbor: runner.Harbor, JobsDir: runner.JobsDir}
+	reader := &Reader{Dir: runner.JobsDir, Runs: later}
+	if j, err := reader.Job("outlive"); err != nil || j.Status != JobRunning || !j.Stoppable {
+		t.Fatalf("while running: %+v %v", j, err)
+	}
+	os.WriteFile(filepath.Join(runner.JobsDir, "go"), nil, 0o644)
+	waitFor(t, func() bool { j, _ := reader.Job("outlive"); return j.Status == JobDone })
+	log, _ := os.ReadFile(filepath.Join(runner.JobsDir, ".bench", "outlive.log"))
+	if !strings.Contains(string(log), "progress line 199") {
+		t.Fatalf("log %q", log)
+	}
+}
+
+// A later console can tell a run is still going, and stop it.
+func TestStopFromLaterConsole(t *testing.T) {
+	runner, _ := fakeHarbor(t, `
+trap 'echo stopping; exit 130' INT
+while :; do sleep 0.05; done
+`)
+	if _, err := runner.Start(RunRequest{Tasks: []string{"hello-world-control"}, Agent: "oracle", Name: "long"}); err != nil {
+		t.Fatal(err)
+	}
+	later := &Runner{Harbor: runner.Harbor, JobsDir: runner.JobsDir}
+	reader := &Reader{Dir: runner.JobsDir, Runs: later}
+	j, err := reader.Job("long")
+	// Before Harbor writes the job folder, the plan comes from the request.
+	if err != nil || j.Status != JobRunning || !j.Stoppable || j.Total != 1 || len(j.Tasks) != 1 || j.Tasks[0] != "hello-world-control" || j.Agent != "oracle" {
+		t.Fatalf("%+v %v", j, err)
+	}
+	if err := later.Stop("long"); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("long")
+	if j, _ = reader.Job("long"); j.Status != JobStopped || j.Stoppable || j.Error == "" {
+		t.Fatalf("after stop %+v", j)
+	}
+	if err := later.Stop("long"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("second stop: %v", err)
 	}
 }

@@ -29,7 +29,8 @@ The console never reads it.
   gets 415. A web frontend served from the same origin meets all three.
 - Status words:
   - Job: `running`, `done`, or `stopped`. `stopped` means Harbor was stopped,
-    or exited without finishing the job.
+    or exited without finishing the job. See "Is Harbor still running?"
+    below.
   - Trial: `queued`, `running`, `pass`, `fail`, or `error`. A trial passes
     when its reward is 1. `error` means it has no reward: Harbor raised an
     exception, it was cancelled, or Harbor died while it ran
@@ -66,14 +67,44 @@ The console never reads it.
 - `trials_total`: every trial the job will run.
 - `cost`: the USD cost of all trials so far. It is 0 when the agent reports
   no cost.
-- `stoppable`: true when this server started the job and Harbor is still
-  running. Only such jobs can be stopped.
-- `error`: only on a job this server started whose Harbor exited before it
-  wrote the job folder. It holds the end of Harbor's output, such as a bad
-  model name.
-- `trials`: only in `GET /api/jobs/{id}` and in the replies to POSTs. It
-  includes a queued placeholder for each planned trial that has not started,
-  while the job runs. It is sorted by task, model, then attempt.
+- `tasks`, `agent`, `models`, `trials_total`: from the request until
+  Harbor writes the job's `lock.json`, then from that file.
+- `stoppable`: true when bench started the job (this server or an earlier
+  one) and its Harbor is still running. Only such jobs can be stopped.
+- `error`: set on a `stopped` job when there is something to say:
+  - for a job bench started whose Harbor exited without writing
+    `result.json`, the end of Harbor's output, such as a bad model name;
+  - for a job judged stopped from its files, why.
+- `trials`: in `GET /api/jobs/{id}` and in the replies to POSTs, always an
+  array, `[]` when there are none. The job list and `job` events leave it
+  out. It includes a queued placeholder for each planned trial that has not
+  started, while the job runs. It is sorted by task, model, then attempt.
+
+#### Is Harbor still running?
+
+Harbor writes `finished_at` only when it finishes. A job without it is
+running unless one of these holds:
+
+- **bench started it.** For each run, `<jobs>/.bench/` keeps:
+  - `<id>.json`: the JobConfig given to Harbor;
+  - `<id>.log`: Harbor's output;
+  - `<id>.pid`: Harbor's pid.
+
+  The job is running while that pid is alive and `ps` shows it running
+  `harbor` on that `<id>.json`. This check also guards against pid reuse.
+  The check is exact and survives restarts of `bench api`.
+- **Harbor cancelled trials** (`n_cancelled_trials` > 0 in `result.json`).
+  This is what Ctrl-C or a stop leaves behind.
+- **Every trial has finished** and nothing in the job folder has changed
+  for 2 minutes. Harbor writes `finished_at` within seconds of its last
+  trial.
+- **Nothing in the job folder has changed for 45 minutes.** This rule is
+  for jobs started outside bench, which have no pid to check. Harbor and
+  the agents write as they go; the longest quiet stretch is building a
+  task's image, which redis-10068 allows 30 minutes for.
+
+Otherwise the job counts as `stopped`, and its unfinished trials become
+`error` with `"interrupted"`.
 
 ### Trial
 
@@ -124,7 +155,11 @@ The console never reads it.
     the attempt's token count. The cached input re-reads the conversation
     on every model call, so it dwarfs the rest: about 1.8M for GLM's
     attempt, against 171k fresh.
-  - `reasoning` is counted on its own, as OpenCode reports it.
+  - `reasoning` is part of `output`, not added to it. OpenCode's per-call
+    `output` already includes the reasoning tokens: in the GLM attempt,
+    reasoning ≤ output on every call (10850 of 10917, for example). Harbor's
+    `n_output_tokens` is the sum of those. `reasoning` is a breakdown; never
+    add it to `output` or to `fresh`.
 - `cost`: USD, or `null` when the agent reports no cost.
 - `error`: `"<ExceptionType>: <message>"` from Harbor, `"interrupted"`, or
   absent.
@@ -195,7 +230,7 @@ Cached for 10 seconds.
 
 Lists the Harbor task folders (those holding a `task.toml`) under the tasks
 directory, grouped by base name. `title` is the first line of the
-instruction.
+instruction, without its `#` marks or a leading `Task:` label.
 
 ```json
 [
@@ -351,7 +386,8 @@ The trials are every task × model × attempt.
 Replies:
 
 - 202 and the Job (`status: "running"`, `stoppable: true`). Its folder may
-  not exist yet, so `tasks` and `trials` may be empty until the next poll.
+  not exist yet. Until it does, `tasks`, `agent`, `models` and
+  `trials_total` come from the request, and `trials` is `[]`.
 - 400 for an invalid request.
 - 409 when the name is taken.
 - 415 for the wrong content type.
@@ -369,12 +405,18 @@ treats it like Ctrl-C:
 - It removes their containers.
 - It exits. The job becomes `stopped`, usually within about 15 seconds.
 
-Reply: 202 and the Job. 409 when this server is not running that job: it
-already ended, or another process started it.
+Reply: 202 and the Job. 409 when the job is not running, or bench did not
+start it (it has no `<jobs>/.bench/<id>.pid`).
 
-Runs live in their own process group, so stopping `bench api` (Ctrl-C) does
-not stop them. They keep running and still show as `running` from their
-files. They cannot be stopped from a later `bench api`.
+Runs outlive `bench api`:
+
+- Each run is its own process group, so Ctrl-C on `bench api` does not
+  reach Harbor.
+- Harbor's output goes to `<jobs>/.bench/<id>.log`, not to a pipe, which
+  would kill Harbor on its next write once the server is gone.
+
+A later `bench api` sees such a run as `running` and `stoppable`, and can
+stop it.
 
 ### GET /api/events
 

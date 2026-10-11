@@ -21,7 +21,7 @@ const testdata = "../harbor/testdata"
 func newServer(t *testing.T, cfg Config) (*Server, *httptest.Server) {
 	t.Helper()
 	if cfg.JobsDir == "" {
-		cfg.JobsDir = testdata + "/jobs"
+		cfg.JobsDir = copyJobs(t)
 	}
 	if cfg.TasksDir == "" {
 		cfg.TasksDir = testdata + "/tasks"
@@ -30,6 +30,17 @@ func newServer(t *testing.T, cfg Config) (*Server, *httptest.Server) {
 	ts := httptest.NewServer(s)
 	t.Cleanup(ts.Close)
 	return s, ts
+}
+
+// copyJobs copies the test jobs, so their files are fresh: a running job
+// whose folder has not changed for 45 minutes counts as stopped.
+func copyJobs(t *testing.T) string {
+	t.Helper()
+	jobs := filepath.Join(t.TempDir(), "jobs")
+	if err := os.CopyFS(jobs, os.DirFS(testdata+"/jobs")); err != nil {
+		t.Fatal(err)
+	}
+	return jobs
 }
 
 func get(t *testing.T, url string, v any) int {
@@ -197,7 +208,8 @@ func TestStartAndStopRun(t *testing.T) {
 	}
 
 	code, v := post(t, url, "application/json", body, "Origin", ts.URL)
-	if code != 202 || v["id"] != "run1" || v["status"] != "running" || v["stoppable"] != true {
+	if trials, ok := v["trials"].([]any); code != 202 || v["id"] != "run1" || v["status"] != "running" || v["stoppable"] != true ||
+		!ok || len(trials) != 0 || v["trials_total"] != 2.0 || len(v["tasks"].([]any)) != 2 {
 		t.Fatalf("start: %d %v", code, v)
 	}
 	if code, v := post(t, url, "application/json", body); code != 409 {
@@ -233,10 +245,7 @@ func TestHostCheck(t *testing.T) {
 }
 
 func TestEvents(t *testing.T) {
-	jobs := filepath.Join(t.TempDir(), "jobs")
-	if err := os.CopyFS(jobs, os.DirFS(testdata+"/jobs")); err != nil {
-		t.Fatal(err)
-	}
+	jobs := copyJobs(t)
 	s, ts := newServer(t, Config{JobsDir: jobs})
 	s.events.interval = 20 * time.Millisecond
 

@@ -3,10 +3,12 @@ package harbor
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/jobs holds real Harbor 0.24 job folders (trimmed: logs and long
@@ -23,7 +25,27 @@ import (
 //
 // and opencode-glm, built by gen/fixture.py in the same layout from a real
 // OpenCode attempt, with kavach.json and opencode-live.json.
-const jobsDir = "testdata/jobs"
+//
+// Tests read a fresh copy: a job nobody writes to for staleAfter counts as
+// stopped, and the checked-in files are older than that.
+var jobsDir string
+
+func TestMain(m *testing.M) {
+	if spec := os.Getenv("BENCH_TEST_START"); spec != "" {
+		os.Exit(startAndExit(spec))
+	}
+	dir, err := os.MkdirTemp("", "harbor-test-")
+	if err != nil {
+		panic(err)
+	}
+	jobsDir = filepath.Join(dir, "jobs")
+	if err := os.CopyFS(jobsDir, os.DirFS("testdata/jobs")); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func readJob(t *testing.T, id string) Job {
 	t.Helper()
@@ -356,5 +378,50 @@ func TestTokensJSON(t *testing.T) {
 	b, _ := json.Marshal(Tokens{Input: 100, Cached: 1000, Output: 20, Reasoning: 5})
 	if string(b) != `{"input":100,"cached":1000,"output":20,"reasoning":5,"fresh":120}` {
 		t.Fatal(string(b))
+	}
+}
+
+// A job not started by bench, whose folder nobody has written to for
+// staleAfter, has lost its Harbor.
+func TestStaleJob(t *testing.T) {
+	dir := t.TempDir()
+	copyDir(t, filepath.Join(jobsDir, "nop-running"), filepath.Join(dir, "nop-running"))
+	old := time.Now().Add(-staleAfter - time.Minute)
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		return os.Chtimes(path, old, old)
+	})
+	j, err := (&Reader{Dir: dir}).Job("nop-running")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Status != JobStopped || !strings.Contains(j.Error, "stopped writing") || j.Trials[0].Status != Error {
+		t.Fatalf("%+v", j)
+	}
+}
+
+func TestTitleDropsTaskLabel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "instruction.md")
+	os.WriteFile(path, []byte("\n# Task: XTRIM MINID deletes entries above the threshold\n\nYou are…\n"), 0o644)
+	if got := firstLine(path); got != "XTRIM MINID deletes entries above the threshold" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Every trial finished but Harbor never marked the job finished.
+func TestUnfinishedJobWithAllTrialsDone(t *testing.T) {
+	dir := t.TempDir()
+	copyDir(t, filepath.Join(jobsDir, "oracle-both"), filepath.Join(dir, "oracle-both"))
+	job := filepath.Join(dir, "oracle-both")
+	b, _ := os.ReadFile(filepath.Join(job, "result.json"))
+	b = []byte(strings.Replace(string(b), `"finished_at": "2026-10-11T11:20:55.349949"`, `"finished_at": null`, 1))
+	os.WriteFile(filepath.Join(job, "result.json"), b, 0o644)
+	r := &Reader{Dir: dir}
+	if j, _ := r.Job("oracle-both"); j.Status != JobRunning {
+		t.Fatalf("just written: %s", j.Status)
+	}
+	old := time.Now().Add(-finishGrace - time.Minute)
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error { return os.Chtimes(path, old, old) })
+	if j, _ := r.Job("oracle-both"); j.Status != JobStopped || !strings.Contains(j.Error, "after the last trial") {
+		t.Fatalf("%+v", j)
 	}
 }
