@@ -20,12 +20,17 @@
 #   grade.json        hidden test result and kavach diff verdict
 #   grade.log         build, test and diff output
 # and the OpenCode config used is <out>/<task>/opencode-<arm>.json.
+#
+# In a terminal each attempt is shown live; --quiet prints one line per
+# attempt instead. watch.py replays any attempt directory afterwards.
 set -euo pipefail
 
-usage() { sed -n '2,20s/^# \{0,1\}//p' "$0"; exit 2; }
+usage() { sed -n '2,/^set /{/^#/s/^# \{0,1\}//p;}' "$0"; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-task='' arm='' model='' base_url='' runs=1 limit=3600 out="$ROOT/bench/agent/results"
+task='' arm='' model='' base_url='' runs=1 limit=3600 out="$ROOT/bench/agent/results" quiet=''
+# In a terminal, each attempt is shown live (watch.py) unless --quiet.
+[[ -t 1 ]] || quiet=1
 keys=()
 # API keys can live in bench/agent/.env (gitignored); see .env.example.
 if [[ -f $ROOT/bench/agent/.env ]]; then
@@ -43,6 +48,7 @@ while (($#)); do
     --runs) runs=$2 ;;
     --timeout) limit=$2 ;;
     --out) out=$2 ;;
+    --quiet) quiet=1; shift; continue ;;
     *) usage ;;
   esac
   shift 2
@@ -99,10 +105,22 @@ slug=${model//\//_}
 for ((n = 1; n <= runs; n++)); do
   dir="$out/$task/$slug/$arm/$n"
   rm -rf "$dir" && mkdir -p "$dir" && chmod 777 "$dir"
-  docker run --rm --add-host host.docker.internal:host-gateway \
+  # Ctrl-C reaches this script, not the backgrounded `docker run`, so the
+  # container is stopped by name.
+  name="kavach-bench-$$-$n"
+  trap 'docker kill "$name" >/dev/null 2>&1; exit 130' INT TERM
+  docker run --rm --name "$name" --add-host host.docker.internal:host-gateway \
     ${env_args[@]+"${env_args[@]}"} -v "$config:/home/agent/.config/opencode/opencode.json:ro" -v "$dir:/out" \
-    "$image:$arm" /opt/harness/agent.sh "$model_arg" "$limit"
+    "$image:$arm" /opt/harness/agent.sh "$model_arg" "$limit" &
+  agent=$!
+  [[ -n $quiet ]] || python3 "$HERE/watch.py" --follow --pid "$agent" "$dir"
+  wait "$agent" || true
   [[ -f $dir/patch.diff ]] || { echo "the agent container wrote nothing to $dir; is it shared with Docker?" >&2; exit 1; }
   docker run --rm -v "$dir:/out" "$image:grader" /opt/harness/grade.sh "$arm" >/dev/null
-  printf '%s %s %s #%d  agent %s  grade %s\n' "$task" "$model" "$arm" "$n" "$(cat "$dir/agent.json")" "$(cat "$dir/grade.json")"
+  if [[ -n $quiet ]]; then
+    printf '%s %s %s #%d  agent %s  grade %s\n' "$task" "$model" "$arm" "$n" "$(cat "$dir/agent.json")" "$(cat "$dir/grade.json")"
+  else
+    python3 "$HERE/watch.py" --result "$dir"
+    echo
+  fi
 done
