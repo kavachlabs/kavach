@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,7 +70,7 @@ func TestReadEndpoints(t *testing.T) {
 	_, ts := newServer(t, Config{})
 
 	var jobs []map[string]any
-	if code := get(t, ts.URL+"/api/jobs", &jobs); code != 200 || len(jobs) != 5 {
+	if code := get(t, ts.URL+"/api/jobs", &jobs); code != 200 || len(jobs) != 7 {
 		t.Fatalf("%d %v", code, jobs)
 	}
 	for _, j := range jobs {
@@ -94,6 +95,25 @@ func TestReadEndpoints(t *testing.T) {
 	if code := get(t, ts.URL+"/api/trials/opencode-glm/redis-10068-control__Run0001/steps", &steps); code != 200 || len(steps) == 0 {
 		t.Fatalf("%d %+v", code, steps)
 	}
+	var raw struct{ Tokens map[string]int64 }
+	get(t, ts.URL+"/api/trials/opencode-glm/redis-10068-kavach__Pass001", &raw)
+	if raw.Tokens["fresh"] != 1968602-1831936+34290 {
+		t.Fatalf("tokens %v", raw.Tokens)
+	}
+	var grade harbor.Grade
+	if code := get(t, ts.URL+"/api/trials/redis-nop/redis-10068-kavach__wRj9pCM/grade", &grade); code != 200 || grade.Failed != 1 {
+		t.Fatalf("%d %+v", code, grade)
+	}
+	resp, err := http.Get(ts.URL + "/api/trials/redis-oracle/redis-10068-kavach__Dw5kmkd/patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || !strings.HasPrefix(string(patch), "diff --git") {
+		t.Fatalf("patch %d %s", resp.StatusCode, patch)
+	}
+
 	var tasks []harbor.Task
 	if code := get(t, ts.URL+"/api/tasks", &tasks); code != 200 || len(tasks) != 1 || len(tasks[0].Arms) != 2 {
 		t.Fatalf("%d %+v", code, tasks)
@@ -102,6 +122,7 @@ func TestReadEndpoints(t *testing.T) {
 	for _, path := range []string{
 		"/api/jobs/nope", "/api/jobs/nope/compare", "/api/trials/opencode-glm/nope",
 		"/api/trials/opencode-glm/nope/steps", "/api/trials/..%2Fopencode-glm/x/steps",
+		"/api/trials/oracle-both/hello-world-control__zRmJZqb/patch", "/api/trials/oracle-both/hello-world-control__zRmJZqb/grade",
 	} {
 		var e map[string]string
 		if code := get(t, ts.URL+path, &e); code != 404 || e["error"] == "" {
@@ -251,7 +272,7 @@ func TestEvents(t *testing.T) {
 		}
 		return [2]string{}
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 7; i++ {
 		if e := next(); e[0] != "job" {
 			t.Fatalf("snapshot event %v", e)
 		}

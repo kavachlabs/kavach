@@ -1,6 +1,7 @@
 package harbor
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,6 +17,9 @@ import (
 //	nop-fail      nop on hello-world-control: reward 0
 //	stopped       oracle stopped by SIGTERM mid-trial
 //	nop-running   nop-fail copied while its trial was running
+//	redis-nop     nop on both arms of redis-10068: grade.json, grade.log,
+//	              kavach.json, an empty patch
+//	redis-oracle  oracle on both arms of redis-10068: the upstream patch
 //
 // and opencode-glm, built by gen/fixture.py in the same layout from a real
 // OpenCode attempt, with kavach.json and opencode-live.json.
@@ -53,6 +57,7 @@ func TestJobs(t *testing.T) {
 	want := map[string]string{
 		"oracle-both": JobDone, "nop-fail": JobDone, "stopped": JobStopped,
 		"nop-running": JobRunning, "opencode-glm": JobRunning,
+		"redis-nop": JobDone, "redis-oracle": JobDone,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("jobs %v, want %v", got, want)
@@ -256,13 +261,13 @@ func TestCompare(t *testing.T) {
 		t.Fatalf("control %+v", c)
 	}
 	if k.Arm != "kavach" || k.Passes != 1 || k.Attempts != 1 || k.Pending != 1 || *k.MedianSeconds != 249 ||
-		*k.MedianTokens != 1968602+34290+31997 || *k.MeanCost != 0.082 {
+		*k.MedianFresh != 1968602-1831936+34290 || *k.MedianCached != 1831936 || *k.MeanCost != 0.082 {
 		t.Fatalf("kavach %+v", k)
 	}
 
 	rows = Compare(readJob(t, "oracle-both").Trials)
 	if len(rows) != 2 || rows[0].Task != "hello-world" || rows[0].Model != "" ||
-		rows[0].Passes != 1 || rows[0].Attempts != 1 || rows[0].Errors != 1 || rows[0].MedianTokens == nil ||
+		rows[0].Passes != 1 || rows[0].Attempts != 1 || rows[0].Errors != 1 || rows[0].MedianFresh == nil ||
 		rows[1].Arm != "kavach" || rows[1].Attempts != 0 || rows[1].Errors != 2 {
 		t.Fatalf("%+v", rows)
 	}
@@ -282,5 +287,74 @@ func copyDir(t *testing.T, from, to string) {
 	err := os.CopyFS(to, os.DirFS(from))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPatch(t *testing.T) {
+	r := &Reader{Dir: jobsDir}
+	p, err := r.Patch("redis-oracle", "redis-10068-control__VVTwpDP")
+	if err != nil || !strings.HasPrefix(string(p), "diff --git a/src/t_stream.c b/src/t_stream.c") {
+		t.Fatalf("%q %v", p, err)
+	}
+	if p, err := r.Patch("redis-nop", "redis-10068-control__gtowRJg"); err != nil || len(p) != 0 {
+		t.Fatalf("nop patch %q %v", p, err)
+	}
+	if _, err := r.Patch("oracle-both", "hello-world-control__zRmJZqb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no patch: %v", err)
+	}
+}
+
+func TestGrade(t *testing.T) {
+	r := &Reader{Dir: jobsDir}
+	g, err := r.Grade("redis-nop", "redis-10068-control__gtowRJg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var grade struct {
+		Hidden     string `json:"hidden"`
+		KavachDiff string `json:"kavach_diff"`
+	}
+	json.Unmarshal(g.Grade, &grade)
+	if grade.Hidden != "fail" || grade.KavachDiff != "invariant_violated(stream-trim-contract)@73" {
+		t.Fatalf("grade.json %s", g.Grade)
+	}
+	if g.Failed != 1 || g.Passed != len(g.Tests)-1 || g.Passed == 0 {
+		t.Fatalf("%d passed, %d failed of %d", g.Passed, g.Failed, len(g.Tests))
+	}
+	for _, tr := range g.Tests {
+		if !tr.OK && tr.Name != "XTRIM with MINID option, big delta from master record" {
+			t.Errorf("failed test %q", tr.Name)
+		}
+		if tr.OK && tr.Name == "XTRIM with MINID option" {
+			return
+		}
+	}
+	t.Error("no passing XTRIM with MINID option")
+}
+
+func TestGradeFromPytest(t *testing.T) {
+	dir := t.TempDir()
+	trial := filepath.Join(dir, "job", "t__1")
+	os.MkdirAll(filepath.Join(trial, "verifier"), 0o755)
+	os.WriteFile(filepath.Join(trial, "config.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(trial, "verifier", "grade.json"), []byte(`{"hidden":"fail"}`), 0o644)
+	os.WriteFile(filepath.Join(trial, "verifier", "test-stdout.txt"), []byte(
+		"=== short test summary info ===\nPASSED ../tests/test_state.py::test_a\nFAILED ../tests/test_state.py::test_b - AssertionError: no\n"), 0o644)
+	g, err := (&Reader{Dir: dir}).Grade("job", "t__1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Passed != 1 || g.Failed != 1 || g.Tests[1].Name != "../tests/test_state.py::test_b" {
+		t.Fatalf("%+v", g)
+	}
+	if _, err := (&Reader{Dir: jobsDir}).Grade("oracle-both", "hello-world-control__zRmJZqb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no grade.json: %v", err)
+	}
+}
+
+func TestTokensJSON(t *testing.T) {
+	b, _ := json.Marshal(Tokens{Input: 100, Cached: 1000, Output: 20, Reasoning: 5})
+	if string(b) != `{"input":100,"cached":1000,"output":20,"reasoning":5,"fresh":120}` {
+		t.Fatal(string(b))
 	}
 }

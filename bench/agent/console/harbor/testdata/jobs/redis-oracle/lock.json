@@ -1,0 +1,102 @@
+{
+    "schema_version": 3,
+    "created_at": "2026-10-11T05:53:31.597851Z",
+    "harbor": {
+        "version": "0.24.0",
+        "is_editable": false
+    },
+    "n_concurrent_trials": 2,
+    "retry": {
+        "max_retries": 0,
+        "exclude_exceptions": [
+            "VerifierOutputParseError",
+            "AgentSafetyRefusalError",
+            "ModelNotFoundError",
+            "AgentTimeoutError",
+            "RewardFileEmptyError",
+            "RewardFileNotFoundError",
+            "AgentAuthenticationError",
+            "VerifierTimeoutError",
+            "ApiUsageLimitError"
+        ],
+        "wait_multiplier": 1.0,
+        "min_wait_sec": 1.0,
+        "max_wait_sec": 60.0
+    },
+    "trials": [
+        {
+            "schema_version": 2,
+            "task": {
+                "name": "redis-10068-control",
+                "type": "local",
+                "digest": "sha256:95758e4652d7bad4f85bd7be6ac5f5bdfcc930efa02e34fbff515e8f1810c2f5",
+                "source": "tasks",
+                "path": "bench/agent/harbor/tasks/redis-10068-control"
+            },
+            "install_only": false,
+            "timeout_multiplier": 1.0,
+            "agent": {
+                "name": "oracle",
+                "skills": [],
+                "resume_trajectory": false,
+                "extra_allowed_hosts": [],
+                "kwargs": {},
+                "mcp_servers": []
+            },
+            "bridge_inputs": {},
+            "skills": [],
+            "environment": {
+                "type": "docker",
+                "force_build": false,
+                "delete": true,
+                "stream": false,
+                "cpu_enforcement_policy": "auto",
+                "memory_enforcement_policy": "auto",
+                "extra_docker_compose": [],
+                "kwargs": {},
+                "extra_allowed_hosts": []
+            },
+            "verifier": {
+                "disable": false,
+                "environment_mode": "separate"
+            }
+        },
+        {
+            "schema_version": 2,
+            "task": {
+                "name": "redis-10068-kavach",
+                "type": "local",
+                "digest": "sha256:e318eafcc27f6a972e8795e3b0cf1328000434f0aeccf4ae1f4e467bb0f49d01",
+                "source": "tasks",
+                "path": "bench/agent/harbor/tasks/redis-10068-kavach"
+            },
+            "install_only": false,
+            "timeout_multiplier": 1.0,
+            "agent": {
+                "name": "oracle",
+                "skills": [],
+                "resume_trajectory": false,
+                "extra_allowed_hosts": [],
+                "kwargs": {},
+                "mcp_servers": []
+            },
+            "bridge_inputs": {},
+            "skills": [],
+            "environment": {
+                "type": "docker",
+                "force_build": false,
+                "delete": true,
+                "stream": false,
+                "cpu_enforcement_policy": "auto",
+                "memory_enforcement_policy": "auto",
+                "extra_docker_compose": [],
+                "kwargs": {},
+                "extra_allowed_hosts": []
+            },
+            "verifier": {
+                "disable": false,
+                "environment_mode": "separate"
+            }
+        }
+    ]
+}
