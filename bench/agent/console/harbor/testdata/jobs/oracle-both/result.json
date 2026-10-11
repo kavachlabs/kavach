@@ -1,0 +1,47 @@
+{
+    "id": "c5e8ca47-e9a4-46ce-967c-e6bf34d70e45",
+    "started_at": "2026-10-11T11:18:29.043959",
+    "updated_at": "2026-10-11T11:20:55.349949",
+    "finished_at": "2026-10-11T11:20:55.349949",
+    "n_total_trials": 4,
+    "stats": {
+        "n_completed_trials": 4,
+        "n_errored_trials": 3,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "oracle__adhoc": {
+                "n_trials": 1,
+                "n_errors": 3,
+                "metrics": [
+                    {
+                        "mean": 0.25
+                    }
+                ],
+                "pass_at_k": {
+                    "2": 0.5
+                },
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "hello-world-control__zRmJZqb"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "VerifierTimeoutError": [
+                        "hello-world-control__tXm7qmg",
+                        "hello-world-kavach__wLJvooh",
+                        "hello-world-kavach__aRGYpB6"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

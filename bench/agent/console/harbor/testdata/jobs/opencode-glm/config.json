@@ -1,0 +1,21 @@
+{
+    "job_name": "opencode-glm",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "n_attempts": 2,
+    "n_concurrent_trials": 1,
+    "agents": [
+        {
+            "name": "opencode",
+            "model_name": "openrouter/z-ai/glm-5.3",
+            "override_timeout_sec": 3600.0
+        }
+    ],
+    "tasks": [
+        {
+            "path": "/home/user/kavach/bench/agent/harbor/tasks/redis-10068-control"
+        },
+        {
+            "path": "/home/user/kavach/bench/agent/harbor/tasks/redis-10068-kavach"
+        }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-control"
+    },
+    "trial_name": "hello-world-control__p3PHoHF",
+    "trials_dir": "/home/user/kavach/bench/agent/results/harbor/nop-control",
+    "verifier_timeout_multiplier": 4.0,
+    "agent": {
+        "name": "nop"
+    },
+    "job_id": "a7c569b7-fc44-424f-bcad-75b6e71300d0"
+}

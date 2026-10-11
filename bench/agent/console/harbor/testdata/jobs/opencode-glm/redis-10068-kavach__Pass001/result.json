@@ -1,0 +1,119 @@
+{
+    "id": "ac13396d-31e9-4f62-abf7-6061c6877acb",
+    "task_name": "redis-10068-kavach",
+    "trial_name": "redis-10068-kavach__Pass001",
+    "trial_uri": "file:///home/user/kavach/bench/agent/results/harbor/opencode-glm/redis-10068-kavach__Pass001",
+    "task_id": {
+        "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-control"
+    },
+    "source": null,
+    "task_checksum": "dbd6dd55e7b05bf389bba6392bb249bc68580a79c064bd40c2cbb34f7ec82f16",
+    "config": {
+        "task": {
+            "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-control",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "hello-world-control__p3PHoHF",
+        "trials_dir": "/home/user/kavach/bench/agent/results/harbor/nop-control",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": 4.0,
+        "agent_setup_timeout_multiplier": null,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "nop",
+            "import_path": null,
+            "model_name": null,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {},
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "stream": false,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "a7c569b7-fc44-424f-bcad-75b6e71300d0",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "opencode",
+        "version": "1.1.8",
+        "model_info": {
+            "name": "z-ai/glm-5.3",
+            "provider": "openrouter"
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 1968602,
+        "n_cache_tokens": 1831936,
+        "n_output_tokens": 34290,
+        "cost_usd": 0.082,
+        "model_usage": null,
+        "rollout_details": null,
+        "metadata": null
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 1.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": null,
+    "started_at": "2026-10-11T04:45:30.000000Z",
+    "finished_at": "2026-10-11T04:52:40.000000Z",
+    "environment_setup": {
+        "started_at": "2026-10-11T05:52:12.967193Z",
+        "finished_at": "2026-10-11T05:52:15.957321Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-10-11T05:52:15.957389Z",
+        "finished_at": "2026-10-11T05:52:15.957436Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-10-11T04:47:01.000000Z",
+        "finished_at": "2026-10-11T04:51:10.000000Z"
+    },
+    "verifier": {
+        "started_at": "2026-10-11T05:52:16.200721Z",
+        "finished_at": "2026-10-11T05:53:01.244576Z"
+    },
+    "step_results": null
+}
