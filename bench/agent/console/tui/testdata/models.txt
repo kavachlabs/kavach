@@ -1,0 +1,34 @@
+
+  ┃
+  ┃  # redis-10068                                    Task: XTRIM MINID deletes entries above the threshold
+  ┃
+
+  › /models nemotron
+    model                                 context    in / M    out / M    tools
+    nvidia/nemotron-3.5-lightning         262k       $0.07     $0.20      yes
+    nvidia/nemotron-3.5-content-safety    131k       $0.20     $0.20      no
+
+    2 models. /model <id> picks one; the agent needs tools.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  Type / for commands…  "/run"
+  ┃
+  ┃  Kavach  redis-10068  Nemotron 3.5 Content Safety OpenRouter  × 1 run
+  ┃
+  ■ · · · · · · ·                                                         pgup/pgdn scroll   ctrl+p commands
+

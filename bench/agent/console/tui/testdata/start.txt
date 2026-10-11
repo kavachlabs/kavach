@@ -1,0 +1,34 @@
+
+
+
+
+
+
+
+
+
+
+                            █  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █    █    ▄▀▀▀ █▀▀▄ █▀▀▀ █
+                            █▄▀  █▀▀█ █  █ █▀▀█ █    █▀▀▄ █▀▀█ █▀▀▀ █  █ █    █▀▀▄
+                            █ ▀▄ ▀▀▀▀  ▀▀  ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀
+
+
+                 ┃
+                 ┃  Type / for commands…  "/run"
+                 ┃
+                 ┃  Kavach  redis-10068  GLM 5.3 OpenRouter  × 1 run
+                 ┃
+                                                           tab arm   / commands   ctrl+c quit
+
+
+
+
+
+
+
+
+
+
+
+
+  ⊙ docker ready  harbor 0.24.0  1 task  7 runs saved in /jobs                                           dev

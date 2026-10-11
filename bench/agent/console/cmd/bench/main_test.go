@@ -7,7 +7,7 @@ import (
 )
 
 func TestUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}} {
+	for _, args := range [][]string{{"nope"}} {
 		var out, errb bytes.Buffer
 		if code := run(args, &out, &errb); code != 2 || !strings.Contains(errb.String(), "bench api") {
 			t.Errorf("%v: exit %d\n%s", args, code, errb.String())
