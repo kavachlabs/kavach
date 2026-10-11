@@ -337,16 +337,19 @@ func TestOpenCommand(t *testing.T) {
 	for _, tr := range m.job.Trials {
 		byStatus[tr.Status] = tr
 	}
-	cmd, _ := openCommand(byStatus[harbor.Running])
+	cmd, _ := openCommand(byStatus[harbor.Running], "/repo")
 	if cmd == nil || strings.Join(cmd.Args, " ") != "opencode attach http://127.0.0.1:41240 --session ses_running0001" {
 		t.Errorf("running: %v", cmd)
 	}
-	cmd, _ = openCommand(byStatus[harbor.Pass])
-	if cmd == nil || cmd.Args[len(cmd.Args)-1] != "ses_ed6b6dacfffe25MOZ8B7cm5kqa" || !strings.HasSuffix(cmd.Args[len(cmd.Args)-2], "opencode-session.json") {
+	cmd, _ = openCommand(byStatus[harbor.Pass], "/repo")
+	if cmd == nil || len(cmd.Args) != 2 || cmd.Args[0] != "/repo/bench/agent/harbor/show.sh" || !strings.HasSuffix(cmd.Args[1], "__Pass001") {
 		t.Errorf("finished: %v", cmd)
 	}
+	if cmd, why := openCommand(byStatus[harbor.Pass], ""); cmd != nil || why == "" {
+		t.Errorf("finished, no root: %v %q", cmd, why)
+	}
 	for _, s := range []string{harbor.Error, harbor.Queued} {
-		if cmd, why := openCommand(byStatus[s]); cmd != nil || why == "" {
+		if cmd, why := openCommand(byStatus[s], "/repo"); cmd != nil || why == "" {
 			t.Errorf("%s: %v %q", s, cmd, why)
 		}
 	}

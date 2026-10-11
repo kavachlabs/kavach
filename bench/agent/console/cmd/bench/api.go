@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,6 +50,7 @@ func (o *options) config() (api.Config, error) {
 		TasksDir: o.tasks,
 		EnvFile:  filepath.Join(root, "bench", "agent", ".env"),
 		Harbor:   o.harbor,
+		Root:     root,
 		Web:      web.Files,
 	}
 	if c.JobsDir == "" {
@@ -61,7 +64,26 @@ func (o *options) config() (api.Config, error) {
 		return c, err
 	}
 	c.TasksDir, err = filepath.Abs(c.TasksDir)
+	c.JobsWarning = jobsWarning(c.JobsDir)
 	return c, err
+}
+
+// jobsWarning flags a jobs directory outside the home directory. Colima,
+// the usual Docker on a Mac, shares only the home directory with its VM, so
+// the verifier's mounts of trial folders elsewhere are empty and grading
+// finds no reward.
+func jobsWarning(jobs string) string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if rel, err := filepath.Rel(home, jobs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return fmt.Sprintf("The jobs folder %s is outside your home folder. Colima shares only your home folder with Docker, so attempts there can't be graded; pass -jobs with a folder under %s.", jobs, home)
 }
 
 // findRoot walks up from the current directory to the repository, the

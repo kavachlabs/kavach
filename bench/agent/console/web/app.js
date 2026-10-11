@@ -411,6 +411,7 @@ function renderNew(view) {
     kids.push(banner("Can't reach the bench server.", `${state.statusErr}\nStart it with: bench web`));
   }
   if (st && !st.docker.ok) kids.push(banner(["Docker isn't running: start Colima with ", h("code", {}, "colima start"), "."], st.docker.error));
+  if (st && st.jobs_warning) kids.push(banner(st.jobs_warning));
   if (st && !st.harbor.ok) kids.push(banner(["Harbor didn't answer ", h("code", {}, "harbor --version"), ". Is it installed and on PATH?"], st.harbor.error));
   if (st && !st.env_file && needsModel(f.agent)) {
     kids.push(banner(["No ", h("code", {}, "bench/agent/.env"), ": OpenRouter runs need ", h("code", {}, "OPENROUTER_API_KEY"), " there. Oracle and nop runs don't."], "", true));
@@ -746,6 +747,7 @@ function pickerFoot() {
 
 function canRun() {
   const f = state.form;
+  if (state.status && state.status.jobs_warning) return state.status.jobs_warning;
   if (!state.tasks || !state.tasks.length) return "No task to run.";
   if (!chosenTasks().length) return "Choose at least one arm.";
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + add, or /model <id>.";
@@ -1031,7 +1033,9 @@ function openInOpenCode(t, job) {
     return h("a", { class: "btn blue", href: oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
   }
   if (oc && oc.export) {
-    const cmd = `opencode import ${shq(oc.export)}\nopencode --session ${shq(oc.session)}`;
+    const trial = oc.export.split("/").slice(0, -2).join("/");
+    const root = state.status && state.status.root;
+    const cmd = `${root ? shq(`${root}/bench/agent/harbor/show.sh`) : "bench/agent/harbor/show.sh"} ${shq(trial)}`;
     const copy = h("button", { type: "button", class: "btn", onclick: async (e) => {
       const b = e.currentTarget;
       try {
@@ -1046,7 +1050,7 @@ function openInOpenCode(t, job) {
       }
     } }, "Copy");
     return h("details", { class: "oc" }, h("summary", { class: "btn blue" }, "Open in OpenCode ↗"),
-      h("div", { class: "cmd" }, h("span", {}, "This attempt's OpenCode server has stopped. Import the saved session, then open it:"), h("pre", {}, cmd), h("span", {}, copy)));
+      h("div", { class: "cmd" }, h("span", {}, "This attempt has finished. Open its saved session in OpenCode's terminal UI:"), h("pre", {}, cmd), h("span", {}, copy)));
   }
   let why;
   if (t.status === "queued") why = "Not started yet.";

@@ -411,10 +411,15 @@ func startOf(t Trial) time.Time {
 }
 
 func agentName(a agentConfig) string {
-	if a.Name != "" {
-		return a.Name
+	name := a.Name
+	if name == "" {
+		name = a.ImportPath
 	}
-	return a.ImportPath
+	if name == LiveAgent {
+		// harbor run --agent <import path> records it as the name.
+		return "opencode"
+	}
+	return name
 }
 
 func appendNew(list []string, s string) []string {

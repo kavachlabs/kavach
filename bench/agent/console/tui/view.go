@@ -239,7 +239,12 @@ func (m *Model) footer(width int) string {
 		} else {
 			parts = append(parts, sDim.Render(plural(st.Tasks, "task", "tasks")))
 		}
-		parts = append(parts, sDim.Render(plural(len(m.jobs), "run saved", "runs saved")+" in "+shortPath(st.JobsDir)))
+		saved := plural(len(m.jobs), "run saved", "runs saved") + " in " + shortPath(st.JobsDir)
+		if st.JobsWarning != "" {
+			parts = append(parts, sRed.Render(saved+", outside your home folder: runs there can't be graded"))
+		} else {
+			parts = append(parts, sDim.Render(saved))
+		}
 	}
 	right := sDim.Render(m.version)
 	left := strings.Join(parts, "  ")

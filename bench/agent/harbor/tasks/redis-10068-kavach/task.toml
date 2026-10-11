@@ -7,6 +7,10 @@ description = "Redis at the base commit with the Kavach integration, the recorde
 
 [agent]
 timeout_sec = 3600.0
+# No network while the agent works: the OpenCode agent
+# (bench/agent/harbor/agents) lets it reach only its model proxy, which
+# holds the API key.
+network_mode = "no-network"
 
 [environment]
 build_timeout_sec = 1800.0
