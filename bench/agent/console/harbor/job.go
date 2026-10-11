@@ -48,8 +48,19 @@ type Tokens struct {
 	Reasoning int64 `json:"reasoning"`
 }
 
-// Total is every token the model read or wrote.
-func (t Tokens) Total() int64 { return t.Input + t.Cached + t.Output + t.Reasoning }
+// Fresh is the input not served from cache plus the output: what the
+// attempt cost in new tokens. The cached input re-reads the conversation
+// on every call, so it dwarfs the rest.
+func (t Tokens) Fresh() int64 { return t.Input + t.Output }
+
+// MarshalJSON adds the fresh total.
+func (t Tokens) MarshalJSON() ([]byte, error) {
+	type plain Tokens
+	return json.Marshal(struct {
+		plain
+		Fresh int64 `json:"fresh"`
+	}{plain(t), t.Fresh()})
+}
 
 func (t *Tokens) add(u Tokens) {
 	t.Input += u.Input
@@ -247,12 +258,9 @@ func (r *Reader) Trial(job, id string) (Trial, error) {
 
 // Steps returns a trial's steps so far.
 func (r *Reader) Steps(job, id string) ([]Step, error) {
-	if !validName(job) || !validName(id) {
-		return nil, ErrNotFound
-	}
-	dir := filepath.Join(r.Dir, job, id)
-	if !isTrialDir(dir) {
-		return nil, ErrNotFound
+	dir, err := r.trialDir(job, id)
+	if err != nil {
+		return nil, err
 	}
 	return readSteps(dir)
 }

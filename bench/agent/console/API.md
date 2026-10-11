@@ -91,7 +91,7 @@ The console never reads it.
   "finished": "2026-10-11T04:52:40Z",
   "seconds": 249,
   "steps": 41,
-  "tokens": {"input": 136666, "cached": 1831936, "output": 34290, "reasoning": 31997},
+  "tokens": {"input": 136666, "cached": 1831936, "output": 34290, "reasoning": 31997, "fresh": 170956},
   "cost": 0.082,
   "error": "",
   "kavach": {
@@ -117,8 +117,14 @@ The console never reads it.
   `null` until then; compute elapsed time from `started`.
 - `steps`: model calls so far. It counts while the trial runs, if the agent
   writes OpenCode's event log.
-- `tokens`: `input` excludes `cached`. Total tokens are
-  input + cached + output + reasoning.
+- `tokens`:
+  - `input` excludes `cached`. Harbor's own input count includes the cached
+    tokens; the console subtracts them.
+  - `fresh` is input + output: the new tokens of the attempt. Show it as
+    the attempt's token count. The cached input re-reads the conversation
+    on every model call, so it dwarfs the rest: about 1.8M for GLM's
+    attempt, against 171k fresh.
+  - `reasoning` is counted on its own, as OpenCode reports it.
 - `cost`: USD, or `null` when the agent reports no cost.
 - `error`: `"<ExceptionType>: <message>"` from Harbor, `"interrupted"`, or
   absent.
@@ -147,7 +153,7 @@ One line of an attempt, in order:
 | `detail` | tool output; for `edit`, the diff (`-`/`+` lines). May be absent |
 | `tool` | the tool's name as the agent called it |
 | `exit` | the shell command's exit status, when known |
-| `tokens`, `cost` | on `usage` steps only: that model call's tokens and USD cost |
+| `tokens`, `cost` | on `usage` steps only: that model call's tokens (same shape as the trial's, with `fresh`) and USD cost |
 | `kavach` | true for Kavach's MCP tools (names starting `kavach_`). Their title is `kavach <verb> <binary>`, e.g. `kavach diff ./src/redis-server` |
 | `verdict`, `passed`, `variants` | on Kavach steps whose output is JSON: the verdict (`fixed`, `invariant_violated(…)@73`, …), whether it passed, and for `diff`, `"49 of 64 variants reproduce on the old build · 49 of those pass"` |
 
@@ -246,10 +252,10 @@ One row per task (base name), model, and arm, sorted in that order:
 [
   {"task": "redis-10068", "model": "openrouter/z-ai/glm-5.3", "arm": "control",
    "passes": 2, "attempts": 3, "errors": 0, "pending": 0,
-   "median_seconds": 352, "median_tokens": 240112, "mean_cost": 0.26},
+   "median_seconds": 352, "median_fresh_tokens": 240112, "median_cached_tokens": 2310400, "mean_cost": 0.26},
   {"task": "redis-10068", "model": "openrouter/z-ai/glm-5.3", "arm": "kavach",
    "passes": 1, "attempts": 1, "errors": 0, "pending": 2,
-   "median_seconds": 249, "median_tokens": 2034889, "mean_cost": 0.082}
+   "median_seconds": 249, "median_fresh_tokens": 170956, "median_cached_tokens": 1831936, "mean_cost": 0.082}
 ]
 ```
 
@@ -258,7 +264,8 @@ One row per task (base name), model, and arm, sorted in that order:
 - `errors` and `pending` (queued or running) are counted separately and are
   left out of the medians and the mean.
 - Medians and the mean are `null` when no attempt has a value.
-  `median_tokens` is the median of total tokens.
+- `median_fresh_tokens` is the median of `tokens.fresh`, and
+  `median_cached_tokens` the median of `tokens.cached`.
 
 ### GET /api/trials/{job}/{trial}
 
@@ -268,6 +275,49 @@ One Trial, or 404.
 
 The trial's steps so far, as an array of Step. It is `[]` when there are
 none. Refetch it on that trial's `trial` event.
+
+### GET /api/trials/{job}/{trial}/patch
+
+The agent's change: `artifacts/logs/artifacts/patch.diff`, which the task's
+collect hook writes when the agent stops.
+
+- 200, `text/plain; charset=utf-8`, the diff as is. It is empty when the
+  agent changed nothing.
+- 404 when the file does not exist: the trial is still running, or its task
+  has no collect hook.
+
+### GET /api/trials/{job}/{trial}/grade
+
+The verifier's `grade.json`, plus the tests the verifier's output lists.
+404 when there is no `grade.json` (a running trial, or a task whose
+verifier does not write one).
+
+```json
+{
+  "grade": {"applied": true, "built": true, "hidden": "fail",
+            "kavach_diff": "invariant_violated(stream-trim-contract)@73", "variants": ""},
+  "passed": 7,
+  "failed": 1,
+  "tests": [
+    {"name": "XTRIM with MINID option", "ok": true},
+    {"name": "XTRIM with MINID option, big delta from master record", "ok": false}
+  ]
+}
+```
+
+- `grade`: `grade.json` as written. For redis-10068 it has these fields:
+  - `hidden`: `pass` or `fail`, the grade.
+  - `applied`, `built`: whether the patch applied and built.
+  - `kavach_diff`, `variants`: Kavach's verdict.
+- `tests`: found best-effort in `verifier/grade.log` and
+  `verifier/test-stdout.txt`, in order. Two formats are recognised: Redis's
+  test runner (`[ok]: name (1 ms)`, `[err]: name in file`, `[exception]`)
+  and pytest's `-rA` summary (`PASSED file::test`, `FAILED file::test - why`).
+  Skipped tests are left out. When a test appears twice, the later result
+  wins.
+- `tests` is `[]` when neither file lists any test; then `passed` and
+  `failed` are 0. "1 of 8 XTRIM tests failed" is
+  `failed` of `passed + failed`.
 
 ### POST /api/jobs
 

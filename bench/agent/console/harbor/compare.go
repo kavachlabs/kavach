@@ -14,7 +14,8 @@ type CompareRow struct {
 	Errors        int      `json:"errors"`
 	Pending       int      `json:"pending"` // queued or running
 	MedianSeconds *float64 `json:"median_seconds"`
-	MedianTokens  *int64   `json:"median_tokens"` // Tokens.Total
+	MedianFresh   *int64   `json:"median_fresh_tokens"` // Tokens.Fresh
+	MedianCached  *int64   `json:"median_cached_tokens"`
 	MeanCost      *float64 `json:"mean_cost"`
 }
 
@@ -24,7 +25,8 @@ func Compare(trials []Trial) []CompareRow {
 	type group struct {
 		row     CompareRow
 		seconds []float64
-		tokens  []int64
+		fresh   []int64
+		cached  []int64
 		cost    float64
 		costed  int
 	}
@@ -53,7 +55,8 @@ func Compare(trials []Trial) []CompareRow {
 		if t.Seconds != nil {
 			g.seconds = append(g.seconds, *t.Seconds)
 		}
-		g.tokens = append(g.tokens, t.Tokens.Total())
+		g.fresh = append(g.fresh, t.Tokens.Fresh())
+		g.cached = append(g.cached, t.Tokens.Cached)
 		if t.Cost != nil {
 			g.cost += *t.Cost
 			g.costed++
@@ -76,9 +79,9 @@ func Compare(trials []Trial) []CompareRow {
 			m := median(g.seconds)
 			g.row.MedianSeconds = &m
 		}
-		if len(g.tokens) > 0 {
-			m := median(g.tokens)
-			g.row.MedianTokens = &m
+		if len(g.fresh) > 0 {
+			f, c := median(g.fresh), median(g.cached)
+			g.row.MedianFresh, g.row.MedianCached = &f, &c
 		}
 		if g.costed > 0 {
 			m := g.cost / float64(g.costed)
