@@ -1,0 +1,15 @@
+{
+    "job_name": "nop",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "n_concurrent_trials": 2,
+    "agents": [
+        {
+            "name": "nop"
+        }
+    ],
+    "datasets": [
+        {
+            "path": "bench/agent/harbor/tasks"
+        }
+    ]
+}

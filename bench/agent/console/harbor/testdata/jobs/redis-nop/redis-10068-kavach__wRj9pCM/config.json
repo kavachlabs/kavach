@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "bench/agent/harbor/tasks/redis-10068-kavach",
+        "source": "tasks"
+    },
+    "trial_name": "redis-10068-kavach__wRj9pCM",
+    "trials_dir": "/home/user/kavach/bench/agent/results/harbor/nop",
+    "agent": {
+        "name": "nop"
+    },
+    "job_id": "c9b58923-11ab-489a-9910-3be80a2f3e4e"
+}
