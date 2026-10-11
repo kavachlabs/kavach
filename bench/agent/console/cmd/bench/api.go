@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/api"
+	"github.com/kavachlabs/kavach/bench/agent/console/web"
 )
 
 // options are the flags every serving subcommand shares.
@@ -47,6 +48,7 @@ func (o *options) config() (api.Config, error) {
 		TasksDir: o.tasks,
 		EnvFile:  filepath.Join(root, "bench", "agent", ".env"),
 		Harbor:   o.harbor,
+		Web:      web.Files,
 	}
 	if c.JobsDir == "" {
 		c.JobsDir = filepath.Join(root, "bench", "agent", "results", "harbor")
@@ -81,9 +83,10 @@ func findRoot() (string, error) {
 	}
 }
 
-// serve serves h on 127.0.0.1:port until SIGINT or SIGTERM. It never binds
-// another address: the API starts paid runs.
-func serve(h http.Handler, port int, stderr io.Writer) error {
+// serve serves h on 127.0.0.1:port until SIGINT or SIGTERM, calling ready,
+// if set, with the server's URL once it listens. It never binds another
+// address: the API starts paid runs.
+func serve(h http.Handler, port int, stderr io.Writer, ready func(url string)) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -91,13 +94,17 @@ func serve(h http.Handler, port int, stderr io.Writer) error {
 		return err
 	}
 	srv := &http.Server{Handler: h, BaseContext: func(net.Listener) context.Context { return ctx }}
-	fmt.Fprintf(stderr, "bench: serving on http://%s\n", ln.Addr())
+	url := "http://" + ln.Addr().String() + "/"
+	fmt.Fprintf(stderr, "bench: serving on %s\n", url)
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		srv.Shutdown(shut)
 	}()
+	if ready != nil {
+		go ready(url)
+	}
 	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -118,7 +125,7 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
-	if err := serve(api.New(cfg), o.port, stderr); err != nil {
+	if err := serve(api.New(cfg), o.port, stderr, nil); err != nil {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)
 		return 1
 	}

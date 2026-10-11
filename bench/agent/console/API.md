@@ -4,6 +4,10 @@
 It only binds 127.0.0.1. It reads Harbor's job folders and starts and stops
 `harbor run`. The terminal and web consoles are built on it.
 
+The same server serves the web console at `/` (static files from `web/`).
+`bench web` takes the same flags: it opens the browser at the server that
+already answers on the port, or starts one and then opens it.
+
 ```sh
 cd bench/agent/console && go run ./cmd/bench api [--jobs DIR] [--tasks DIR] [--root REPO] [--harbor CMD] [--port N]
 ```

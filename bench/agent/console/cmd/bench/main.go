@@ -20,6 +20,7 @@ type command struct {
 // "" runs when bench is given no subcommand.
 var commands = []command{
 	{"api", "serve the console's HTTP API on 127.0.0.1 (see API.md)", cmdAPI},
+	{"web", "open the web console, serving the API unless a server already runs", cmdWeb},
 }
 
 func main() {
