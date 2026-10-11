@@ -1,0 +1,5 @@
+{
+    "verdict": "fixed",
+    "variants": "49 of 64 reproduce the incident on the old build \u00b7 49 of those pass on the new build",
+    "old": "invariant_violated(stream-trim-contract)@73"
+}

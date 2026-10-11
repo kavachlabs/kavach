@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "/home/user/kavach/bench/agent/harbor/tasks/redis-10068-control"
+    },
+    "trial_name": "redis-10068-control__Run0001",
+    "trials_dir": "/home/user/kavach/bench/agent/results/harbor/opencode-glm",
+    "agent": {
+        "name": "opencode",
+        "model_name": "openrouter/z-ai/glm-5.3"
+    },
+    "job_id": "7d1c2f4e-0b7a-4c55-9a51-5f1e2b8d9c10"
+}

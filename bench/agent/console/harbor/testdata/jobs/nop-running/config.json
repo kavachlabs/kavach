@@ -1,0 +1,16 @@
+{
+    "job_name": "nop-control",
+    "jobs_dir": "/home/user/kavach/bench/agent/results/harbor",
+    "verifier_timeout_multiplier": 4.0,
+    "quiet": true,
+    "agents": [
+        {
+            "name": "nop"
+        }
+    ],
+    "tasks": [
+        {
+            "path": "/home/user/kavach/bench/agent/results/scratch-tasks/hello-world-control"
+        }
+    ]
+}
