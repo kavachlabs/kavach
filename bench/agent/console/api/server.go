@@ -69,6 +69,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.stopJob)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}", s.getTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/grade", s.getGrade)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
 	return s
 }
@@ -237,6 +239,25 @@ func (s *Server) getSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, steps)
+}
+
+func (s *Server) getPatch(w http.ResponseWriter, r *http.Request) {
+	patch, err := s.reader.Patch(r.PathValue("job"), r.PathValue("trial"))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(patch)
+}
+
+func (s *Server) getGrade(w http.ResponseWriter, r *http.Request) {
+	g, err := s.reader.Grade(r.PathValue("job"), r.PathValue("trial"))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 func (s *Server) postJob(w http.ResponseWriter, r *http.Request) {
