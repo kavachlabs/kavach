@@ -12,15 +12,18 @@ then `colima start --cpu 6 --memory 8`) and python3. Colima shares only
 `$HOME` with its VM, so `--out` must be under it (the default is
 `bench/agent/results/`).
 
+API keys go in `bench/agent/.env`, which is gitignored and loaded by
+`run.sh`: `cp bench/agent/.env.example bench/agent/.env` and fill it in.
+`--key-env` names the variable passed to the container; no other variable
+reaches it.
+
 ```sh
 # A provider OpenCode knows (OpenRouter, Anthropic, ...): provider/model
-export OPENROUTER_API_KEY=...
 bench/agent/harness/run.sh --task redis-10068 --arm kavach \
   --model openrouter/<model-id> --key-env OPENROUTER_API_KEY --runs 3
 
 # Any OpenAI-compatible endpoint: NVIDIA's hosted NIM API, a self-hosted NIM
 # or vLLM server, Z.ai. --model is the name the endpoint uses.
-export NVIDIA_API_KEY=...
 bench/agent/harness/run.sh --task redis-10068 --arm control \
   --model <model-id> --base-url https://integrate.api.nvidia.com/v1 \
   --key-env NVIDIA_API_KEY --runs 3

@@ -25,6 +25,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
 task='' arm='' model='' base_url='' runs=1 limit=3600 out="$ROOT/bench/agent/results"
 keys=()
+# API keys can live in bench/agent/.env (gitignored); see .env.example.
+if [[ -f $ROOT/bench/agent/.env ]]; then
+  set -a
+  source "$ROOT/bench/agent/.env"
+  set +a
+fi
 while (($#)); do
   case $1 in
     --task) task=$2 ;;

@@ -13,3 +13,4 @@ coverage.*
 __pycache__/
 /graphify-out*/
 /bench/agent/results/
+/bench/agent/.env
