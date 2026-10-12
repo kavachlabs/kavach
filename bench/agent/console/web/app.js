@@ -1030,7 +1030,7 @@ const shq = (s) => /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)
 function openInOpenCode(t, job) {
   const oc = t.opencode;
   if (t.status === "running" && oc && oc.url && !oc.finished) {
-    return h("a", { class: "btn blue", href: oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
+    return h("a", { class: "btn blue", href: oc.web || oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
   }
   if (oc && oc.export) {
     const trial = oc.export.split("/").slice(0, -2).join("/");

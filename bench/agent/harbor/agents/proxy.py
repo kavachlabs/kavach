@@ -116,6 +116,7 @@ async def forward(req, reader, writer, base, path, headers):
     # A client that goes away (a watcher closing the TUI mid-stream) ends
     # the exchange, so streams such as /event do not outlive it.
     status = None
+    head = b""
     gone = asyncio.ensure_future(reader.read(1))
     try:
         while True:
@@ -131,9 +132,25 @@ async def forward(req, reader, writer, base, path, headers):
                 await chunk
             data = chunk.result()
             if not data:
+                if head:
+                    writer.write(head)
                 return status
             if status is None:
-                status = data.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+                # Each connection carries one exchange, so the client must
+                # be told: a browser that keeps it alive sends its next
+                # request into a socket about to close, and that request
+                # fails.
+                head += data
+                if b"\r\n\r\n" not in head:
+                    continue
+                head_part, _, rest = head.partition(b"\r\n\r\n")
+                lines = head_part.split(b"\r\n")
+                status = lines[0].decode("latin-1", "replace")
+                lines = [lines[0]] + [
+                    line for line in lines[1:]
+                    if line.split(b":", 1)[0].strip().lower() not in (b"connection", b"keep-alive")
+                ] + [b"Connection: close"]
+                data, head = b"\r\n".join(lines) + b"\r\n\r\n" + rest, b""
             writer.write(data)
             await writer.drain()
     finally:

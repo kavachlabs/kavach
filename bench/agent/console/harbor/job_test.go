@@ -204,6 +204,12 @@ func TestOpenCodeJob(t *testing.T) {
 	if o := run.OpenCode; o == nil || o.Finished != nil || o.Export != "" || o.URL == "" {
 		t.Fatalf("running trial's opencode %+v", run.OpenCode)
 	}
+	if want := "http://127.0.0.1:41240/L3dvcms/session/ses_running0001"; run.OpenCode.Web != want {
+		t.Errorf("web %q, want %q", run.OpenCode.Web, want)
+	}
+	if pass.OpenCode.Web != "" {
+		t.Errorf("web %q for a live file without dir", pass.OpenCode.Web)
+	}
 	if run.Kavach != nil {
 		t.Fatalf("kavach.json without the file: %+v", run.Kavach)
 	}

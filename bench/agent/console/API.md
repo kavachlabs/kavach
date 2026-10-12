@@ -171,6 +171,8 @@ Otherwise the job counts as `stopped`, and its unfinished trials become
   grade.
 - `opencode`: the agent's `opencode-live.json`, or `null`.
   - `finished` is `null` while the attempt's OpenCode server is up.
+  - `web` is the session's page in OpenCode's web UI, while the server is
+    up. The bare `url` opens on a project list without it.
   - `export` is the path of `opencode-session.json` (an `opencode export`),
     when that file exists. Open a finished attempt with
     `<root>/bench/agent/harbor/show.sh <trial folder>`, which imports it into
