@@ -11,8 +11,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
 // Answering reports whether a bench API serves base.
@@ -61,7 +59,7 @@ func Wait(base string, w io.Writer) {
 		}
 		going := false
 		for _, j := range jobs {
-			going = going || (j.Stoppable && j.Status == harbor.JobRunning)
+			going = going || j.Stoppable
 		}
 		if !going {
 			fmt.Fprintln(w, "bench: the runs have ended; stopping the server.")

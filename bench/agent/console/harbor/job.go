@@ -37,6 +37,8 @@ const (
 	JobRunning = "running"
 	JobDone    = "done"
 	JobStopped = "stopped" // Harbor was stopped or exited before finishing
+	JobPausing = "pausing" // paused; Harbor is cancelling the attempts in progress
+	JobPaused  = "paused"  // stopped to be resumed
 )
 
 // ErrNotFound is returned for a job or trial that does not exist.
@@ -84,6 +86,7 @@ type Job struct {
 	Total     int        `json:"trials_total"`
 	Cost      float64    `json:"cost"`
 	Stoppable bool       `json:"stoppable"` // started by this process and still running
+	Resumable bool       `json:"resumable"` // started by bench, stopped or paused, not finished
 	Error     string     `json:"error,omitempty"`
 	Trials    []Trial    `json:"trials,omitempty"`
 }
@@ -312,9 +315,15 @@ func (r *Reader) readJob(id string) Job {
 		j.Status = JobDone
 	case launched && alive:
 		j.Stoppable = true
+		if r.Runs.paused(id) {
+			j.Status = JobPausing
+		}
 	case launched:
+		j.Resumable = true
 		j.Status = JobStopped
-		if !hasResult {
+		if r.Runs.paused(id) {
+			j.Status = JobPaused
+		} else if !hasResult {
 			j.Error = out
 		}
 	case res.Stats.NCancelled > 0:
@@ -331,13 +340,17 @@ func (r *Reader) readJob(id string) Job {
 	for _, e := range entries {
 		if e.IsDir() && isTrialDir(filepath.Join(dir, e.Name())) {
 			t := r.readTrial(id, filepath.Join(dir, e.Name()))
-			if t.Status == Running && j.Status != JobRunning {
+			// Resuming runs the cancelled attempts again, from the start.
+			if j.Status == JobPaused && (t.Status == Running || strings.HasPrefix(t.Error, "CancelledError")) {
+				continue
+			}
+			if t.Status == Running && j.Status != JobRunning && j.Status != JobPausing {
 				t.Status, t.Error = Error, "interrupted"
 			}
 			j.Trials = append(j.Trials, t)
 		}
 	}
-	j.Trials = number(j.Trials, lock.Trials, id, j.Status == JobRunning)
+	j.Trials = number(j.Trials, lock.Trials, id, j.Status == JobRunning || j.Status == JobPausing || j.Status == JobPaused)
 
 	planned := 0
 	if len(lock.Trials) == 0 && launched {

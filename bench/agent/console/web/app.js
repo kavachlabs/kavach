@@ -31,7 +31,7 @@ const state = {
   live: false,
   form: loadForm(),
   picker: { open: false, q: "", list: null, err: "" },
-  confirmStop: false, stopErr: "", note: "", noteErr: false, starting: false,
+  confirm: "", actionErr: "", note: "", noteErr: false, starting: false,
 };
 
 function h(tag, attrs, ...kids) {
@@ -159,8 +159,8 @@ let current = route();
 async function onRoute() {
   const prev = current;
   current = route();
-  state.confirmStop = false;
-  state.stopErr = "";
+  state.confirm = "";
+  state.actionErr = "";
   closeNav();
   if (current.view === "new" && current.task) {
     state.form.task = current.task;
@@ -305,8 +305,9 @@ function renderTop() {
   const job = current.job && (state.job || (state.jobs || []).find((j) => j.id === current.job));
   if (current.view !== "new" && job) {
     text = jobTitle(job);
-    const dot = job.status === "running" ? "run" : job.status === "stopped" ? "off" : "";
-    kids.push(h("span", {}, h("span", { class: `dot ${dot}` }), job.status === "stopped" ? `stopped · ${job.trials_done} of ${job.trials_total}` : `${job.trials_done} of ${job.trials_total} done`));
+    const dot = job.status === "running" || job.status === "pausing" ? "run" : job.status === "done" ? "" : "off";
+    const doneOf = `${job.trials_done} of ${job.trials_total}`;
+    kids.push(h("span", {}, h("span", { class: `dot ${dot}` }), job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
     if (job.cost) kids.push(h("span", {}, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" }, job.finished ? fmtDur((Date.parse(job.finished) - Date.parse(job.started)) / 1000) : job.status === "running" ? elapsed(job.started, fmtDur) : "", job.status === "running" ? " elapsed" : ""));
@@ -370,7 +371,7 @@ function renderSide() {
   for (const j of state.jobs || []) {
     const { name, shape } = jobShape(j, true);
     const mark = j.status === "running" ? h("span", { class: "peach", title: "running" }, "●")
-      : h("span", { class: j.status === "stopped" ? "faint" : "", title: j.status }, `${j.trials_done}/${j.trials_total}`);
+      : h("span", { class: j.status === "done" ? "" : "faint", title: j.status }, `${j.status === "paused" ? "paused " : ""}${j.trials_done}/${j.trials_total}`);
     kids.push(h("a", { href: `#/jobs/${encodeURIComponent(j.id)}`, class: j.id === current.job ? "on" : null },
       h("span", {}, shape ? `${name} · ${shape}` : name, h("span", { class: "sub" }, j.id)), mark));
   }
@@ -808,7 +809,7 @@ async function select(t) {
   state.sel = trialKey(t);
   state.steps = null;
   state.stepsFor = "";
-  state.confirmStop = false;
+  state.confirm = "";
   renderView();
   const focus = document.querySelector(`.dots button[data-key="${CSS.escape(state.sel)}"]`);
   if (focus) focus.focus();
@@ -835,7 +836,7 @@ function renderRuns(view) {
     kids.push(h("div", { class: "empty" }, job.status === "running"
       ? [h("b", {}, "Harbor is starting the run."), " Building a task's image the first time takes minutes; attempts appear here as they start."]
       : "This run has no attempts."));
-    kids.push(h("div", { class: "actions" }, stopControl(job)));
+    kids.push(h("div", { class: "actions" }, runControl(job)));
     return view.replaceChildren(h("div", { class: "pane" }, kids));
   }
   const arms = armsOf(job.trials);
@@ -936,7 +937,7 @@ function renderAttempt(t) {
   }
   kids.push(renderSteps(t, job));
   if (finished(t)) kids.push(patchView(t));
-  kids.push(h("div", { class: "actions" }, openInOpenCode(t, job), stopControl(job)));
+  kids.push(h("div", { class: "actions" }, openInOpenCode(t, job), runControl(job)));
   return h("div", { class: "pane" }, kids);
 }
 
@@ -1061,36 +1062,58 @@ function openInOpenCode(t, job) {
   return h("span", { class: "note" }, h("button", { type: "button", class: "btn", disabled: true }, "Open in OpenCode ↗"), " ", why);
 }
 
-function stopControl(job) {
+function runControl(job) {
+  if (job.resumable) {
+    const warning = state.status && state.status.jobs_warning;
+    return h("span", { class: "note" },
+      h("button", { type: "button", class: "btn blue", disabled: !!warning, onclick: () => jobAction("resume") }, "Resume run"),
+      " ", job.status === "paused" ? "Paused." : "Stopped.", " Resuming keeps the finished attempts and runs the rest.",
+      state.actionErr ? h("span", { class: "bad" }, " ", state.actionErr) : null);
+  }
+  if (job.status === "pausing") return h("span", { class: "note" }, "Pausing: Harbor is cancelling the attempts in progress.");
   if (job.status !== "running") return null;
   if (!job.stoppable) {
-    return h("span", { class: "note" }, h("button", { type: "button", class: "btn", disabled: true }, "Stop run"), " Another process started this run: stop it there.");
-  }
-  if (!state.confirmStop) {
-    return h("button", { type: "button", class: "btn", onclick: () => { state.confirmStop = true; renderView(); document.getElementById("stop-yes").focus(); } }, "Stop run…");
+    return h("span", { class: "note" },
+      h("button", { type: "button", class: "btn", disabled: true }, "Pause run"), " ",
+      h("button", { type: "button", class: "btn", disabled: true }, "Stop run"), " Another process started this run: pause or stop it there.");
   }
   const running = job.trials.filter((t) => t.status === "running").length;
   const queued = job.trials.filter((t) => t.status === "queued").length;
-  return h("div", { class: "confirm", role: "alertdialog", "aria-label": "Stop the run", onkeydown: (e) => { if (e.key === "Escape") { state.confirmStop = false; renderView(); } } },
-    job.trials.length
+  const ask = (what) => { state.confirm = what; renderView(); document.getElementById("confirm-yes").focus(); };
+  if (!state.confirm) {
+    return [
+      h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
+      h("button", { type: "button", class: "btn", onclick: () => ask("stop") }, "Stop run…"),
+      state.actionErr ? h("span", { class: "bad" }, " ", state.actionErr) : null,
+    ];
+  }
+  const s = (n) => n === 1 ? "" : "s";
+  const text = state.confirm === "pause"
+    ? h("span", {}, h("b", {}, "Pause the run? "),
+      `Finished attempts are kept. ${running} running attempt${s(running)} of ${job.id} start${running === 1 ? "s" : ""} over when you resume, and what was spent on ${running === 1 ? "it" : "them"} is lost.`)
+    : job.trials.length
       ? h("span", {}, h("b", {}, "Stop the whole run, not just this attempt? "),
-        `Harbor can only stop a run as a whole: it cancels ${running} running and ${queued} queued attempt${running + queued === 1 ? "" : "s"} of ${job.id}; they end as errors.`)
-      : h("span", {}, h("b", {}, "Stop the run? "), `Harbor stops ${job.id} before any attempt starts.`),
-    state.stopErr ? h("span", { class: "bad" }, state.stopErr) : null,
+        `Harbor can only stop a run as a whole: it cancels ${running} running and ${queued} queued attempt${s(running + queued)} of ${job.id}; they end as errors.`)
+      : h("span", {}, h("b", {}, "Stop the run? "), `Harbor stops ${job.id} before any attempt starts.`);
+  const label = state.confirm === "pause" ? "Pause run" : "Stop run";
+  return h("div", { class: "confirm", role: "alertdialog", "aria-label": label, onkeydown: (e) => { if (e.key === "Escape") { state.confirm = ""; renderView(); } } },
+    text,
+    state.actionErr ? h("span", { class: "bad" }, state.actionErr) : null,
     h("div", { class: "row" },
-      h("button", { type: "button", id: "stop-yes", class: "btn danger", onclick: stopJob }, "Stop run"),
-      h("button", { type: "button", class: "btn", onclick: () => { state.confirmStop = false; renderView(); } }, "Cancel")));
+      h("button", { type: "button", id: "confirm-yes", class: state.confirm === "stop" ? "btn danger" : "btn", onclick: () => jobAction(state.confirm) }, label),
+      h("button", { type: "button", class: "btn", onclick: () => { state.confirm = ""; renderView(); } }, "Cancel")));
 }
 
-async function stopJob() {
+// jobAction posts stop, pause or resume for the open run.
+async function jobAction(action) {
   try {
-    const job = await api(`/jobs/${encodeURIComponent(state.job.id)}/stop`, { method: "POST" });
+    const job = await api(`/jobs/${encodeURIComponent(state.job.id)}/${action}`, { method: "POST" });
     job.trials = job.trials || [];
     state.job = job;
-    state.confirmStop = false;
-    state.stopErr = "";
+    state.confirm = "";
+    state.actionErr = "";
   } catch (e) {
-    state.stopErr = `Couldn't stop it: ${e.message}`;
+    state.actionErr = `Couldn't ${action} it: ${e.message}`;
   }
   renderAll();
 }

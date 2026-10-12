@@ -345,3 +345,55 @@ func TestEvents(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestPauseAndResumeRun(t *testing.T) {
+	dir := t.TempDir()
+	harborCmd := filepath.Join(dir, "harbor")
+	os.WriteFile(harborCmd, []byte("#!/bin/sh\necho \"$@\" >> "+dir+"/args\ntrap 'exit 130' INT\nwhile :; do sleep 0.05; done\n"), 0o755)
+	_, ts := newServer(t, Config{Harbor: harborCmd, JobsDir: filepath.Join(dir, "jobs")})
+	url := ts.URL + "/api/jobs"
+	wait := func(status string) harbor.Job {
+		t.Helper()
+		var job harbor.Job
+		deadline := time.Now().Add(5 * time.Second)
+		for get(t, url+"/run1", &job); job.Status != status && time.Now().Before(deadline); get(t, url+"/run1", &job) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if job.Status != status {
+			t.Fatalf("want %s: %+v", status, job)
+		}
+		return job
+	}
+
+	if code, v := post(t, url, "application/json", `{"tasks":["hello-world-control"],"agent":"oracle","name":"run1"}`); code != 202 {
+		t.Fatalf("start: %d %v", code, v)
+	}
+	if code, v := post(t, url+"/run1/resume", "", ""); code != 409 {
+		t.Fatalf("resume running: %d %v", code, v)
+	}
+	var args []byte
+	for deadline := time.Now().Add(5 * time.Second); strings.Count(string(args), "run -c") < 1 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		args, _ = os.ReadFile(filepath.Join(dir, "args"))
+	}
+	if code, v := post(t, url+"/run1/pause", "", ""); code != 202 {
+		t.Fatalf("pause: %d %v", code, v)
+	}
+	if job := wait(harbor.JobPaused); !job.Resumable || job.Stoppable {
+		t.Fatalf("paused %+v", job)
+	}
+	if code, v := post(t, url+"/run1/pause", "", ""); code != 409 {
+		t.Fatalf("second pause: %d %v", code, v)
+	}
+	// Paused before Harbor wrote the job folder, the run starts again.
+	if code, v := post(t, url+"/run1/resume", "", ""); code != 202 || v["status"] != "running" || v["stoppable"] != true {
+		t.Fatalf("resume: %d %v", code, v)
+	}
+	for deadline := time.Now().Add(5 * time.Second); strings.Count(string(args), "run -c") < 2 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		args, _ = os.ReadFile(filepath.Join(dir, "args"))
+	}
+	if strings.Count(string(args), "run -c") != 2 {
+		t.Fatalf("args %s", args)
+	}
+	post(t, url+"/run1/stop", "", "")
+	wait(harbor.JobStopped)
+}

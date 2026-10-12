@@ -30,5 +30,5 @@
 
 
 
-  ■ · · · · · · ·               enter open in opencode   ↑↓ select   esc stop this attempt   ctrl+p commands
+  ■ · · · · · · ·                  enter open in opencode   ↑↓ select   p pause   esc stop   ctrl+p commands
 
