@@ -32,9 +32,10 @@ The console never reads it.
   gets 403. `POST /api/jobs` needs `Content-Type: application/json`, or it
   gets 415. A web frontend served from the same origin meets all three.
 - Status words:
-  - Job: `running`, `done`, or `stopped`. `stopped` means Harbor was stopped,
-    or exited without finishing the job. See "Is Harbor still running?"
-    below.
+  - Job: `running`, `done`, `stopped`, `pausing`, or `paused`. `stopped`
+    means Harbor was stopped, or exited without finishing the job. See "Is
+    Harbor still running?" below. `pausing` and `paused` are a job paused
+    with `POST /api/jobs/{id}/pause`, before and after its Harbor exits.
   - Trial: `queued`, `running`, `pass`, `fail`, or `error`. A trial passes
     when its reward is 1. `error` means it has no reward: Harbor raised an
     exception, it was cancelled, or Harbor died while it ran
@@ -61,6 +62,7 @@ The console never reads it.
   "trials_total": 4,
   "cost": 0.084,
   "stoppable": true,
+  "resumable": false,
   "error": "…",
   "trials": [ Trial, … ]
 }
@@ -74,7 +76,10 @@ The console never reads it.
 - `tasks`, `agent`, `models`, `trials_total`: from the request until
   Harbor writes the job's `lock.json`, then from that file.
 - `stoppable`: true when bench started the job (this server or an earlier
-  one) and its Harbor is still running. Only such jobs can be stopped.
+  one) and its Harbor is still running. Only such jobs can be stopped or
+  paused.
+- `resumable`: true when bench started the job and it is `paused` or
+  `stopped`, not finished.
 - `error`: set on a `stopped` job when there is something to say:
   - for a job bench started whose Harbor exited without writing
     `result.json`, the end of Harbor's output, such as a bad model name;
@@ -430,6 +435,30 @@ Runs outlive `bench api`:
 
 A later `bench api` sees such a run as `running` and `stoppable`, and can
 stop it.
+
+### POST /api/jobs/{id}/pause
+
+Stops the job as `stop` does and marks it paused
+(`<jobs>/.bench/<id>.paused`). Harbor has no pause of its own, and freezing
+the containers would leave the agent's timeout running and its model
+connections to time out. The job is `pausing` until Harbor exits, then
+`paused`. A paused job leaves out its cancelled trials, and lists them as
+`queued` again: resuming runs them from the start. What they cost is lost.
+
+Reply: 202 and the Job. 409 as for `stop`.
+
+### POST /api/jobs/{id}/resume
+
+Continues a `paused` or `stopped` job bench started, with
+`harbor jobs resume -p <jobs>/<id>`. Harbor keeps the finished trials,
+deletes the cancelled ones (`CancelledError`) and runs the rest, in a new
+Harbor process tracked as `start` tracks one. `harbor jobs resume` has no
+`--env-file`; the env file is loaded by `/bin/sh` and never read by bench.
+A job stopped before Harbor wrote its folder is started again from its
+`<jobs>/.bench/<id>.json`.
+
+Reply: 202 and the Job, now `running`. 409 when the job is running,
+finished, or bench did not start it.
 
 ### GET /api/events
 

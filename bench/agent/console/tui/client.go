@@ -138,6 +138,14 @@ func (c *client) stop(ctx context.Context, id string) error {
 	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/stop", struct{}{}, nil)
 }
 
+func (c *client) pause(ctx context.Context, id string) error {
+	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/pause", struct{}{}, nil)
+}
+
+func (c *client) resume(ctx context.Context, id string) error {
+	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/resume", struct{}{}, nil)
+}
+
 // event is one Server-Sent Event from /api/events: a job (without trials)
 // or a trial.
 type event struct {

@@ -257,3 +257,72 @@ func mustEval(t *testing.T, path string) string {
 	}
 	return p
 }
+
+func TestPauseAndResume(t *testing.T) {
+	runner, dir := fakeHarbor(t, `
+echo "$UNUSED" > "`+"$JOBS"+`/../env"
+mkdir -p "$JOBS/demo/demo__1" "$JOBS/demo/demo__2"
+echo '{}' > "$JOBS/demo/config.json"
+echo '{}' > "$JOBS/demo/demo__1/config.json"
+echo '{"task_name":"hello-world-control","exception_info":{"exception_type":"CancelledError"}}' > "$JOBS/demo/demo__1/result.json"
+echo '{}' > "$JOBS/demo/demo__2/config.json"
+echo '{"task_name":"hello-world-control","verifier_result":{"rewards":{"reward":1}}}' > "$JOBS/demo/demo__2/result.json"
+trap 'echo stopping; exit 130' INT
+while :; do sleep 0.05; done
+`)
+	jobs := filepath.Join(dir, "jobs")
+	t.Setenv("JOBS", jobs)
+	if _, err := runner.Start(RunRequest{Tasks: []string{"hello-world-control"}, Agent: "oracle", Attempts: 2, Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	reader := &Reader{Dir: jobs, Runs: runner}
+	waitFor(t, func() bool { _, err := os.Stat(filepath.Join(jobs, "demo", "demo__2", "result.json")); return err == nil })
+	if err := runner.Resume("demo"); !errors.Is(err, ErrNotStopped) {
+		t.Fatalf("resume while running: %v", err)
+	}
+
+	if err := runner.Pause("demo"); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("demo")
+	j, _ := reader.Job("demo")
+	// The cancelled attempt is left out: resuming runs it again.
+	if j.Status != JobPaused || !j.Resumable || j.Stoppable || j.Error != "" || len(j.Trials) != 1 || j.Trials[0].Status != Pass {
+		t.Fatalf("paused %+v", j)
+	}
+	if err := runner.Pause("demo"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("second pause: %v", err)
+	}
+	if j, _ := reader.Job("demo"); j.Status != JobPaused {
+		t.Fatalf("after second pause %+v", j)
+	}
+
+	if err := runner.Resume("demo"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { b, _ := os.ReadFile(filepath.Join(dir, "env")); return strings.TrimSpace(string(b)) == "1" })
+	args, _ := os.ReadFile(filepath.Join(dir, "args"))
+	if got := strings.TrimSpace(string(args)); got != "jobs resume -p "+filepath.Join(jobs, "demo") {
+		t.Errorf("args %q", got)
+	}
+	// A later console finds the resumed Harbor by its job folder.
+	later := &Reader{Dir: jobs, Runs: &Runner{Harbor: runner.Harbor, JobsDir: jobs}}
+	if j, _ := later.Job("demo"); j.Status != JobRunning || !j.Stoppable || j.Resumable {
+		t.Fatalf("resumed %+v", j)
+	}
+	if err := runner.Stop("demo"); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("demo")
+	if j, _ := reader.Job("demo"); j.Status != JobStopped || !j.Resumable {
+		t.Fatalf("stopped %+v", j)
+	}
+
+	os.WriteFile(filepath.Join(jobs, "demo", "result.json"), []byte(`{"started_at":"2026-10-12T10:00:00Z","finished_at":"2026-10-12T10:05:00Z"}`), 0o644)
+	if err := runner.Resume("demo"); !errors.Is(err, ErrNotStopped) {
+		t.Fatalf("resume finished: %v", err)
+	}
+	if err := runner.Resume("other"); !errors.Is(err, ErrNotStopped) {
+		t.Fatalf("resume unknown: %v", err)
+	}
+}

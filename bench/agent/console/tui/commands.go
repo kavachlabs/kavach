@@ -35,6 +35,8 @@ func init() {
 		{"compare", "", "Pass rate per model and arm", false, (*Model).cmdCompare},
 		{"show", "[trial]", "Open an attempt in OpenCode", false, (*Model).cmdShow},
 		{"stop", "", "Stop this run", false, (*Model).cmdStop},
+		{"pause", "", "Pause this run; /resume continues it", false, (*Model).cmdPause},
+		{"resume", "", "Continue a paused or stopped run", false, (*Model).cmdResume},
 		{"clear", "", "Back to the start screen", false, (*Model).cmdClear},
 		{"help", "", "List the commands", false, (*Model).cmdHelp},
 		{"quit", "", "Leave the console", false, (*Model).cmdQuit},
@@ -381,6 +383,22 @@ func (m *Model) cmdStop(string) tea.Cmd {
 		return nil
 	}
 	return m.askStop(*m.job)
+}
+
+func (m *Model) cmdPause(string) tea.Cmd {
+	if m.job == nil {
+		m.fail("Open a run first: /jobs.")
+		return nil
+	}
+	return m.askPause(*m.job)
+}
+
+func (m *Model) cmdResume(string) tea.Cmd {
+	if m.job == nil {
+		m.fail("Open a run first: /jobs.")
+		return nil
+	}
+	return m.resume(*m.job)
 }
 
 func (m *Model) cmdClear(string) tea.Cmd {

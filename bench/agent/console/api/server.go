@@ -73,6 +73,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
 	s.mux.HandleFunc("GET /api/jobs/{id}/compare", s.getCompare)
 	s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.stopJob)
+	s.mux.HandleFunc("POST /api/jobs/{id}/pause", s.pauseJob)
+	s.mux.HandleFunc("POST /api/jobs/{id}/resume", s.resumeJob)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}", s.getTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
@@ -310,6 +312,29 @@ func (s *Server) stopJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.runner.Stop(id); err != nil {
 		writeError(w, http.StatusConflict, "%s: %v", id, err)
+		return
+	}
+	s.writeJob(w, http.StatusAccepted, id)
+}
+
+func (s *Server) pauseJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.runner.Pause(id); err != nil {
+		writeError(w, http.StatusConflict, "%s: %v", id, err)
+		return
+	}
+	s.writeJob(w, http.StatusAccepted, id)
+}
+
+func (s *Server) resumeJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.runner.Resume(id)
+	switch {
+	case errors.Is(err, harbor.ErrNotStopped):
+		writeError(w, http.StatusConflict, "%s: %v", id, err)
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "resuming harbor: %v", err)
 		return
 	}
 	s.writeJob(w, http.StatusAccepted, id)

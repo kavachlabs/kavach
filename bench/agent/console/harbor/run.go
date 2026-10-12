@@ -24,6 +24,9 @@ var (
 	// ErrNotRunning is returned when stopping a job that bench did not start
 	// or whose Harbor has exited.
 	ErrNotRunning = errors.New("job is not running")
+	// ErrNotStopped is returned when resuming a job that bench did not
+	// start, that is still running or that has finished.
+	ErrNotStopped = errors.New("job is not paused or stopped")
 )
 
 // RunRequest describes a Harbor run.
@@ -103,17 +106,24 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 	if err := os.WriteFile(cfgFile, b, 0o644); err != nil {
 		return "", err
 	}
-	log, err := os.OpenFile(r.file(req.Name, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return "", err
-	}
-	defer log.Close()
-
 	args := []string{"run", "-c", cfgFile, "-y"}
 	if r.EnvFile != "" && exists(r.EnvFile) {
 		args = append(args, "--env-file", r.EnvFile)
 	}
-	cmd := exec.Command(r.Harbor, args...)
+	if err := r.spawn(req.Name, exec.Command(r.Harbor, args...)); err != nil {
+		return "", err
+	}
+	return req.Name, nil
+}
+
+// spawn starts cmd as the job's Harbor, appending its output to the job's
+// log, and tracks it. r.mu must be held.
+func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
+	log, err := os.OpenFile(r.file(id, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
 	cmd.Stdout, cmd.Stderr = log, log
 	if r.Root != "" {
 		cmd.Dir = r.Root
@@ -122,27 +132,27 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(log, "harbor: %v\n", err)
-		return "", err
+		return err
 	}
-	if err := os.WriteFile(r.file(req.Name, ".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(r.file(id, ".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
 		cmd.Process.Signal(os.Interrupt)
-		return "", err
+		return err
 	}
 	rn := &run{cmd: cmd, done: make(chan struct{})}
 	if r.runs == nil {
 		r.runs = map[string]*run{}
 	}
-	r.runs[req.Name] = rn
+	r.runs[id] = rn
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			if f, ferr := os.OpenFile(r.file(req.Name, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
+			if f, ferr := os.OpenFile(r.file(id, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
 				fmt.Fprintf(f, "\nharbor: %v\n", err)
 				f.Close()
 			}
 		}
 		close(rn.done)
 	}()
-	return req.Name, nil
+	return nil
 }
 
 // jobConfig validates req, fills in its defaults and returns Harbor's
@@ -244,6 +254,70 @@ func (r *Runner) Stop(id string) error {
 	return syscall.Kill(pid, syscall.SIGINT)
 }
 
+// Pause stops a run so that Resume can continue it. Harbor has no pause of
+// its own: the run is stopped as by Stop, and marked paused. Freezing the
+// containers instead would leave the agent's timeout running and the
+// model's connections to time out.
+func (r *Runner) Pause(id string) error {
+	if _, alive, _ := r.state(id); !alive {
+		return ErrNotRunning
+	}
+	if err := os.WriteFile(r.file(id, ".paused"), nil, 0o644); err != nil {
+		return err
+	}
+	if err := r.Stop(id); err != nil {
+		os.Remove(r.file(id, ".paused"))
+		return err
+	}
+	return nil
+}
+
+// Resume continues a paused or stopped run with `harbor jobs resume`, which
+// keeps the finished attempts and runs the rest, including those cancelled
+// mid-way, from the start. A run stopped before Harbor wrote its job folder
+// is started again instead.
+func (r *Runner) Resume(id string) error {
+	if !r.launched(id) {
+		return ErrNotStopped
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, alive, _ := r.stateLocked(id); alive {
+		return ErrNotStopped
+	}
+	dir := filepath.Join(r.JobsDir, id)
+	var res jobResult
+	if readJSON(filepath.Join(dir, "result.json"), &res) == nil && res.FinishedAt != nil {
+		return ErrNotStopped
+	}
+	envFile, _ := filepath.Abs(r.EnvFile) // . searches PATH for a bare name
+	var cmd *exec.Cmd
+	switch {
+	case exists(filepath.Join(dir, "config.json")) && r.EnvFile != "" && exists(r.EnvFile):
+		// Unlike run, resume has no --env-file; the shell loads it, so
+		// the key never passes through bench.
+		cmd = exec.Command("/bin/sh", "-c", `set -a && . "$0" && set +a && exec "$@"`,
+			envFile, r.Harbor, "jobs", "resume", "-p", dir)
+	case exists(filepath.Join(dir, "config.json")):
+		cmd = exec.Command(r.Harbor, "jobs", "resume", "-p", dir)
+	default:
+		args := []string{"run", "-c", r.file(id, ".json"), "-y"}
+		if r.EnvFile != "" && exists(r.EnvFile) {
+			args = append(args, "--env-file", r.EnvFile)
+		}
+		cmd = exec.Command(r.Harbor, args...)
+	}
+	if err := r.spawn(id, cmd); err != nil {
+		return err
+	}
+	os.Remove(r.file(id, ".paused"))
+	return nil
+}
+
+func (r *Runner) paused(id string) bool {
+	return r.launched(id) && exists(r.file(id, ".paused"))
+}
+
 // Wait blocks until a run this process started has exited.
 func (r *Runner) Wait(id string) {
 	if rn := r.get(id); rn != nil {
@@ -286,7 +360,13 @@ func (r *Runner) state(id string) (launched, alive bool, out string) {
 	if !r.launched(id) {
 		return false, false, ""
 	}
-	if rn := r.get(id); rn != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stateLocked(id)
+}
+
+func (r *Runner) stateLocked(id string) (launched, alive bool, out string) {
+	if rn := r.runs[id]; rn != nil {
 		select {
 		case <-rn.done:
 		default:
@@ -299,7 +379,8 @@ func (r *Runner) state(id string) (launched, alive bool, out string) {
 }
 
 // pid returns the pid of the job's Harbor if it is still running. The pid
-// counts only while ps shows it running harbor on this job's config, so a
+// counts only while ps shows it running harbor on this job's config, or
+// resuming this job's folder, so a
 // reused pid or an exited Harbor that is not yet reaped does not.
 func (r *Runner) pid(id string) (int, bool) {
 	b, err := os.ReadFile(r.file(id, ".pid"))
@@ -311,7 +392,8 @@ func (r *Runner) pid(id string) (int, bool) {
 		return 0, false
 	}
 	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil || !strings.Contains(string(out), r.file(id, ".json")) {
+	cmdline := string(out)
+	if err != nil || !strings.Contains(cmdline, r.file(id, ".json")) && !strings.HasSuffix(strings.TrimSpace(cmdline), filepath.Join(r.JobsDir, id)) {
 		return 0, false
 	}
 	return pid, true

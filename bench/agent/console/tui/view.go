@@ -173,7 +173,11 @@ func (m *Model) hintLine(width int, menu bool) string {
 	case menu:
 		keys = hints("↑↓", "select", "tab", "complete", "enter", "run", "esc", "close")
 	case m.page == pageRuns && m.focusList:
-		keys = hints("enter", "open in opencode", "↑↓", "select", "esc", "stop this attempt", "ctrl+p", "commands")
+		pause := "pause"
+		if m.job != nil && m.job.Resumable {
+			pause = "resume"
+		}
+		keys = hints("enter", "open in opencode", "↑↓", "select", "p", pause, "esc", "stop", "ctrl+p", "commands")
 	case m.page == pageJobs && m.focusList:
 		keys = hints("enter", "open", "↑↓", "select", "esc", "back", "ctrl+p", "commands")
 	case m.page == pageMatrix && m.focusList:
@@ -340,8 +344,8 @@ func (m *Model) header() (title, right string) {
 		}
 		title = fmt.Sprintf("# %s · %s × %s × %s", base, models, plural(len(arms), "arm", "arms"), plural(max(runs, 1), "run", "runs"))
 		right = fmt.Sprintf("%d of %d done   %s", j.Done, j.Total, dollars(j.Cost))
-		if j.Status == harbor.JobStopped {
-			right = "stopped · " + right
+		if j.Status != harbor.JobRunning && j.Status != harbor.JobDone {
+			right = j.Status + " · " + right
 		}
 		return title, right
 	}
@@ -845,7 +849,7 @@ func (m *Model) jobsBody(width int) []string {
 		}
 		status := sDim.Render(j.Status)
 		switch j.Status {
-		case harbor.JobRunning:
+		case harbor.JobRunning, harbor.JobPausing:
 			status = sPeach.Render(j.Status)
 		case harbor.JobDone:
 			status = sGreen.Render(j.Status)

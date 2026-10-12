@@ -173,6 +173,14 @@ type (
 		job string
 		err error
 	}
+	pausedMsg struct {
+		job string
+		err error
+	}
+	resumedMsg struct {
+		job string
+		err error
+	}
 	eventMsg  event
 	tickMsg   time.Time
 	openedMsg struct{ err error }
@@ -327,6 +335,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ok("Stopping %s: Harbor cancels its attempts and removes their containers (about 15 seconds).", msg.job)
 		}
+	case pausedMsg:
+		if msg.err != nil {
+			m.fail("Couldn't pause %s: %v", msg.job, msg.err)
+		} else {
+			m.ok("Pausing %s: Harbor cancels the attempts in progress (about 15 seconds). /resume continues it.", msg.job)
+		}
+	case resumedMsg:
+		if msg.err != nil {
+			m.fail("Couldn't resume %s: %v", msg.job, msg.err)
+		} else {
+			m.ok("Resumed %s.", msg.job)
+		}
+		return m, m.loadJob(msg.job)
 	case eventMsg:
 		return m, tea.Batch(m.nextEvent(), m.gotEvent(event(msg)))
 	case openedMsg:
@@ -549,7 +570,7 @@ func (m *Model) showPage(p page, echo string) {
 func (m *Model) runningHere() []harbor.Job {
 	var out []harbor.Job
 	for _, j := range m.jobs {
-		if j.Stoppable && j.Status == harbor.JobRunning {
+		if j.Stoppable {
 			out = append(out, j)
 		}
 	}
@@ -645,6 +666,11 @@ func (m *Model) listKey(k tea.KeyMsg) tea.Cmd {
 		case "r":
 			m.showPage(pageResults, "/results")
 			return m.gotJob(*m.job)
+		case "p":
+			if m.job.Resumable {
+				return m.resume(*m.job)
+			}
+			return m.askPause(*m.job)
 		case "q":
 			return m.quit()
 		}
@@ -687,6 +713,64 @@ func (m *Model) askStopAttempt() tea.Cmd {
 		return nil
 	}
 	return m.askStop(*m.job)
+}
+
+// askPause confirms pausing a run whose attempts in progress would start
+// over on resuming.
+func (m *Model) askPause(j harbor.Job) tea.Cmd {
+	if j.Status != harbor.JobRunning {
+		m.fail("%s isn't running.", j.ID)
+		return nil
+	}
+	if !j.Stoppable {
+		m.fail("%s was started by another bench process; only that process can pause it.", j.ID)
+		return nil
+	}
+	running := 0
+	for _, t := range j.Trials {
+		if t.Status == harbor.Running {
+			running++
+		}
+	}
+	pause := func(m *Model) tea.Cmd {
+		return func() tea.Msg { return pausedMsg{j.ID, m.c.pause(m.ctx, j.ID)} }
+	}
+	if running == 0 {
+		return pause(m)
+	}
+	them := "them"
+	if running == 1 {
+		them = "it"
+	}
+	m.confirm = &confirm{
+		text: fmt.Sprintf("Pause %s? Finished attempts are kept; %s start over when you resume, and what was spent on %s is lost.", j.ID,
+			plural(running, "running attempt", "running attempts"), them),
+		choices: []choice{
+			{"y", "pause", pause},
+			{"esc", "keep going", func(*Model) tea.Cmd { return nil }},
+		},
+	}
+	return nil
+}
+
+func (m *Model) resume(j harbor.Job) tea.Cmd {
+	if !j.Resumable {
+		if j.Status == harbor.JobDone {
+			m.fail("%s has finished.", j.ID)
+		} else if j.Status == harbor.JobPausing {
+			m.fail("%s is still pausing; try again in a few seconds.", j.ID)
+		} else if j.Status == harbor.JobRunning {
+			m.fail("%s is running.", j.ID)
+		} else {
+			m.fail("%s wasn't started by bench, so it can't be resumed here.", j.ID)
+		}
+		return nil
+	}
+	if m.status != nil && m.status.JobsWarning != "" {
+		m.fail("%s", m.status.JobsWarning)
+		return nil
+	}
+	return func() tea.Msg { return resumedMsg{j.ID, m.c.resume(m.ctx, j.ID)} }
 }
 
 func (m *Model) askStop(j harbor.Job) tea.Cmd {
