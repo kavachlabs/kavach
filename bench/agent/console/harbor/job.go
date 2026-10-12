@@ -10,6 +10,7 @@
 package harbor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,8 +119,12 @@ type Kavach struct {
 // OpenCode is the agent's opencode-live.json: where the attempt's OpenCode
 // server listens. Export is the path of opencode-session.json, when present.
 type OpenCode struct {
-	URL      string     `json:"url"`
-	Session  string     `json:"session"`
+	URL     string `json:"url"`
+	Session string `json:"session"`
+	// Web is the session's page in OpenCode's web UI. The server's own
+	// address opens on a project list, which a session in a container's
+	// folder is not part of.
+	Web      string     `json:"web,omitempty"`
 	Started  *time.Time `json:"started"`
 	Finished *time.Time `json:"finished"`
 	Export   string     `json:"export,omitempty"`
@@ -204,6 +209,7 @@ type (
 		Session  string `json:"session"`
 		Started  string `json:"started"`
 		Finished string `json:"finished"`
+		Dir      string `json:"dir"`
 	}
 )
 
@@ -611,6 +617,10 @@ func loadTrial(job, dir string) Trial {
 	var live liveFile
 	if readJSON(filepath.Join(dir, "agent", "opencode-live.json"), &live) == nil {
 		t.OpenCode = &OpenCode{URL: live.URL, Session: live.Session, Started: parseTime(live.Started), Finished: parseTime(live.Finished)}
+		if live.URL != "" && live.Session != "" && live.Dir != "" {
+			// The web UI names a project by its folder, base64url-encoded.
+			t.OpenCode.Web = strings.TrimSuffix(live.URL, "/") + "/" + base64.RawURLEncoding.EncodeToString([]byte(live.Dir)) + "/session/" + live.Session
+		}
 	}
 	if export := filepath.Join(dir, "agent", "opencode-session.json"); exists(export) {
 		if t.OpenCode == nil {
