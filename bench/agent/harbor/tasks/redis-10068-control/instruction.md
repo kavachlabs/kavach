@@ -21,3 +21,9 @@ Do not change the tests.
 
 (Upstream issue text, abridged; the full text is in the SWE-bench Multilingual
 record `redis__redis-10068`.)
+
+## Testing
+
+Redis is already built. After a change, `make` rebuilds in a few seconds.
+`./runtest --single unit/type/stream` runs the stream tests in a few seconds.
+The full suite (`./runtest`) takes about 25 minutes here and isn't needed.
