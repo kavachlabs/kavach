@@ -40,12 +40,15 @@ The dependencies are fetched and the tests are compiled; cargo works offline.
 The routing tests run with:
 
 ```
-cargo test -p axum --lib -- routing::tests        # about 20 s after a change to axum/src
+cargo test -p axum --lib -- routing::tests
 ```
 
+It takes about 20 s after a change to `axum/src` (the rebuild; the tests
+themselves take under a second). `routing::tests::logging_rejections` fails
+at the base commit (it needs the `tracing` feature) and is unrelated.
 `cargo test -p axum --lib -- extract::matched_path` covers `MatchedPath`. The
-whole axum test suite (`cargo test -p axum`, with integration tests and
-doctests) takes several minutes and is not needed.
+whole crate's tests and doctests (`cargo test -p axum`) take about a minute,
+also have failures at the base commit, and are not needed.
 
 ## Kavach arm only
 
