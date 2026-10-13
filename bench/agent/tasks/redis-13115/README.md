@@ -136,12 +136,13 @@ From the worktree root, through the shared Docker lock, with `PYTHONPATH=$PWD`:
 
 | Job | Agent | Reward | `kavach diff` (in `kavach.json`) | Time |
 | --- | --- | --- | --- | --- |
-| `redis-13115-oracle-control` | oracle | 1 | `fixed` (41 of 44 / 41) | HARBOR_OC |
-| `redis-13115-oracle-kavach` | oracle | 1 | `fixed` (41 of 44 / 41) | HARBOR_OK |
-| `redis-13115-nop-control` | nop | 0 | `invariant_violated(script-number-contract)@69` | HARBOR_NC |
-| `redis-13115-nop-kavach` | nop | 0 | `invariant_violated(script-number-contract)@69` | HARBOR_NK |
+| `redis-13115-oracle-control` | oracle | 1 | `fixed` (41 of 44 / 41) | 8 min 27 s |
+| `redis-13115-oracle-kavach` | oracle | 1 | `fixed` (41 of 44 / 41) | 5 min 22 s |
+| `redis-13115-nop-control` | nop | 0 | `invariant_violated(script-number-contract)@69` | 1 min 57 s |
+| `redis-13115-nop-kavach` | nop | 0 | `invariant_violated(script-number-contract)@69` | 51 s |
 
-Times include building the images where Docker's cache did not have them.
+Harbor's total runtimes, 2026-10-13, with the VM shared by other jobs; they
+include building the images where Docker's cache did not have them.
 The containers are Linux (Colima, arm64); the fixture was recorded on macOS.
 
 ## The integration (`redis-kavach.patch`)
