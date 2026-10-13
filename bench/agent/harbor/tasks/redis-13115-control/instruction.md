@@ -28,13 +28,13 @@ record `redis__redis-13115`.)
 
 ## Building and testing
 
-Redis is already built; `make -j4` rebuilds what you change in a few seconds.
+Redis is already built; `make -j4` rebuilds what you change in about 10 seconds.
 The scripting tests run with
 
 ```
 ./runtest --single unit/scripting
 ```
 
-in about 30 seconds. Run that. The full suite (`./runtest`, `make test`)
-takes well over 20 minutes and is not needed.
+in under 30 seconds. Run that. The full suite (`./runtest`, `make test`)
+takes about 15 minutes and is not needed.
 
