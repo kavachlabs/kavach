@@ -46,6 +46,46 @@ the protocols directly.
    `kavach replay <fixture> --bin <host command>`, which exits 0 on `fixed`.
    With the Go SDK, `kavachtest.Run` does the same inside `go test`.
 
+## Building a feature
+
+For a feature rather than an incident, the check is a **contract**: traffic
+recorded on the build before the feature, the steps of it that reach the
+feature, and invariants written from the specification (SPEC.md §6.4). The
+`/kavach-implement` command ([commands/kavach-implement.md](commands/kavach-implement.md))
+walks through this loop.
+
+1. **Write the contract before any code.** Record traffic on the current build:
+   realistic inputs for what exists, and inputs that reach the new feature.
+   Declare invariants in the service's code from the specification alone, as
+   an operator would state the feature's contract. Then
+   `kavach contract init --spec SPEC.md --traffic traffic.kavach --feature-match '$.argv[0]=="NEWCMD"' --invariant NAME --invariant-source FILE`.
+   A step that reads what a feature step wrote is a feature step too
+   (`--feature-steps`).
+2. **Check the contract on the current build.**
+   `kavach contract check --old /tmp/old --new /tmp/old` must report
+   `unreached@N` and nothing worse.
+3. **Stop and ask a person to approve it.** Show `kavach contract show`. Never
+   run `kavach contract approve` yourself.
+4. **Implement, then check.**
+   `kavach contract check --old /tmp/old --new /tmp/new --json`. Fix every
+   `regression`, `still_failing`, `invariant_violated` and `variant_failed`;
+   read every changed step against the specification.
+5. **Stop when the rules say so.** Done at `pass`. When `streak` reaches 3 (the
+   same outcome three checks in a row), or after 8 rounds, stop and report what
+   fails. Never edit the contract to make a check pass; if it is wrong, say so.
+6. **Report** the verdict, and each changed step with why the specification
+   calls for it.
+
+| Verdict | Meaning | What to do |
+| --- | --- | --- |
+| `pass` | Approved contract; no regressions; every feature step changed; invariants hold on the traffic and on every feature variant. | Report the changed steps. |
+| `regression@N` | Step `N` is not a feature step, and its outputs changed. | Fix it, or say why the contract should mark it. |
+| `unreached@N` | Feature step `N` produced the old build's outputs. | The feature is not wired in for that input. |
+| `variant_failed(K)@N` | A variant of a feature step broke an invariant or failed. | Replay the saved variant; generalize. |
+| `missing_invariant(X)` | The build does not declare invariant `X`. | Declare it as the specification states it. |
+| `baseline_mismatch(V)` | `--old` does not replay the traffic. | Wrong old build, or the traffic is not from it. |
+| `unapproved`, `stale_lock` | The build meets the contract, but no one approved it, or it changed since. | Ask the person. |
+
 ## Verdicts
 
 | Verdict | Meaning | What to do |
@@ -92,6 +132,10 @@ claude mcp add kavach -- kavach mcp
 | `kavach_list_incidents` | `dir` (default: working directory) | every `*.kavach` under it, with the recorded failure's kind, seq and message |
 | `kavach_replay` | `fixture`, `bin` (default `$KAVACH_BIN`), `include_steps` | `verdict`, `passed`, `detail`, `recorded_failure` |
 | `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants |
+| `kavach_contract_show` | `dir` (default `./contract`) | the contract, every input with the feature steps marked, and the lock |
+| `kavach_contract_check` | `dir`, `new`, `old`, `no_variants` | `verdict`, `passed`, and `report`: changed and unreached steps, variant failures, `round` and `streak` |
+
+There is no tool to approve a contract: a person does that.
 
 A verdict that is not a pass is a normal tool result; `isError` is set only
 when a tool could not run (missing file, a host command that does not start as a host).

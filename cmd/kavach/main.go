@@ -37,12 +37,15 @@ Usage:
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <host-command> [--json]
   kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--keep DIR] [--json]
+  kavach contract init|show|approve|check ...
   kavach mcp
   kavach version
 
 list finds fixtures (*.kavach) under dir (default: the current directory).
-mcp serves kavach_list_incidents, kavach_replay and kavach_diff to an AI agent
-as a Model Context Protocol server on stdin/stdout.
+contract checks a build against a behaviour contract when adding a feature;
+kavach contract help says more. mcp serves kavach_list_incidents,
+kavach_replay, kavach_diff, kavach_contract_show and kavach_contract_check to
+an AI agent as a Model Context Protocol server on stdin/stdout.
 
 A host command starts a service that runs its own handler under the host
 protocol (SPEC.md section 9), in any language: ./ledger, "python -m ledger",
@@ -93,6 +96,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdDiff(u, args, stdout, stderr)
 	case "list":
 		return cmdList(u, args, stdout, stderr)
+	case "contract":
+		return cmdContract(u, args, os.Stdin, stdout, stderr)
 	case "mcp":
 		return cmdMCP(args, os.Stdin, stdout, stderr)
 	case "version":
