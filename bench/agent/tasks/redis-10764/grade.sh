@@ -24,7 +24,7 @@ fi
 make -j4 >&3 2>&3 || result true false fail - ""
 
 git apply /task/hidden-test.patch
-out=$(TERM=dumb ./runtest --single unit/type/zset --only BZMPOP 2>&1)
+out=$(TERM=dumb ./runtest --single unit/type/zset --only BZMPOP --timeout 60 2>&1)
 echo "$out" >&3
 grep -q 'All tests passed' <<<"$out" && hidden=pass || hidden=fail
 git checkout -q -- tests

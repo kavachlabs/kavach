@@ -57,6 +57,8 @@ The tree is already built; `make` rebuilds only what you change (about
 ```
 
 in about 3 seconds. `--only` takes a regular expression over test names, so
-`--only BZPOP` runs the BZPOPMIN/BZPOPMAX tests. The whole `unit/type/zset`
-file takes about 15 seconds. Redis's full test suite (`./runtest` or
+`--only BZPOP` runs the BZPOPMIN/BZPOPMAX tests. A test that waits for a
+reply that never comes stalls the run for 20 minutes by default; add
+`--timeout 60` to give up after a minute. The whole `unit/type/zset` file
+takes about 15 seconds. Redis's full test suite (`./runtest` or
 `make test`) takes tens of minutes and is not needed for this task.

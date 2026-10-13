@@ -79,7 +79,7 @@ done
 hidden() {
   git -C "$1" apply "$TASK/hidden/test.patch"
   local out
-  out=$(cd "$1" && TERM=dumb ./runtest --single unit/type/zset --only BZMPOP --baseport "$TESTPORT" 2>&1 || true)
+  out=$(cd "$1" && TERM=dumb ./runtest --single unit/type/zset --only BZMPOP --timeout 60 --baseport "$TESTPORT" 2>&1 || true)
   git -C "$1" checkout -q -- tests/unit/type/zset.tcl
   if grep -q 'All tests passed' <<<"$out"; then echo pass; else echo fail; fi
 }
