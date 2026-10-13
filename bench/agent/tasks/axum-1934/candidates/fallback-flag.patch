@@ -1,0 +1,116 @@
+diff --git a/axum/src/routing/mod.rs b/axum/src/routing/mod.rs
+index 52d2042..145fbf5 100644
+--- a/axum/src/routing/mod.rs
++++ b/axum/src/routing/mod.rs
+@@ -108,7 +108,7 @@ where
+     pub fn new() -> Self {
+         let mut this = Self {
+             path_router: Default::default(),
+-            fallback_router: Default::default(),
++            fallback_router: PathRouter::new_fallback(),
+             default_fallback: true,
+         };
+         this = this.fallback_service(NotFound);
+diff --git a/axum/src/routing/path_router.rs b/axum/src/routing/path_router.rs
+index 1790b32..1a3ea84 100644
+--- a/axum/src/routing/path_router.rs
++++ b/axum/src/routing/path_router.rs
+@@ -15,6 +15,9 @@ pub(super) struct PathRouter<S = (), B = Body> {
+     routes: HashMap<RouteId, Endpoint<S, B>>,
+     node: Arc<Node>,
+     prev_route_id: RouteId,
++    /// The router holds a `Router`'s fallback. Fallbacks are not routes, so
++    /// they don't set `MatchedPath`.
++    is_fallback: bool,
+ }
+ 
+ impl<S, B> PathRouter<S, B>
+@@ -22,6 +25,13 @@ where
+     B: HttpBody + Send + 'static,
+     S: Clone + Send + Sync + 'static,
+ {
++    pub(super) fn new_fallback() -> Self {
++        Self {
++            is_fallback: true,
++            ..Default::default()
++        }
++    }
++
+     pub(super) fn route(
+         &mut self,
+         path: &str,
+@@ -112,6 +122,7 @@ where
+             routes,
+             node,
+             prev_route_id: _,
++            is_fallback: _,
+         } = other;
+ 
+         for (id, route) in routes {
+@@ -139,6 +150,7 @@ where
+             routes,
+             node,
+             prev_route_id: _,
++            is_fallback: _,
+         } = router;
+ 
+         for (id, endpoint) in routes {
+@@ -215,6 +227,7 @@ where
+             routes,
+             node: self.node,
+             prev_route_id: self.prev_route_id,
++            is_fallback: self.is_fallback,
+         }
+     }
+ 
+@@ -247,6 +260,7 @@ where
+             routes,
+             node: self.node,
+             prev_route_id: self.prev_route_id,
++            is_fallback: self.is_fallback,
+         }
+     }
+ 
+@@ -269,6 +283,7 @@ where
+             routes,
+             node: self.node,
+             prev_route_id: self.prev_route_id,
++            is_fallback: self.is_fallback,
+         }
+     }
+ 
+@@ -294,11 +309,13 @@ where
+                 let id = *match_.value;
+ 
+                 #[cfg(feature = "matched-path")]
+-                crate::extract::matched_path::set_matched_path_for_request(
+-                    id,
+-                    &self.node.route_id_to_path,
+-                    req.extensions_mut(),
+-                );
++                if !self.is_fallback {
++                    crate::extract::matched_path::set_matched_path_for_request(
++                        id,
++                        &self.node.route_id_to_path,
++                        req.extensions_mut(),
++                    );
++                }
+ 
+                 url_params::insert_url_params(req.extensions_mut(), match_.params);
+ 
+@@ -353,6 +370,7 @@ impl<B, S> Default for PathRouter<S, B> {
+             routes: Default::default(),
+             node: Default::default(),
+             prev_route_id: RouteId(0),
++            is_fallback: false,
+         }
+     }
+ }
+@@ -372,6 +390,7 @@ impl<S, B> Clone for PathRouter<S, B> {
+             routes: self.routes.clone(),
+             node: self.node.clone(),
+             prev_route_id: self.prev_route_id,
++            is_fallback: self.is_fallback,
+         }
+     }
+ }

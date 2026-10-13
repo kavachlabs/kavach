@@ -1,0 +1,18 @@
+diff --git a/axum/src/routing/path_router.rs b/axum/src/routing/path_router.rs
+index 1790b32..94e0efb 100644
+--- a/axum/src/routing/path_router.rs
++++ b/axum/src/routing/path_router.rs
+@@ -293,13 +293,6 @@ where
+             Ok(match_) => {
+                 let id = *match_.value;
+ 
+-                #[cfg(feature = "matched-path")]
+-                crate::extract::matched_path::set_matched_path_for_request(
+-                    id,
+-                    &self.node.route_id_to_path,
+-                    req.extensions_mut(),
+-                );
+-
+                 url_params::insert_url_params(req.extensions_mut(), match_.params);
+ 
+                 let endpont = self
