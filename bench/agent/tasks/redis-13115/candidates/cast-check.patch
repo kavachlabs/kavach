@@ -1,0 +1,23 @@
+diff --git a/src/script_lua.c b/src/script_lua.c
+index eca21d60c..e31e13893 100644
+--- a/src/script_lua.c
++++ b/src/script_lua.c
+@@ -819,8 +819,16 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
+             /* We can't use lua_tolstring() for number -> string conversion
+              * since Lua uses a format specifier that loses precision. */
+             lua_Number num = lua_tonumber(lua,j+1);
+-            obj_len = fpconv_dtoa((double)num, dbuf);
+-            dbuf[obj_len] = '\0';
++            /* A whole number in the long long range is printed as an
++             * integer, so commands that take integers accept it. */
++            if (num >= -9223372036854775808.0 && num < 9223372036854775808.0 &&
++                num == (lua_Number)(long long)num)
++            {
++                obj_len = ll2string(dbuf,sizeof(dbuf),(long long)num);
++            } else {
++                obj_len = fpconv_dtoa((double)num, dbuf);
++                dbuf[obj_len] = '\0';
++            }
+             obj_s = dbuf;
+         } else {
+             obj_s = (char*)lua_tolstring(lua,j+1,&obj_len);

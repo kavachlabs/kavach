@@ -1,0 +1,564 @@
+diff --git a/src/Makefile b/src/Makefile
+index 4e7276791..8a1f0199c 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -122,6 +122,12 @@ endif
+ FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
+ FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
+ FINAL_LIBS=-lm
++
++# Kavach (https://github.com/kavachlabs/kavach): KAVACH_SDK is sdk/c, KAVACH_LIB the built libkavach.a
++KAVACH_SDK?=../../kavach/sdk/c
++KAVACH_LIB?=../../kavach-c/libkavach.a
++FINAL_CFLAGS+= -I$(KAVACH_SDK)/include
++FINAL_LIBS+= $(KAVACH_LIB) -lpthread
+ DEBUG=-g -ggdb
+ 
+ # Linux ARM32 needs -latomic at linking time
+@@ -348,7 +354,7 @@ endif
+ 
+ REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
+ REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
+-REDIS_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
++REDIS_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o kavach.o
+ REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
+ REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
+ REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
+diff --git a/src/kavach.c b/src/kavach.c
+new file mode 100644
+index 000000000..6e3c65665
+--- /dev/null
++++ b/src/kavach.c
+@@ -0,0 +1,430 @@
++/* Kavach integration: record commands as steps and replay them as a host.
++ *
++ * Each command that reaches call() from a network client is one Kavach step.
++ * The step's input is the command's argv as JSON, {"argv":["EVAL","...","0",...]},
++ * with "db":N first when the client has selected a database other than 0,
++ * and its output is the RESP2 reply. The command runs on a shadow client, the
++ * same way RM_Call runs one, both when recording and when replaying, so the two
++ * execute the same code. The live client then receives the shadow's reply.
++ *
++ * Clock reads made during a step (ustime(), and so mstime() and the cached
++ * server time) go through Kavach. Nothing else is routed: random(), the
++ * monotonic clock, and the LRU clock that serverCron caches are not.
++ *
++ * Commands that a script runs during a step are not steps; the invariant
++ * checks them (kavachAfterProc).
++ *
++ * Recording starts when KAVACH_REDIS_DIR names a journal directory and the
++ * dataset is empty at startup. `redis-server ... kavach-host` replays: it starts
++ * without listening or persistence and serves the Kavach host protocol. */
++
++#include "server.h"
++#include "kavach.h"
++
++#include <ctype.h>
++#include <errno.h>
++#include <math.h>
++
++#include <kavach/kavach.h>
++
++void freeClientArgv(client *c);
++
++static kavach_env *cur_env = NULL;
++static int host_mode = 0;
++static int saved_stdout = -1;
++static kavach_recorder *recorder = NULL;
++
++/* ---- clock ---- */
++
++int kavachClock(long long *us) {
++    if (!cur_env) return 0;
++    *us = kavach_now_ns(cur_env) / 1000;
++    return 1;
++}
++
++/* ---- input encoding: {"db":N,"argv":[...]} with bytes >= 0x80 as \u00XX ---- */
++
++static sds encodeArgv(int db, robj **argv, int argc) {
++    sds s = db ? sdscatprintf(sdsempty(), "{\"db\":%d,\"argv\":[", db) : sdsnew("{\"argv\":[");
++    for (int i = 0; i < argc; i++) {
++        robj *o = getDecodedObject(argv[i]);
++        const unsigned char *p = o->ptr;
++        size_t n = sdslen(o->ptr);
++        if (i) s = sdscatlen(s, ",", 1);
++        s = sdscatlen(s, "\"", 1);
++        for (size_t j = 0; j < n; j++) {
++            unsigned char ch = p[j];
++            if (ch == '"' || ch == '\\') s = sdscatprintf(s, "\\%c", ch);
++            else if (ch < 0x20 || ch >= 0x7f) s = sdscatprintf(s, "\\u%04x", ch);
++            else s = sdscatlen(s, (char *)&ch, 1);
++        }
++        s = sdscatlen(s, "\"", 1);
++        decrRefCount(o);
++    }
++    return sdscat(s, "]}");
++}
++
++static const char *skipWs(const char *p, const char *e) {
++    while (p < e && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
++    return p;
++}
++
++static int hexval(char c) {
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++/* Parses a JSON string at *pp into an sds. Escapes above ÿ are rejected. */
++static sds parseString(const char **pp, const char *e) {
++    const char *p = *pp;
++    if (p >= e || *p != '"') return NULL;
++    p++;
++    sds s = sdsempty();
++    while (p < e && *p != '"') {
++        if (*p != '\\') { s = sdscatlen(s, p++, 1); continue; }
++        if (++p >= e) break;
++        char c = *p++, out;
++        switch (c) {
++        case '"': case '\\': case '/': out = c; break;
++        case 'b': out = '\b'; break;
++        case 'f': out = '\f'; break;
++        case 'n': out = '\n'; break;
++        case 'r': out = '\r'; break;
++        case 't': out = '\t'; break;
++        case 'u': {
++            int v = 0;
++            for (int k = 0; k < 4; k++) {
++                int h = p < e ? hexval(*p++) : -1;
++                if (h < 0) { sdsfree(s); return NULL; }
++                v = v * 16 + h;
++            }
++            if (v > 0xff) { sdsfree(s); return NULL; }
++            out = (char)v;
++            break;
++        }
++        default: sdsfree(s); return NULL;
++        }
++        s = sdscatlen(s, &out, 1);
++    }
++    if (p >= e) { sdsfree(s); return NULL; }
++    *pp = p + 1;
++    return s;
++}
++
++/* Decodes {"db":N,"argv":[...]}, where db is optional. Returns argc, or -1. */
++static int decodeArgv(const uint8_t *data, size_t len, int *dbp, robj ***argvp) {
++    const char *p = (const char *)data, *e = p + len;
++    robj **argv = NULL;
++    int argc = -1;
++    p = skipWs(p, e);
++    if (p >= e || *p++ != '{') return -1;
++    for (;;) {
++        p = skipWs(p, e);
++        if (p < e && *p == '}') break;
++        sds key = parseString(&p, e);
++        if (!key) goto fail;
++        p = skipWs(p, e);
++        if (p >= e || *p++ != ':') { sdsfree(key); goto fail; }
++        p = skipWs(p, e);
++        int is_argv = !strcmp(key, "argv"), is_db = !strcmp(key, "db");
++        sdsfree(key);
++        if (is_db) {
++            char *end;
++            long v = strtol(p, &end, 10);
++            if (end == p || end > e || v < 0 || v >= server.dbnum) goto fail;
++            *dbp = (int)v;
++            p = skipWs(end, e);
++            if (p < e && *p == ',') p++;
++            continue;
++        }
++        if (!is_argv || p >= e || *p != '[') goto fail; /* only db and argv are defined */
++        p++;
++        if (argc >= 0) goto fail;
++        argc = 0;
++        for (;;) {
++            p = skipWs(p, e);
++            if (p < e && *p == ']') { p++; break; }
++            if (argc) {
++                if (p >= e || *p++ != ',') goto fail;
++                p = skipWs(p, e);
++            }
++            sds a = parseString(&p, e);
++            if (!a) goto fail;
++            argv = zrealloc(argv, sizeof(robj *) * (argc + 1));
++            argv[argc++] = createObject(OBJ_STRING, a);
++        }
++        p = skipWs(p, e);
++        if (p < e && *p == ',') { p++; continue; }
++    }
++    if (argc <= 0) goto fail;
++    *argvp = argv;
++    return argc;
++fail:
++    for (int i = 0; i < argc; i++) decrRefCount(argv[i]);
++    zfree(argv);
++    return -1;
++}
++
++/* ---- the script number contract ----
++ *
++ * Lua has a single number type. A script passes numbers to redis.call and
++ * redis.pcall as command arguments, and a Lua number whose value is a whole
++ * number in the 64-bit range is an integer to Redis: a command run from a
++ * script must not reject such a value as "not an integer". The check sees
++ * the arguments as the command received them, so it treats any argument that
++ * is a well-formed spelling of such a value (other than the plain decimal
++ * form, which Redis's integer parser accepts) as a number the script passed.
++ * A script that passes such a string itself would also be flagged. */
++
++static sds last_reply = NULL;
++/* Returns a malloc'd copy of s and frees s. */
++static char *detailOf(sds s) {
++    char *d = strdup(s);
++    sdsfree(s);
++    return d;
++}
++
++static sds num_violation = NULL; /* the first violation in the current step */
++
++static void numReset(void) {
++    sdsfree(num_violation);
++    num_violation = NULL;
++}
++
++/* Returns 1 if s is a number with a whole value in the long long range that
++ * Redis's integer parser does not accept as written, and sets *v. */
++static int wholeNumberNotInteger(const char *s, size_t len, long long *v) {
++    long long ll;
++    if (string2ll(s, len, &ll)) return 0;
++    if (len == 0 || len >= 64 || isspace((unsigned char)s[0])) return 0;
++    char buf[64], *end;
++    memcpy(buf, s, len);
++    buf[len] = '\0';
++    errno = 0;
++    double d = strtod(buf, &end);
++    if (end != buf + len || errno == ERANGE || !isfinite(d)) return 0;
++    if (d != floor(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) return 0;
++    *v = (long long)d;
++    return 1;
++}
++
++/* Called by call() after each command's proc. Commands run by a script during
++ * a step are checked here; the invariant reports what they found. */
++void kavachAfterProc(client *c) {
++    if (!cur_env || num_violation || !(c->flags & CLIENT_SCRIPT)) return;
++    if (c->bufpos == 0 || c->buf[0] != '-') return;
++    if (!memmem(c->buf, c->bufpos, "not an integer", 14)) return;
++    for (int i = 1; i < c->argc; i++) {
++        robj *o = getDecodedObject(c->argv[i]);
++        long long v;
++        if (wholeNumberNotInteger(o->ptr, sdslen(o->ptr), &v)) {
++            sds cmd = sdsnew(c->argv[0]->ptr);
++            sdstoupper(cmd);
++            num_violation = sdscatprintf(sdsempty(),
++                "%s, run from a script, rejected argument %d '%s' (the number %lld) as not an integer",
++                cmd, i, (char *)o->ptr, v);
++            sdsfree(cmd);
++            decrRefCount(o);
++            return;
++        }
++        decrRefCount(o);
++    }
++}
++
++static int numInvariant(void *state, void *arg, char **detail) {
++    UNUSED(state); UNUSED(arg);
++    if (!num_violation) return KAVACH_OK;
++    *detail = detailOf(sdsdup(num_violation));
++    return KAVACH_ERROR;
++}
++
++static const kavach_invariant invariants[] = {
++    {"script-number-contract", numInvariant, NULL},
++};
++
++/* ---- the handler ---- */
++
++static client *shadow = NULL;
++
++static client *shadowClient(void) {
++    if (!shadow) {
++        shadow = createClient(NULL);
++        shadow->flags |= CLIENT_MODULE|CLIENT_DENY_BLOCKING;
++        shadow->user = NULL; /* root */
++        shadow->resp = 2;
++        selectDb(shadow, 0);
++    }
++    return shadow;
++}
++
++static int handle(void *state, kavach_env *env, const kavach_input *in) {
++    UNUSED(state);
++    robj **argv;
++    int db = 0;
++    int argc = decodeArgv(in->data, in->len, &db, &argv);
++    if (argc < 0) return kavach_error(env, "input is not {\"db\":N,\"argv\":[...]}");
++
++    client *c = shadowClient();
++    selectDb(c, db);
++    c->argv = argv;
++    c->argc = argc;
++    c->argv_len = argc;
++    sdsfree(last_reply);
++    numReset();
++
++    struct redisCommand *cmd = lookupCommand(argv, argc);
++    cur_env = env;
++    if (!cmd) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR unknown command '%.128s'\r\n", (char *)argv[0]->ptr);
++    } else if ((cmd->arity > 0 && cmd->arity != argc) || argc < -cmd->arity) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR wrong number of arguments for '%s' command\r\n", cmd->fullname);
++    } else {
++        c->cmd = c->lastcmd = c->realcmd = cmd;
++        client *old = server.current_client;
++        server.current_client = c;
++        call(c, CMD_CALL_FULL);
++        server.current_client = old;
++        last_reply = sdsnewlen(c->buf, c->bufpos);
++        c->bufpos = 0;
++        while (listLength(c->reply)) {
++            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
++            last_reply = sdscatlen(last_reply, o->buf, o->used);
++            listDelNode(c->reply, listFirst(c->reply));
++        }
++        c->reply_bytes = 0;
++    }
++    cur_env = NULL;
++    freeClientArgv(c);
++    return kavach_emit(env, "reply", last_reply, sdslen(last_reply), KAVACH_LOCAL);
++}
++
++static kavach_handler makeHandler(void) {
++    kavach_handler h = {0};
++    h.handle = handle;
++    h.invariants = invariants;
++    h.n_invariants = sizeof invariants / sizeof invariants[0];
++    return h;
++}
++
++/* ---- recording ---- */
++
++int kavachWantsCall(client *c) {
++    if (!recorder || c->resp != 2) return 0;
++    if ((c->flags & (CLIENT_MULTI|CLIENT_SLAVE|CLIENT_MASTER|CLIENT_PUBSUB))) return 0;
++    /* Commands whose effect is on the connection, or that may block, run as usual. */
++    if (c->cmd->flags & (CMD_PUBSUB|CMD_ADMIN)) return 0;
++    const char *name = c->cmd->parent ? c->cmd->parent->declared_name : c->cmd->declared_name;
++    /* Scripts are steps; other commands that scripts may not call are not. */
++    static const char *scripts[] = {"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro", NULL};
++    int script = 0;
++    for (int i = 0; scripts[i]; i++)
++        if (!strcasecmp(name, scripts[i])) script = 1;
++    if ((c->cmd->flags & CMD_NOSCRIPT) && !script) return 0;
++    static const char *own[] = {
++        "multi", "exec", "discard", "watch", "unwatch", "select", "reset", "quit", "hello",
++        "auth", "client", "readonly", "readwrite", "asking", "wait",
++        "blpop", "brpop", "brpoplpush", "blmove", "blmpop", "bzpopmin", "bzpopmax", "bzmpop", NULL};
++    for (int i = 0; own[i]; i++)
++        if (!strcasecmp(name, own[i])) return 0;
++    if (!strcasecmp(name, "xread") || !strcasecmp(name, "xreadgroup"))
++        for (int i = 1; i < c->argc; i++)
++            if (!strcasecmp(c->argv[i]->ptr, "block")) return 0;
++    return 1;
++}
++
++/* Runs the client's command as a recorded step and replies to the client. */
++void kavachCall(client *c) {
++    sds data = encodeArgv(c->db->id, c->argv, c->argc);
++    char pos[32];
++    ll2string(pos, sizeof pos, (long long)c->id);
++    kavach_input in = {"client", pos, (const uint8_t *)data, sdslen(data)};
++    kavach_result res;
++    kavach_recorder_step(recorder, &in, &res);
++    if (res.outcome != KAVACH_OK)
++        serverLog(LL_WARNING, "kavach: step failed: %s%s%s", res.message ? res.message : "",
++                  res.detail ? ": " : "", res.detail ? res.detail : "");
++    kavach_result_clear(&res);
++    sdsfree(data);
++    if (last_reply) addReplyProto(c, last_reply, sdslen(last_reply));
++}
++
++static void kavachStopRecorder(void) {
++    if (recorder) kavach_recorder_free(recorder);
++    recorder = NULL;
++}
++
++void kavachStartRecorder(void) {
++    const char *dir = getenv("KAVACH_REDIS_DIR");
++    if (!dir || !*dir) return;
++    long long keys = 0;
++    for (int j = 0; j < server.dbnum; j++) keys += kvstoreSize(server.db[j].keys);
++    if (keys) {
++        serverLog(LL_WARNING, "kavach: not recording: the dataset is not empty at startup");
++        return;
++    }
++    kavach_handler h = makeHandler();
++    kavach_recorder_options o = {0};
++    o.service = "redis";
++    o.dir = dir;
++    o.handler_id = redisGitSHA1();
++    char *err = NULL;
++    if (kavach_recorder_new(&h, &o, &recorder, &err) != KAVACH_OK) {
++        serverLog(LL_WARNING, "kavach: not recording: %s", err ? err : "unknown error");
++        kavach_free(err);
++        recorder = NULL;
++        return;
++    }
++    atexit(kavachStopRecorder); /* SHUTDOWN ends the process with exit() */
++    serverLog(LL_NOTICE, "kavach: recording into %s", dir);
++}
++
++/* ---- host mode ---- */
++
++int kavachHostArgs(int *argc, char **argv) {
++    if (*argc < 2 || strcmp(argv[*argc - 1], "kavach-host")) return 0;
++    host_mode = 1;
++    argv[--(*argc)] = NULL;
++    /* Keep stdout for the protocol; Redis logs to stderr until the host starts. */
++    saved_stdout = dup(1);
++    dup2(2, 1);
++    return 1;
++}
++
++int kavachHostMode(void) { return host_mode; }
++
++/* Host mode overrides: no listening, no persistence, no background. */
++void kavachHostConfig(void) {
++    if (!host_mode) return;
++    server.port = 0;
++    server.tls_port = 0;
++    zfree(server.unixsocket);
++    server.unixsocket = NULL;
++    resetServerSaveParams();
++    server.aof_enabled = 0;
++    server.aof_state = AOF_OFF;
++    server.daemonize = 0;
++    server.cluster_enabled = 0;
++    zfree(server.pidfile);
++    server.pidfile = NULL;
++}
++
++static int factory(void *user, kavach_handler *out) {
++    UNUSED(user);
++    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
++    if (shadow) { freeClient(shadow); shadow = NULL; }
++    numReset();
++    *out = makeHandler();
++    return KAVACH_OK;
++}
++
++void kavachRunHost(char *argv0) {
++    char *argv[] = {argv0, "kavach-host", NULL};
++    kavach_host_options o = {0};
++    o.sdk = "kavach-c+redis/0.1.0";
++    dup2(saved_stdout, 1);
++    close(saved_stdout);
++    kavach_maybe_host(2, argv, factory, &o);
++    exit(1); /* not reached */
++}
+diff --git a/src/kavach.h b/src/kavach.h
+new file mode 100644
+index 000000000..433e6c1c6
+--- /dev/null
++++ b/src/kavach.h
+@@ -0,0 +1,16 @@
++#ifndef __REDIS_KAVACH_H
++#define __REDIS_KAVACH_H
++
++struct client;
++
++int kavachClock(long long *us);
++int kavachHostArgs(int *argc, char **argv);
++int kavachHostMode(void);
++void kavachHostConfig(void);
++void kavachRunHost(char *argv0);
++void kavachStartRecorder(void);
++int kavachWantsCall(struct client *c);
++void kavachCall(struct client *c);
++void kavachAfterProc(struct client *c);
++
++#endif
+diff --git a/src/server.c b/src/server.c
+index d1093feba..a80225361 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -29,6 +29,7 @@
+ 
+ #include "server.h"
+ #include "monotonic.h"
++#include "kavach.h"
+ #include "cluster.h"
+ #include "slowlog.h"
+ #include "bio.h"
+@@ -219,6 +220,7 @@ long long ustime(void) {
+     struct timeval tv;
+     long long ust;
+ 
++    if (kavachClock(&ust)) return ust;
+     gettimeofday(&tv, NULL);
+     ust = ((long long)tv.tv_sec)*1000000;
+     ust += tv.tv_usec;
+@@ -2851,7 +2853,7 @@ void initListeners(void) {
+        listen_fds += listener->count;
+     }
+ 
+-    if (listen_fds == 0) {
++    if (listen_fds == 0 && !kavachHostMode()) {
+         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
+         exit(1);
+     }
+@@ -3557,6 +3559,7 @@ void call(client *c, int flags) {
+         monotonic_start = getMonotonicUs();
+ 
+     c->cmd->proc(c);
++    kavachAfterProc(c);
+ 
+     /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
+     if (reprocessing_command) c->flags &= ~CLIENT_REPROCESSING_COMMAND;
+@@ -4186,7 +4189,8 @@ int processCommand(client *c) {
+     } else {
+         int flags = CMD_CALL_FULL;
+         if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
+-        call(c,flags);
++        if (kavachWantsCall(c) && !client_reprocessing_command) kavachCall(c);
++        else call(c,flags);
+         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand())
+             handleClientsBlockedOnKeys();
+     }
+@@ -6851,6 +6855,8 @@ int main(int argc, char **argv) {
+     int j;
+     char config_from_stdin = 0;
+ 
++    kavachHostArgs(&argc, argv);
++
+ #ifdef REDIS_TEST
+     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
+     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
+@@ -7070,6 +7076,7 @@ int main(int argc, char **argv) {
+         sdsfree(options);
+     }
+     if (server.sentinel_mode) sentinelCheckConfigFile();
++    kavachHostConfig();
+ 
+     /* Do system checks */
+ #ifdef __linux__
+@@ -7135,6 +7142,7 @@ int main(int argc, char **argv) {
+         clusterInitLast();
+     }
+     InitServerLast();
++    if (kavachHostMode()) kavachRunHost(argv[0]);
+ 
+     if (!server.sentinel_mode) {
+         /* Things not needed when running in Sentinel mode. */
+@@ -7179,6 +7187,7 @@ int main(int argc, char **argv) {
+     redisSetCpuAffinity(server.server_cpulist);
+     setOOMScoreAdj(-1);
+ 
++    kavachStartRecorder();
+     aeMain(server.el);
+     aeDeleteEventLoop(server.el);
+     return 0;
