@@ -1,0 +1,661 @@
+diff --git a/src/Makefile b/src/Makefile
+index e52f4f08d..a8c5cee09 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -138,6 +138,12 @@ endif
+ FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+ FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
+ FINAL_LIBS=-lm
++
++# Kavach (https://github.com/kavachlabs/kavach): KAVACH_SDK is sdk/c, KAVACH_LIB the built libkavach.a
++KAVACH_SDK?=../../kavach/sdk/c
++KAVACH_LIB?=../../kavach-c/libkavach.a
++FINAL_CFLAGS+= -I$(KAVACH_SDK)/include
++FINAL_LIBS+= $(KAVACH_LIB) -lpthread
+ DEBUG=-g -ggdb
+ 
+ # Linux ARM32 needs -latomic at linking time
+@@ -416,7 +422,7 @@ endif
+ ENGINE_NAME=valkey
+ SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
+ ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
+-ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o rdma.o
++ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o rdma.o kavach.o
+ ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
+ ENGINE_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o serverassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
+ ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
+diff --git a/src/evict.c b/src/evict.c
+index eecd000a4..0da2148e9 100644
+--- a/src/evict.c
++++ b/src/evict.c
+@@ -31,6 +31,7 @@
+  */
+ 
+ #include "server.h"
++#include "kavach.h"
+ #include "bio.h"
+ #include "script.h"
+ #include <math.h>
+@@ -79,6 +80,7 @@ unsigned int getLRUClock(void) {
+  * precomputed value, otherwise we need to resort to a system call. */
+ unsigned int LRU_CLOCK(void) {
+     unsigned int lruclock;
++    if (kavachLRUClock(&lruclock)) return lruclock;
+     if (1000 / server.hz <= LRU_CLOCK_RESOLUTION) {
+         lruclock = server.lruclock;
+     } else {
+diff --git a/src/kavach.c b/src/kavach.c
+new file mode 100644
+index 000000000..cd136b1a7
+--- /dev/null
++++ b/src/kavach.c
+@@ -0,0 +1,506 @@
++/* Kavach integration: record commands as steps and replay them as a host.
++ *
++ * Each command that reaches call() from a network client is one Kavach step.
++ * The step's input is the command's argv as JSON, {"argv":["SET","k","v"]},
++ * with "db":N first when the client has selected a database other than 0, and
++ * "no_touch":true when the client is in no-touch mode (CLIENT NO-TOUCH ON). Its
++ * output is the RESP2 reply. The command runs on a shadow client, the same way
++ * VM_Call runs one, both when recording and when replaying, so the two execute
++ * the same code. The live client then receives the shadow's reply.
++ *
++ * Clock reads made during a step (ustime(), and so mstime() and the cached
++ * server time) go through Kavach. The LRU clock, which keys' last access times
++ * are kept in, is derived from the step's cached time during a step. Nothing
++ * else is routed: random(), the monotonic clock and the dict hash seed are not.
++ *
++ * Recording starts when KAVACH_VALKEY_DIR names a journal directory and the
++ * dataset is empty at startup. `valkey-server ... kavach-host` replays: it
++ * starts without listening or persistence and serves the Kavach host
++ * protocol. */
++
++#include "server.h"
++#include "kavach.h"
++
++#include <kavach/kavach.h>
++
++static kavach_env *cur_env = NULL;
++static int host_mode = 0;
++static int saved_stdout = -1;
++static kavach_recorder *recorder = NULL;
++
++/* ---- clock ---- */
++
++int kavachClock(long long *us) {
++    if (!cur_env) return 0;
++    *us = kavach_now_ns(cur_env) / 1000;
++    return 1;
++}
++
++/* During a step the LRU clock is the step's cached time (set from the Kavach
++ * clock when call() enters the command), not the value serverCron caches. It
++ * reads no clock of its own, so it adds no reads to the journal. */
++int kavachLRUClock(unsigned int *lru) {
++    if (!cur_env) return 0;
++    *lru = (server.mstime / LRU_CLOCK_RESOLUTION) & LRU_CLOCK_MAX;
++    return 1;
++}
++
++/* ---- input encoding: {"db":N,"no_touch":true,"argv":[...]} with bytes >= 0x80 as \u00XX ---- */
++
++static sds encodeInput(int db, int no_touch, robj **argv, int argc) {
++    sds s = sdsnew("{");
++    if (db) s = sdscatprintf(s, "\"db\":%d,", db);
++    if (no_touch) s = sdscat(s, "\"no_touch\":true,");
++    s = sdscat(s, "\"argv\":[");
++    for (int i = 0; i < argc; i++) {
++        robj *o = getDecodedObject(argv[i]);
++        const unsigned char *p = o->ptr;
++        size_t n = sdslen(o->ptr);
++        if (i) s = sdscatlen(s, ",", 1);
++        s = sdscatlen(s, "\"", 1);
++        for (size_t j = 0; j < n; j++) {
++            unsigned char ch = p[j];
++            if (ch == '"' || ch == '\\') s = sdscatprintf(s, "\\%c", ch);
++            else if (ch < 0x20 || ch >= 0x7f) s = sdscatprintf(s, "\\u%04x", ch);
++            else s = sdscatlen(s, (char *)&ch, 1);
++        }
++        s = sdscatlen(s, "\"", 1);
++        decrRefCount(o);
++    }
++    return sdscat(s, "]}");
++}
++
++static const char *skipWs(const char *p, const char *e) {
++    while (p < e && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
++    return p;
++}
++
++static int hexval(char c) {
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++/* Parses a JSON string at *pp into an sds. Escapes above ÿ are rejected. */
++static sds parseString(const char **pp, const char *e) {
++    const char *p = *pp;
++    if (p >= e || *p != '"') return NULL;
++    p++;
++    sds s = sdsempty();
++    while (p < e && *p != '"') {
++        if (*p != '\\') {
++            s = sdscatlen(s, p++, 1);
++            continue;
++        }
++        if (++p >= e) break;
++        char c = *p++, out;
++        switch (c) {
++        case '"':
++        case '\\':
++        case '/': out = c; break;
++        case 'b': out = '\b'; break;
++        case 'f': out = '\f'; break;
++        case 'n': out = '\n'; break;
++        case 'r': out = '\r'; break;
++        case 't': out = '\t'; break;
++        case 'u': {
++            int v = 0;
++            for (int k = 0; k < 4; k++) {
++                int h = p < e ? hexval(*p++) : -1;
++                if (h < 0) {
++                    sdsfree(s);
++                    return NULL;
++                }
++                v = v * 16 + h;
++            }
++            if (v > 0xff) {
++                sdsfree(s);
++                return NULL;
++            }
++            out = (char)v;
++            break;
++        }
++        default: sdsfree(s); return NULL;
++        }
++        s = sdscatlen(s, &out, 1);
++    }
++    if (p >= e) {
++        sdsfree(s);
++        return NULL;
++    }
++    *pp = p + 1;
++    return s;
++}
++
++/* Decodes {"db":N,"no_touch":B,"argv":[...]}, where db and no_touch are
++ * optional. Returns argc, or -1. */
++static int decodeInput(const uint8_t *data, size_t len, int *dbp, int *no_touchp, robj ***argvp) {
++    const char *p = (const char *)data, *e = p + len;
++    robj **argv = NULL;
++    int argc = -1;
++    p = skipWs(p, e);
++    if (p >= e || *p++ != '{') return -1;
++    for (;;) {
++        p = skipWs(p, e);
++        if (p < e && *p == '}') break;
++        sds key = parseString(&p, e);
++        if (!key) goto fail;
++        p = skipWs(p, e);
++        if (p >= e || *p++ != ':') {
++            sdsfree(key);
++            goto fail;
++        }
++        p = skipWs(p, e);
++        int is_argv = !strcmp(key, "argv"), is_db = !strcmp(key, "db"), is_nt = !strcmp(key, "no_touch");
++        sdsfree(key);
++        if (is_db) {
++            char *end;
++            long v = strtol(p, &end, 10);
++            if (end == p || end > e || v < 0 || v >= server.dbnum) goto fail;
++            *dbp = (int)v;
++            p = skipWs(end, e);
++            if (p < e && *p == ',') p++;
++            continue;
++        }
++        if (is_nt) {
++            if (e - p >= 4 && !memcmp(p, "true", 4)) {
++                *no_touchp = 1;
++                p += 4;
++            } else if (e - p >= 5 && !memcmp(p, "false", 5)) {
++                *no_touchp = 0;
++                p += 5;
++            } else {
++                goto fail;
++            }
++            p = skipWs(p, e);
++            if (p < e && *p == ',') p++;
++            continue;
++        }
++        if (!is_argv || p >= e || *p != '[') goto fail; /* only db, no_touch and argv are defined */
++        p++;
++        if (argc >= 0) goto fail;
++        argc = 0;
++        for (;;) {
++            p = skipWs(p, e);
++            if (p < e && *p == ']') {
++                p++;
++                break;
++            }
++            if (argc) {
++                if (p >= e || *p++ != ',') goto fail;
++                p = skipWs(p, e);
++            }
++            sds a = parseString(&p, e);
++            if (!a) goto fail;
++            argv = zrealloc(argv, sizeof(robj *) * (argc + 1));
++            argv[argc++] = createObject(OBJ_STRING, a);
++        }
++        p = skipWs(p, e);
++        if (p < e && *p == ',') {
++            p++;
++            continue;
++        }
++    }
++    if (argc <= 0) goto fail;
++    *argvp = argv;
++    return argc;
++fail:
++    for (int i = 0; i < argc; i++) decrRefCount(argv[i]);
++    zfree(argv);
++    return -1;
++}
++
++/* ---- the access-time contract ----
++ *
++ * TOUCH alters the last access time of each key it names. A client in no-touch
++ * mode (CLIENT NO-TOUCH ON) does not alter the last access time of the keys it
++ * reads; TOUCH still does. While a step runs, kavachObserveCall() sees every
++ * command call() executes for it, and notes each key a command names: its
++ * last access time when first seen, whether a TOUCH named it, and whether a
++ * write named it. After the step the invariant checks both rules. It does not
++ * apply under an LFU eviction policy, which keeps access frequencies instead,
++ * or while a child process runs, when access times are not updated. */
++
++typedef struct {
++    sds key;
++    int db;
++    robj *val;         /* the value when first seen, to tell a replaced value */
++    unsigned int lru;  /* its last access time then */
++    int touched;       /* named by TOUCH */
++    int written;       /* named by a write command */
++} keyNote;
++
++static keyNote *notes = NULL;
++static int nnotes = 0;
++static unsigned int touch_lru; /* the LRU clock when TOUCH ran */
++static int step_no_touch = 0;
++static int access_skip = 0; /* the contract does not apply to this step */
++
++static void notesReset(void) {
++    for (int i = 0; i < nnotes; i++) sdsfree(notes[i].key);
++    zfree(notes);
++    notes = NULL;
++    nnotes = 0;
++    access_skip = 0;
++}
++
++static keyNote *noteKey(serverDb *db, sds key) {
++    for (int i = 0; i < nnotes; i++)
++        if (notes[i].db == db->id && !sdscmp(notes[i].key, key)) return &notes[i];
++    robj *val = dbFind(db, key);
++    notes = zrealloc(notes, sizeof(keyNote) * (nnotes + 1));
++    keyNote *n = &notes[nnotes++];
++    memset(n, 0, sizeof *n);
++    n->key = sdsdup(key);
++    n->db = db->id;
++    n->val = val;
++    n->lru = val ? val->lru : 0;
++    return n;
++}
++
++void kavachObserveCall(client *c) {
++    if (!cur_env || access_skip) return;
++    if ((server.maxmemory_policy & MAXMEMORY_FLAG_LFU) || hasActiveChildProcess()) {
++        access_skip = 1;
++        return;
++    }
++    getKeysResult result;
++    initGetKeysResult(&result);
++    int numkeys = getKeysFromCommand(c->cmd, c->argv, c->argc, &result);
++    int touch = c->cmd->proc == touchCommand;
++    if (touch) touch_lru = LRU_CLOCK();
++    for (int j = 0; j < numkeys; j++) {
++        keyNote *n = noteKey(c->db, c->argv[result.keys[j].pos]->ptr);
++        if (touch) n->touched = 1;
++        if (c->cmd->flags & CMD_WRITE) n->written = 1;
++    }
++    getKeysFreeResult(&result);
++}
++
++/* Returns a malloc'd copy of s and frees s. */
++static char *detailOf(sds s) {
++    char *d = strdup(s);
++    sdsfree(s);
++    return d;
++}
++
++static sds last_reply = NULL;
++
++static int accessInvariant(void *state, void *arg, char **detail) {
++    UNUSED(state);
++    UNUSED(arg);
++    if (access_skip) return KAVACH_OK;
++    for (int i = 0; i < nnotes; i++) {
++        keyNote *n = &notes[i];
++        if (n->written) continue;
++        /* Look the key up without the expiry check, which would read the clock
++         * outside the step. */
++        robj *val = dbFind(&server.db[n->db], n->key);
++        if (!val) continue;
++        if (n->touched && val->lru != touch_lru) {
++            *detail = detailOf(sdscatprintf(sdsempty(), "TOUCH did not update the last access time of key %s", n->key));
++            return KAVACH_ERROR;
++        }
++        if (!n->touched && step_no_touch && val == n->val && val->lru != n->lru) {
++            *detail = detailOf(
++                sdscatprintf(sdsempty(), "a read in no-touch mode updated the last access time of key %s", n->key));
++            return KAVACH_ERROR;
++        }
++    }
++    return KAVACH_OK;
++}
++
++static const kavach_invariant invariants[] = {
++    {"access-time-contract", accessInvariant, NULL},
++};
++
++/* ---- the handler ---- */
++
++static client *shadow = NULL;
++
++static client *shadowClient(void) {
++    if (!shadow) {
++        shadow = createClient(NULL);
++        shadow->flag.module = 1;
++        shadow->flag.deny_blocking = 1;
++        shadow->user = NULL; /* root */
++        shadow->resp = 2;
++        selectDb(shadow, 0);
++    }
++    return shadow;
++}
++
++static int handle(void *state, kavach_env *env, const kavach_input *in) {
++    UNUSED(state);
++    robj **argv;
++    int db = 0, no_touch = 0;
++    int argc = decodeInput(in->data, in->len, &db, &no_touch, &argv);
++    if (argc < 0) return kavach_error(env, "input is not {\"db\":N,\"no_touch\":B,\"argv\":[...]}");
++
++    client *c = shadowClient();
++    selectDb(c, db);
++    c->flag.no_touch = no_touch;
++    step_no_touch = no_touch;
++    c->argv = argv;
++    c->argc = argc;
++    c->argv_len = argc;
++    sdsfree(last_reply);
++    notesReset();
++
++    struct serverCommand *cmd = lookupCommand(argv, argc);
++    cur_env = env;
++    if (!cmd) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR unknown command '%.128s'\r\n", (char *)argv[0]->ptr);
++    } else if ((cmd->arity > 0 && cmd->arity != argc) || argc < -cmd->arity) {
++        last_reply = sdscatprintf(sdsempty(), "-ERR wrong number of arguments for '%s' command\r\n", cmd->fullname);
++    } else {
++        c->cmd = c->lastcmd = c->realcmd = cmd;
++        client *old = server.current_client;
++        server.current_client = c;
++        call(c, CMD_CALL_FULL);
++        server.current_client = old;
++        last_reply = sdsnewlen(c->buf, c->bufpos);
++        c->bufpos = 0;
++        while (listLength(c->reply)) {
++            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
++            last_reply = sdscatlen(last_reply, o->buf, o->used);
++            listDelNode(c->reply, listFirst(c->reply));
++        }
++        c->reply_bytes = 0;
++    }
++    cur_env = NULL;
++    freeClientArgv(c);
++    return kavach_emit(env, "reply", last_reply, sdslen(last_reply), KAVACH_LOCAL);
++}
++
++static kavach_handler makeHandler(void) {
++    kavach_handler h = {0};
++    h.handle = handle;
++    h.invariants = invariants;
++    h.n_invariants = sizeof invariants / sizeof invariants[0];
++    return h;
++}
++
++/* ---- recording ---- */
++
++int kavachWantsCall(client *c) {
++    if (!recorder || c->resp != 2) return 0;
++    if (c->flag.multi || c->flag.replica || c->flag.primary || c->flag.pubsub) return 0;
++    struct serverCommand *top = c->cmd->parent ? c->cmd->parent : c->cmd;
++    const char *name = top->declared_name;
++    /* Scripts are steps: everything they call runs inside the step. */
++    static const char *scripts[] = {"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro", NULL};
++    for (int i = 0; scripts[i]; i++)
++        if (!strcasecmp(name, scripts[i])) return 1;
++    /* Commands whose effect is on the connection, or that may block, run as usual. */
++    if (c->cmd->flags & (CMD_PUBSUB | CMD_NOSCRIPT | CMD_ADMIN)) return 0;
++    static const char *own[] = {"multi",  "exec",     "discard",  "watch",      "unwatch", "select",  "reset",
++                                "quit",   "hello",    "auth",     "client",     "readonly", "readwrite", "asking",
++                                "wait",   "waitaof",  "blpop",    "brpop",      "brpoplpush", "blmove", "blmpop",
++                                "bzpopmin", "bzpopmax", "bzmpop", NULL};
++    for (int i = 0; own[i]; i++)
++        if (!strcasecmp(name, own[i])) return 0;
++    if (!strcasecmp(name, "xread") || !strcasecmp(name, "xreadgroup"))
++        for (int i = 1; i < c->argc; i++)
++            if (!strcasecmp(c->argv[i]->ptr, "block")) return 0;
++    return 1;
++}
++
++/* Runs the client's command as a recorded step and replies to the client. */
++void kavachCall(client *c) {
++    sds data = encodeInput(c->db->id, c->flag.no_touch, c->argv, c->argc);
++    char pos[32];
++    ll2string(pos, sizeof pos, (long long)c->id);
++    kavach_input in = {"client", pos, (const uint8_t *)data, sdslen(data)};
++    kavach_result res;
++    kavach_recorder_step(recorder, &in, &res);
++    if (res.outcome != KAVACH_OK)
++        serverLog(LL_WARNING, "kavach: step failed: %s%s%s", res.message ? res.message : "", res.detail ? ": " : "",
++                  res.detail ? res.detail : "");
++    kavach_result_clear(&res);
++    sdsfree(data);
++    if (last_reply) addReplyProto(c, last_reply, sdslen(last_reply));
++}
++
++static void kavachStopRecorder(void) {
++    if (recorder) kavach_recorder_free(recorder);
++    recorder = NULL;
++}
++
++void kavachStartRecorder(void) {
++    const char *dir = getenv("KAVACH_VALKEY_DIR");
++    if (!dir || !*dir) return;
++    if (dbTotalServerKeyCount()) {
++        serverLog(LL_WARNING, "kavach: not recording: the dataset is not empty at startup");
++        return;
++    }
++    kavach_handler h = makeHandler();
++    kavach_recorder_options o = {0};
++    o.service = "valkey";
++    o.dir = dir;
++    o.handler_id = serverGitSHA1();
++    char *err = NULL;
++    if (kavach_recorder_new(&h, &o, &recorder, &err) != KAVACH_OK) {
++        serverLog(LL_WARNING, "kavach: not recording: %s", err ? err : "unknown error");
++        kavach_free(err);
++        recorder = NULL;
++        return;
++    }
++    atexit(kavachStopRecorder); /* SHUTDOWN ends the process with exit() */
++    serverLog(LL_NOTICE, "kavach: recording into %s", dir);
++}
++
++/* ---- host mode ---- */
++
++int kavachHostArgs(int *argc, char **argv) {
++    if (*argc < 2 || strcmp(argv[*argc - 1], "kavach-host")) return 0;
++    host_mode = 1;
++    argv[--(*argc)] = NULL;
++    /* Keep stdout for the protocol; the server logs to stderr until the host starts. */
++    saved_stdout = dup(1);
++    dup2(2, 1);
++    return 1;
++}
++
++int kavachHostMode(void) {
++    return host_mode;
++}
++
++/* Host mode overrides: no listening, no persistence, no background. */
++void kavachHostConfig(void) {
++    if (!host_mode) return;
++    server.port = 0;
++    server.tls_port = 0;
++    zfree(server.unixsocket);
++    server.unixsocket = NULL;
++    resetServerSaveParams();
++    server.aof_enabled = 0;
++    server.aof_state = AOF_OFF;
++    server.daemonize = 0;
++    server.cluster_enabled = 0;
++    zfree(server.pidfile);
++    server.pidfile = NULL;
++}
++
++static int factory(void *user, kavach_handler *out) {
++    UNUSED(user);
++    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
++    if (shadow) {
++        freeClient(shadow);
++        shadow = NULL;
++    }
++    notesReset();
++    *out = makeHandler();
++    return KAVACH_OK;
++}
++
++void kavachRunHost(char *argv0) {
++    char *argv[] = {argv0, "kavach-host", NULL};
++    kavach_host_options o = {0};
++    o.sdk = "kavach-c+valkey/0.1.0";
++    dup2(saved_stdout, 1);
++    close(saved_stdout);
++    kavach_maybe_host(2, argv, factory, &o);
++    exit(1); /* not reached */
++}
+diff --git a/src/kavach.h b/src/kavach.h
+new file mode 100644
+index 000000000..081c128a0
+--- /dev/null
++++ b/src/kavach.h
+@@ -0,0 +1,17 @@
++#ifndef __VALKEY_KAVACH_H
++#define __VALKEY_KAVACH_H
++
++struct client;
++
++int kavachClock(long long *us);
++int kavachLRUClock(unsigned int *lru);
++int kavachHostArgs(int *argc, char **argv);
++int kavachHostMode(void);
++void kavachHostConfig(void);
++void kavachRunHost(char *argv0);
++void kavachStartRecorder(void);
++int kavachWantsCall(struct client *c);
++void kavachCall(struct client *c);
++void kavachObserveCall(struct client *c);
++
++#endif
+diff --git a/src/server.c b/src/server.c
+index 54b92c1f6..c15d93de0 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -29,6 +29,7 @@
+ 
+ #include "server.h"
+ #include "monotonic.h"
++#include "kavach.h"
+ #include "cluster.h"
+ #include "cluster_slot_stats.h"
+ #include "slowlog.h"
+@@ -310,6 +311,7 @@ long long ustime(void) {
+     struct timeval tv;
+     long long ust;
+ 
++    if (kavachClock(&ust)) return ust;
+     gettimeofday(&tv, NULL);
+     ust = ((long long)tv.tv_sec) * 1000000;
+     ust += tv.tv_usec;
+@@ -2968,7 +2970,7 @@ void initListeners(void) {
+         listen_fds += listener->count;
+     }
+ 
+-    if (listen_fds == 0) {
++    if (listen_fds == 0 && !kavachHostMode()) {
+         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
+         exit(1);
+     }
+@@ -3668,6 +3670,7 @@ void call(client *c, int flags) {
+     monotime monotonic_start = 0;
+     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
+ 
++    kavachObserveCall(c);
+     c->cmd->proc(c);
+ 
+     /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
+@@ -4293,7 +4296,8 @@ int processCommand(client *c) {
+     } else {
+         int flags = CMD_CALL_FULL;
+         if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
+-        call(c, flags);
++        if (kavachWantsCall(c)) kavachCall(c);
++        else call(c, flags);
+         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
+     }
+     return C_OK;
+@@ -6824,6 +6828,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
+     int j;
+     char config_from_stdin = 0;
+ 
++    kavachHostArgs(&argc, argv);
++
+     /* We need to initialize our libraries, and the server configuration. */
+ #ifdef INIT_SETPROCTITLE_REPLACEMENT
+     spt_init(argc, argv);
+@@ -7007,6 +7013,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
+         sdsfree(options);
+     }
+     if (server.sentinel_mode) sentinelCheckConfigFile();
++    kavachHostConfig();
+ 
+         /* Do system checks */
+ #ifdef __linux__
+@@ -7077,6 +7084,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
+         clusterInitLast();
+     }
+     InitServerLast();
++    if (kavachHostMode()) kavachRunHost(argv[0]);
+ 
+     if (!server.sentinel_mode) {
+         /* Things not needed when running in Sentinel mode. */
+@@ -7124,6 +7132,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
+     serverSetCpuAffinity(server.server_cpulist);
+     setOOMScoreAdj(-1);
+ 
++    kavachStartRecorder();
+     aeMain(server.el);
+     aeDeleteEventLoop(server.el);
+     return 0;
