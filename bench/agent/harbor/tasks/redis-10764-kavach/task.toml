@@ -1,0 +1,37 @@
+schema_version = "1.4"
+
+[metadata]
+source = "SWE-bench Multilingual redis__redis-10764"
+arm = "kavach"
+description = "Redis at the base commit with the Kavach integration, the recorded incident and the kavach tools."
+
+[agent]
+timeout_sec = 2700.0
+# No network while the agent works: the OpenCode agent
+# (bench/agent/harbor/agents) lets it reach only its model proxy, which
+# holds the API key.
+network_mode = "no-network"
+
+[environment]
+build_timeout_sec = 1800.0
+workdir = "/work"
+
+[[environment.mcp_servers]]
+name = "kavach"
+transport = "stdio"
+command = "kavach"
+args = ["mcp"]
+
+# The verifier runs in its own container (tests/docker-compose.yaml), so the
+# hidden test is never in the agent's. All it gets from the agent's container
+# is the agent's change, which the collect hook writes before that container
+# stops: everything since the commit the agent started from, including
+# commits the agent made.
+[verifier]
+environment_mode = "separate"
+timeout_sec = 1200.0
+env = { ARM = "kavach" }
+
+[[verifier.collect]]
+user = "root"
+command = "cd /work && git -c safe.directory=/work add -A && git -c safe.directory=/work diff --cached --binary $(git -c safe.directory=/work rev-list -1 --grep='^kavach integration$' HEAD) > /logs/artifacts/patch.diff"
