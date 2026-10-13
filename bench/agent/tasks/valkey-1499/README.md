@@ -152,7 +152,13 @@ upstream fix. Run through `heavy.sh` from the repository root with
 
 | Agent | Arm | Reward | Kavach | Time |
 | --- | --- | --- | --- | --- |
-HARBOR_ROWS
+| `oracle` (upstream fix) | control | 1 | `fixed` (47 of 64 variants) | 6 min 9 s (the first trial, including Harbor's image build step) |
+| `oracle` | kavach | 1 | `fixed` (47 of 64 variants) | 1 min 24 s |
+| `nop` | control | 0 | `invariant_violated(access-time-contract)@75` | 1 min 47 s |
+| `nop` | kavach | 0 | `invariant_violated(access-time-contract)@75` | 1 min 20 s |
+
+In the control arm the verifier applies the integration on top of the agent's
+change and rebuilds before `kavach diff`, which is most of its time.
 
 ## Files
 
