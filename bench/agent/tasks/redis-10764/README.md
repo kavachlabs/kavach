@@ -15,9 +15,9 @@ on it yet.**
 ## Results
 
 `./run.sh` reproduces everything below from a clean checkout in about
-RUN_TIME on an Apple M3 Pro (macOS, Tcl 8.5): it clones Redis, builds it five
+2 minutes 45 seconds on an Apple M3 Pro (macOS, Tcl 8.5): it clones Redis, builds it five
 times and runs the hidden test five times. Measured 2026-10-13 at Kavach
-`KAVACH_SHA`.
+`cdfafd3`.
 
 **Recording.** `traffic.sh` is a game backend: a job queue, the sorted set
 `jobs`, drained by workers with `BZMPOP 0 1 jobs MIN COUNT 2`, and one
@@ -79,7 +79,7 @@ Kavach and the hidden test disagree on `skip-leading-args`; see below.
     step model, so this incident could not be recorded at all. Kavach's model
     held: a step's outputs may go to sinks other than the step's own client,
     so the reply of a command that waited is an output of the step that
-    served it. Nothing in Kavach changed; the integration grew by about 320
+    served it. Nothing in Kavach changed; the integration grew by about 340
     lines (below). The gap that does show is the one above: variants cannot
     move a write to another argument position.
 - **The invariant comes close to the bug, but no closer than the report.**
@@ -100,7 +100,7 @@ Kavach and the hidden test disagree on `skip-leading-args`; see below.
 ## The integration (`redis-kavach.patch`)
 
 The pilot's integration, ported to the base commit, plus blocking commands.
-`src/kavach.c` is 874 lines (the pilot's is 552), plus the pilot's hooks in
+`src/kavach.c` is 889 lines (the pilot's is 552), plus the pilot's hooks in
 `server.c` and the Makefile and one new hook at the end of `unblockClient()`
 in `blocked.c`.
 
@@ -146,8 +146,9 @@ With recording on, Redis's own `unit/type/zset` and `unit/type/list` suites
 pass. They wrote 5 journals: 2 replay as `ok`, 3 diverge. One diverges at
 `INFO`; the other two after a RESP3 client (`HELLO 3`, not recorded) wrote
 the keys the next recorded command reads. I attributed these by reading the
-journal and the suite. The zset journal replays 29,276 steps, including every
-blocking test, before it diverges at the first RESP3 test.
+journal and the suite. The zset journal replays about 117,000 records,
+including the blocking tests, before it diverges at a BZPOPMIN after the
+RESP3 tests.
 
 ## Time (45-minute rule)
 
@@ -166,6 +167,11 @@ test takes seconds. A capable agent can find, fix and check this well inside
 45 minutes. `task.md` names the focused test command and says the full suite
 is not needed.
 
+One trap: a wrong fix can leave a test waiting for a reply that never comes
+(`count-only` does), and Redis's test runner then stalls for its default 20
+minutes. `task.md` tells the agent about `--timeout 60`, and `run.sh` and
+`grade.sh` use it.
+
 ## Harbor checks
 
 From the repository root, through the shared Docker lock (times are Harbor's
@@ -173,7 +179,14 @@ own, image builds included):
 
 | Run | Arm | Reward | Time |
 | --- | --- | --- | --- |
-HARBOR_ROWS
+| oracle (`upstream`) | kavach | 1 (hidden pass, `kavach diff` `fixed`, 37 of 59 / 37) | 4m 16s |
+| nop (no change) | kavach | 0 (hidden fail, `invariant_violated(pop-key-contract)@70`) | 52s |
+| oracle (`upstream`) | control | 1 (hidden pass, `fixed`) | 1m 50s |
+| nop (no change) | control | 0 (hidden fail, `invariant_violated(pop-key-contract)@70`) | 1m 13s |
+
+The commands were `harbor run -p bench/agent/harbor/tasks/redis-10764-<arm>
+-o "$PWD/bench/agent/results/harbor" --agent oracle|nop`, with
+`PYTHONPATH=$PWD`. Both arms give the agent 2700 s.
 
 ## Files
 
