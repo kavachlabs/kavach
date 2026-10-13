@@ -16,8 +16,10 @@ yet.**
 ## Results
 
 `./run.sh` reproduces the table below from a clean checkout, on the host, in
-about 3 minutes on an Apple M3 Pro, most of it the first build of axum's
-dependencies. Measured 2026-10-12 at Kavach `cdfafd3`, Rust 1.92.
+about 1.5 minutes on an Apple M3 Pro with the crates already in cargo's
+cache, most of it the first build of axum's dependencies. On the host it
+also replays the committed `incident.kavach`: `still_failing@40`, the same
+as the fresh fixture. Measured 2026-10-12 at Kavach `cdfafd3`, Rust 1.92.
 
 **Recording.** The integration is a driver, not a server
 (`axum-kavach.patch`, below): each line of `traffic.sh` is one HTTP request,
@@ -160,9 +162,12 @@ separate verifier container (the grader image), collect hook, `solution/`
 | Run | Agent | Reward | Kavach (verifier) | Time |
 | --- | --- | --- | --- | --- |
 | `axum-1934-oracle-control` | oracle | 1.0 | `fixed` (44 of 48) | 9m 11s, with image builds |
-| `axum-1934-oracle-kavach` | oracle | | | |
-| `axum-1934-nop-control` | nop | | | |
-| `axum-1934-nop-kavach` | nop | | | |
+| `axum-1934-oracle-kavach` | oracle | 1.0 | `fixed` (44 of 48) | 2m 0s |
+| `axum-1934-nop-control` | nop | 0.0 | `still_failing@40` | 5m 46s |
+| `axum-1934-nop-kavach` | nop | 0.0 | `still_failing@40` | 2m 48s |
+
+Times include building the images where the cache did not have them (the
+first run built the grader's trees). No exceptions in any run.
 
 ## Files
 
