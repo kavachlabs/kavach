@@ -50,16 +50,16 @@ record `redis__redis-10764`.)
 ## Building and testing
 
 The tree is already built; `make` rebuilds only what you change (about
-TIME_BUILD after a one-file change). The sorted-set blocking tests run with
+3 seconds after a one-file change). The sorted-set blocking tests run with
 
 ```
 ./runtest --single unit/type/zset --only BZMPOP
 ```
 
-in about TIME_FOCUSED. `--only` takes a regular expression over test names, so
+in about 3 seconds. `--only` takes a regular expression over test names, so
 `--only BZPOP` runs the BZPOPMIN/BZPOPMAX tests. The whole `unit/type/zset`
-file takes about TIME_ZSET, and Redis's full test suite takes much longer
-than that; neither is needed for this task.
+file takes about 15 seconds. Redis's full test suite (`./runtest` or
+`make test`) takes tens of minutes and is not needed for this task.
 
 ## Kavach arm only
 

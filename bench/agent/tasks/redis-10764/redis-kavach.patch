@@ -46,10 +46,10 @@ index 65b584213..e2ca5dac2 100644
  /* This function gets called when a blocked client timed out in order to
 diff --git a/src/kavach.c b/src/kavach.c
 new file mode 100644
-index 000000000..c35e8bf07
+index 000000000..edf9cfb19
 --- /dev/null
 +++ b/src/kavach.c
-@@ -0,0 +1,874 @@
+@@ -0,0 +1,889 @@
 +/* Kavach integration: record commands as steps and replay them as a host.
 + *
 + * Each command that reaches call() from a network client is one Kavach step.
@@ -511,6 +511,8 @@ index 000000000..c35e8bf07
 +    sds *keys;
 +    int nkeys;
 +    mstime_t timeout;
++    int btype;
++    int counted;        /* live: the real client counts as the blocked one */
 +} blockedCmd;
 +
 +typedef struct {
@@ -594,6 +596,12 @@ index 000000000..c35e8bf07
 +        if (c->flags & CLIENT_UNBLOCKED) {
 +            listDelNode(server.unblocked_clients, listSearchKey(server.unblocked_clients, c));
 +            c->flags &= ~CLIENT_UNBLOCKED;
++        }
++        if (b->counted) {
++            /* unblockClient() just uncounted the shadow, which kavachCall()
++             * had uncounted already. */
++            server.blocked_clients++;
++            server.blocked_clients_by_type[b->btype]++;
 +        }
 +        sds reply = collectReply(c);
 +        listAddNodeTail(to_free, c);
@@ -753,6 +761,8 @@ index 000000000..c35e8bf07
 +            b->keys = keys;
 +            b->nkeys = nkeys;
 +            b->timeout = c->bpop.timeout;
++            b->btype = c->btype;
++            b->counted = 0;
 +            removeClientFromTimeoutTable(c);
 +            c->bpop.timeout = 0;
 +            listAddNodeTail(blocked_cmds, b);
@@ -829,8 +839,13 @@ index 000000000..c35e8bf07
 +         * client writes in practice; deliver() serves it. */
 +        robj *parked = createStringObject("\0kavach-parked", 14);
 +        blockedCmd *b = listNodeValue(ln);
-+        blockForKeys(c, b->shadow->btype, &parked, 1, 0, b->timeout, NULL, NULL, NULL);
++        blockForKeys(c, b->btype, &parked, 1, 0, b->timeout, NULL, NULL, NULL);
 +        decrRefCount(parked);
++        /* One client waits, not two: INFO's blocked_clients counts the real
++         * client, not its shadow. */
++        server.blocked_clients--;
++        server.blocked_clients_by_type[b->btype]--;
++        b->counted = 1;
 +    } else if (last_reply) {
 +        addReplyProto(c, last_reply, sdslen(last_reply));
 +    }
