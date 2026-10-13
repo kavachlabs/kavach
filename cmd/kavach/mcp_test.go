@@ -61,7 +61,7 @@ func TestMCPProtocol(t *testing.T) {
 			t.Fatalf("tool %v", tm)
 		}
 	}
-	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_diff" {
+	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_diff,kavach_contract_show,kavach_contract_check" {
 		t.Fatalf("tools: %v", names)
 	}
 	for i, code := range map[int]float64{3: rpcMethodNotFound, 4: rpcParseError, 6: rpcInvalidParams} {

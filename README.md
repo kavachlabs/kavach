@@ -59,14 +59,19 @@ only, not of the SDK.
 ## With an AI agent
 
 `kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server with three tools, `kavach_list_incidents`, `kavach_replay` and
-`kavach_diff`, returning the same verdicts as the CLI as structured JSON:
+server with five tools, `kavach_list_incidents`, `kavach_replay`,
+`kavach_diff`, `kavach_contract_show` and `kavach_contract_check`, returning
+the same verdicts as the CLI as structured JSON:
 
 ```bash
 claude mcp add kavach -- kavach mcp
 ```
 
-[AGENTS.md](AGENTS.md) is the loop an agent should follow.
+[AGENTS.md](AGENTS.md) is the loop an agent should follow. For new features,
+[`/kavach-implement`](commands/kavach-implement.md) is an agent command that
+works contract-first: the agent records traffic on the current build, writes
+invariants from the spec, and asks a person to approve the contract. It then
+implements until `kavach contract check` passes.
 
 ## Using it in a service
 
@@ -124,6 +129,12 @@ shows how to speak them directly.
    event changed, events reordered, dropped or redelivered, the clock shifted)
    on which the old build fails exactly as it did in production. A fix that
    only handles the recorded event does not pass. See [SPEC.md §6.1](SPEC.md#61-verifying-a-fix).
+4. **Build features against a contract.** `kavach contract check` replays
+   traffic recorded before a feature on the new build. Steps outside the
+   feature must produce the recorded outputs. Feature steps must change, and
+   every change is listed for review. Invariants written from the spec must
+   hold, on the traffic and on variants of the feature steps. See
+   [SPEC.md §6.4](SPEC.md#64-feature-steps-and-contracts).
 
 ## Not in scope
 
@@ -140,6 +151,7 @@ shows how to speak them directly.
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
 | [INTEGRATING.md](INTEGRATING.md) | Using Kavach from a language with no SDK |
 | [sdk](sdk) | The SDKs, one per language |
+| [commands](commands) | Agent commands: `/kavach-implement` |
 | [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
 | [examples/ledger](examples/ledger) | The demo service: [sdk](examples/ledger/sdk) with the Go SDK, [protocol](examples/ledger/protocol) in Julia with no SDK |

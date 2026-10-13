@@ -580,7 +580,8 @@ panic or error, and its status:
 | `ok` | No failure was recorded; every step ran without any of the above. |
 
 Checks are applied in the order of the table, per step, and replay stops at the
-first one that applies.
+first one that applies. A replay MAY be given **feature steps** (§6.4), whose
+outputs may differ without stopping it.
 
 Two builds of a handler are compared by replaying the same journal under both
 and reporting the first output where their captured outputs differ.
@@ -608,7 +609,10 @@ only if:
 The reference implementation uses *M* = 10 and derives up to 64 variants from
 an incident: the failing input's JSON fields set to values the same field
 takes in other inputs and to nearby values, removed, or added from other
-inputs; the failing input moved earlier; earlier inputs dropped or delivered
+inputs; an array field's elements changed one at a time, each set to the
+element at the same index of the same field in other inputs and to nearby
+values, so that a command's arguments (`{"argv":[...]}`) are varied one by
+one; the failing input moved earlier; earlier inputs dropped or delivered
 twice; and every clock read shifted. Variant generation is deterministic.
 
 Responses are inputs from the world too, so from 0.2 variants also perturb
@@ -780,6 +784,61 @@ perturb that change: moved one step earlier, moved one step later, repeated
 at a later step boundary. A fix that only works when the logout arrives at
 the recorded step fails one of them. A code fix can be verified in a sandbox
 too; then the old and new builds differ and both replay in the same sandbox.
+
+### 6.4 Feature steps and contracts
+
+Replay checks that a build behaves as the recorded one did. A build that adds
+a feature is meant to behave differently on some inputs, so replay against a
+journal recorded before the feature would stop at the first of them with
+`diverged`. **Feature steps** say where a difference is intended.
+
+A replay MAY be given a set of input `seq`s as feature steps. For each:
+
+- reads are served leniently, as for the recorded failure (§6): the new build
+  may read more than the recorded one did;
+- outputs are compared with the recorded ones after the step, as usual, but a
+  difference does not stop the replay. The replayer reports the step as
+  **changed**, with both builds' outputs. A step whose outputs match is
+  reported as **unreached**: the new behaviour did not show there;
+- panics, errors, invariants and nondeterminism are checked as for any other
+  step.
+
+Steps that are not feature steps are replayed as before. A step whose outputs
+depend on what a feature step did, such as a read of a key that a new command
+wrote, has to be a feature step too, or it is reported as `diverged`.
+
+The set of changed steps, with both builds' outputs, is the difference a
+reviewer reads: what the new build does on recorded traffic that the old one
+did not.
+
+**Contracts.** A **contract** for a feature is a journal recorded on the build
+before the feature (the **traffic**), the feature steps of that traffic, and
+the names of invariants (§4.5) the new build must declare, written from the
+feature's specification. A build **meets** a contract when:
+
+1. the build before the feature replays the traffic as `ok`, with every
+   feature step unreached (otherwise the traffic does not describe that
+   build: `baseline_mismatch`);
+2. the new build declares every named invariant (`missing_invariant(X)`);
+3. the new build replays the traffic with its feature steps without any
+   status but `ok` (a `diverged` step is a **regression**: `regression@N`);
+4. every feature step changed (`unreached@N`); and
+5. the new build replays every **feature variant** as `ok`
+   (`variant_failed(K)@N`).
+
+Feature variants are derived for each feature step as variants are for an
+incident (§6.1), from the traffic up to and including that step, with the
+feature step in the place of the failing input. They expect no failure. A
+variant that fails before its feature step on both builds, with the same
+status, says nothing about the feature and is ignored. The reference
+implementation derives up to 64.
+
+A contract is meant to be fixed before the feature is built, and approved by
+a person: a contract written by the author of the build, after the build,
+tends to describe the build rather than the specification. The reference
+implementation (`kavach contract`) records the approval as hashes of the
+contract's files, and reports `unapproved` or `stale_lock` for a build that
+meets a contract no one approved or that changed since.
 
 ## 7. Versioning and compatibility
 
@@ -1322,7 +1381,12 @@ recorder cases over both.
 - **Reporting compensations.** When a fix changes the outputs of the failing
   step, the difference between the old and new build's outputs there is what
   production should be told: updates the old build would have made that need
-  undoing, and updates the new one adds. `diff` could report this set.
+  undoing, and updates the new one adds. `diff` could report this set, as a
+  replay with feature steps reports changed steps (§6.4).
+- **Steps that depend on a feature.** §6.4 requires a step whose outputs
+  depend on a feature step to be marked as a feature step itself. Inferring
+  them, from the state a feature step touched, would make contracts easier
+  to write but weaker: an unintended change would pass as a consequence.
 - **Large inputs.** The 16 MiB record limit may be too small for some batch
   events and gateway responses.
 - **Losing the tail.** Records the SDK has written into the pipe survive the

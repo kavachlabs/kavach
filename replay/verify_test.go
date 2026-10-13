@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -280,4 +281,120 @@ func TestVerifyErrorIncident(t *testing.T) {
 	if v.String() != "fixed" || v.Reproducing != v.Candidates {
 		t.Fatalf("got %s: %d of %d reproduce; %s", v, v.Reproducing, v.Candidates, v.Detail)
 	}
+}
+
+func TestVariantsOfArrayElements(t *testing.T) {
+	opts := testOptions(t)
+	r := newRecorder(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+		var cmd struct{ Argv []string }
+		if err := json.Unmarshal(in.Data, &cmd); err != nil {
+			return err
+		}
+		if cmd.Argv[1] == "boom" {
+			return errors.New("boom")
+		}
+		env.Emit("out", []byte("OK"))
+		return nil
+	}), opts)
+	err := feed(t, r, `{"argv":["SET","a","1"]}`, `{"argv":["GET","b"]}`, `{"argv":["SET","boom","2"]}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, err := replay.Variants(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, v := range vs {
+		info := v.Header.Meta.Variant
+		got[info.Mutation] = string(recordAt(t, v, info.Incident).Data)
+	}
+
+	for mut, data := range map[string]string{
+		`"argv"[0] "SET" → "GET"`: `{"argv":["GET","boom","2"]}`,
+		`"argv"[1] "boom" → "a"`:  `{"argv":["SET","a","2"]}`,
+		`"argv"[1] "boom" → "b"`:  `{"argv":["SET","b","2"]}`,
+		`"argv"[2] "2" → "1"`:     `{"argv":["SET","boom","1"]}`,
+	} {
+		found := false
+		for m, d := range got {
+			if strings.HasSuffix(m, mut) {
+				found = true
+				if d != data {
+					t.Errorf("variant %q: got %q, want %q", m, d, data)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no variant %q among %v", mut, keys(got))
+		}
+	}
+}
+
+func keys(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestReplayWithFeatureSteps(t *testing.T) {
+	opts := testOptions(t)
+	r := newRecorder(t, newWallet(), opts)
+	if err := feed(t, r, "alice:10", "bob:5", "alice:7"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	var path string
+	filepath.WalkDir(opts.Dir, func(p string, _ os.DirEntry, _ error) error {
+		if strings.HasSuffix(p, ".kavach") {
+			path = p
+		}
+		return nil
+	})
+	j, err := journal.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inputs []uint64
+	for _, rec := range j.Records {
+		if rec.Type == journal.TypeInput {
+			inputs = append(inputs, rec.Seq)
+		}
+	}
+	// bob's step changes its format: a feature step reports it and goes on;
+	// alice's second step is a feature step whose outputs do not change.
+	newFormat := func() kavach.Handler { return &bobFormat{wallet: newWallet().(*wallet)} }
+	res, err := replay.RunWith(j, newFormat, replay.Options{Features: map[uint64]bool{inputs[1]: true, inputs[2]: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != replay.StatusOK || len(res.Changed) != 1 || res.Changed[0].Seq != inputs[1] || len(res.Unreached) != 1 || res.Unreached[0] != inputs[2] {
+		t.Errorf("got %s, changed %+v, unreached %v", res, res.Changed, res.Unreached)
+	}
+	if len(res.Invariants) != 1 || res.Invariants[0] != "balance_non_negative" {
+		t.Errorf("declared invariants: %v", res.Invariants)
+	}
+	res, err = replay.Run(j, newFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != replay.StatusDiverged || *res.Seq != inputs[1] {
+		t.Errorf("without feature steps: got %s", res)
+	}
+}
+
+// bobFormat writes bob's entries in another format.
+type bobFormat struct{ *wallet }
+
+func (h *bobFormat) Handle(env kavach.Env, in kavach.Input) error {
+	h.wallet.newFormat = strings.HasPrefix(string(in.Data), "bob:")
+	return h.wallet.Handle(env, in)
 }

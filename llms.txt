@@ -6,7 +6,8 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 
 ## Agent guide
 
-- [AGENTS.md](AGENTS.md): the reproduce, fix, verify loop; every verdict and what to do about it; exit codes; the MCP tools.
+- [AGENTS.md](AGENTS.md): the reproduce, fix, verify loop; building a feature against a contract; every verdict and what to do about it; exit codes; the MCP tools.
+- [commands/kavach-implement.md](commands/kavach-implement.md): the `/kavach-implement` agent command, contract-first feature work.
 - [INTEGRATING.md](INTEGRATING.md): adding Kavach to a language or service with no SDK, by speaking the recorder and host protocols directly; done when the conformance suites pass.
 
 ## Docs
@@ -23,7 +24,8 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 - [bench](bench): ten planted bugs, each with a correct and a too-narrow fix, run with `go test ./bench -v`.
 - [sdk](sdk): the SDKs, one per language (Go, Python, TypeScript, Rust, Java, C and C++, Julia, Ruby, PHP, Elixir, Haskell, OCaml), each with a port of the ledger demo.
 - [replay](replay): the replay engine, host-protocol driver and fix verification behind the CLI.
-- [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`) and the MCP server (`kavach mcp`).
+- [contract](contract): behaviour contracts for features (SPEC.md section 6.4) behind `kavach contract`.
+- [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`, `contract`) and the MCP server (`kavach mcp`).
 
 ## Optional
 

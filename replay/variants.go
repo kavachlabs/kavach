@@ -38,18 +38,7 @@ type candidate struct {
 //
 // It returns no variants when j recorded no failure.
 func Variants(j *journal.Journal) ([]*journal.Journal, error) {
-	recs := j.Records
-	var snap *journal.Record
-	if j.Header.Meta.Start == journal.StartSnapshot {
-		if len(recs) == 0 || recs[0].Type != journal.TypeSnapshot {
-			return nil, errors.New("kavach: snapshot journal has no snapshot record")
-		}
-		snap, recs = &recs[0], recs[1:]
-	}
-	// Variants keep the journal's genesis environment: a replay serves it, and a
-	// journal without one is invalid. They never change environment records.
-	env := genesisEnv(recs)
-	steps, err := splitSteps(recs)
+	snap, env, steps, err := variantSource(j)
 	if err != nil {
 		return nil, err
 	}
@@ -63,34 +52,81 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 	if k < 0 {
 		return nil, nil
 	}
-	failure := markerFailure(*steps[k].marker)
+	return interleave(j.Header.Meta, snap, env, [][][]candidate{candidates(steps, k)}, markerFailure(*steps[k].marker)), nil
+}
+
+// FeatureVariants derives variants of a journal's feature steps (SPEC.md
+// §6.4). For each feature input, in order, it takes the journal up to and
+// including that input and perturbs it as Variants perturbs an incident. A
+// variant expects no failure: its Meta.Variant.Incident is the seq of the
+// feature input, and its Failure is empty. Generation is deterministic.
+func FeatureVariants(j *journal.Journal, features map[uint64]bool) ([]*journal.Journal, error) {
+	snap, env, steps, err := variantSource(j)
+	if err != nil {
+		return nil, err
+	}
+	var each [][][]candidate
+	for k, st := range steps {
+		if features[st.input.Seq] {
+			each = append(each, candidates(steps, k))
+		}
+	}
+	return interleave(j.Header.Meta, snap, env, each, ""), nil
+}
+
+// variantSource splits j into what variants are built from.
+func variantSource(j *journal.Journal) (snap, env *journal.Record, steps []*step, err error) {
+	recs := j.Records
+	if j.Header.Meta.Start == journal.StartSnapshot {
+		if len(recs) == 0 || recs[0].Type != journal.TypeSnapshot {
+			return nil, nil, nil, errors.New("kavach: snapshot journal has no snapshot record")
+		}
+		snap, recs = &recs[0], recs[1:]
+	}
+	// Variants keep the journal's genesis environment: a replay serves it, and a
+	// journal without one is invalid. They never change environment records.
+	env = genesisEnv(recs)
+	steps, err = splitSteps(recs)
+	return snap, env, steps, err
+}
+
+// candidates are the mutations of the journal up to and including step k,
+// by class.
+func candidates(steps []*step, k int) [][]candidate {
 	base := make([]vstep, k+1)
 	for i, st := range steps[:k+1] {
 		base[i] = vstep{input: st.input, reads: st.reads, incident: i == k}
 	}
-
-	classes := [][]candidate{
+	return [][]candidate{
 		fieldMutations(base, k),
 		moves(base, k),
 		drops(base, k),
 		duplicates(base, k),
 		clockShifts(base),
 	}
+}
+
+// interleave builds up to MaxCandidates variants, taking the i-th candidate of
+// every class of every target before any (i+1)-th, so that every target and
+// class is varied early.
+func interleave(meta journal.Meta, snap, env *journal.Record, targets [][][]candidate, failure string) []*journal.Journal {
 	var out []*journal.Journal
 	for i := 0; len(out) < MaxCandidates; i++ {
 		added := false
-		for _, c := range classes {
-			if i < len(c) && len(out) < MaxCandidates {
-				info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure}
-				out = append(out, buildVariant(j.Header.Meta, snap, env, c[i].steps, info))
-				added = true
+		for _, classes := range targets {
+			for _, c := range classes {
+				if i < len(c) && len(out) < MaxCandidates {
+					info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure}
+					out = append(out, buildVariant(meta, snap, env, c[i].steps, info))
+					added = true
+				}
 			}
 		}
 		if !added {
 			break
 		}
 	}
-	return out, nil
+	return out
 }
 
 func markerFailure(m journal.Record) string {
@@ -286,6 +322,43 @@ func fieldMutations(base []vstep, k int) []candidate {
 			ms = append(ms, mutation{fmt.Sprintf("%q removed", f.key), fs})
 		}
 		perKey = append(perKey, ms)
+		// An array is varied one element at a time, so that a command's
+		// arguments are changed one by one: each element set to the values at
+		// the same index in other inputs and to nearby values.
+		elems, ok := arrayElements(f.val)
+		if !ok {
+			continue
+		}
+		for ei, e := range elems {
+			var ems []mutation
+			setElem := func(v json.RawMessage) {
+				if bytes.Equal(v, e) {
+					return
+				}
+				es := append([]json.RawMessage(nil), elems...)
+				es[ei] = v
+				fs := append([]field(nil), fields...)
+				fs[fi].val = encodeArray(es)
+				ems = append(ems, mutation{fmt.Sprintf("%q[%d] %s → %s", f.key, ei, e, v), fs})
+			}
+			var at []json.RawMessage
+			for _, o := range others {
+				if oes, ok := arrayElements(o); ok && ei < len(oes) && !containsRaw(at, oes[ei]) && !bytes.Equal(oes[ei], e) {
+					at = append(at, oes[ei])
+				}
+			}
+			for i := 0; i < len(at) && i < 3; i++ {
+				setElem(at[i])
+			}
+			for _, v := range nearby(e) {
+				if !containsRaw(at, v) {
+					setElem(v)
+				}
+			}
+			if len(ems) > 0 {
+				perKey = append(perKey, ems)
+			}
+		}
 	}
 	added := 0
 	for _, key := range order {
@@ -314,6 +387,31 @@ func fieldMutations(base []vstep, k int) []candidate {
 			return out
 		}
 	}
+}
+
+// arrayElements splits a compacted JSON array into its compacted elements.
+func arrayElements(v json.RawMessage) ([]json.RawMessage, bool) {
+	if len(v) == 0 || v[0] != '[' {
+		return nil, false
+	}
+	var es []json.RawMessage
+	if json.Unmarshal(v, &es) != nil || len(es) == 0 {
+		return nil, false
+	}
+	return es, true
+}
+
+func encodeArray(es []json.RawMessage) json.RawMessage {
+	var b bytes.Buffer
+	b.WriteByte('[')
+	for i, e := range es {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.Write(e)
+	}
+	b.WriteByte(']')
+	return b.Bytes()
 }
 
 func containsRaw(vs []json.RawMessage, v json.RawMessage) bool {

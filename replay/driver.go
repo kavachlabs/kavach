@@ -91,6 +91,11 @@ func SplitCommand(s string) ([]string, error) {
 // an error if the replay cannot run, including a host that fails to start, exits
 // before it is ready, or breaks the protocol.
 func RunHost(j *journal.Journal, command string) (*Result, error) {
+	return RunHostWith(j, command, Options{})
+}
+
+// RunHostWith is RunHost with options.
+func RunHostWith(j *journal.Journal, command string, opts Options) (*Result, error) {
 	words, err := SplitCommand(command)
 	if err != nil {
 		return nil, err
@@ -104,7 +109,7 @@ func RunHost(j *journal.Journal, command string) (*Result, error) {
 		genesis = g.Facts
 	}
 	var h *host
-	res, err := replayJournal(j, func(snapshot []byte) (kavach.Handler, error) {
+	res, err := replayJournal(j, opts, func(snapshot []byte) (kavach.Handler, error) {
 		var err error
 		if h, err = startHost(words, j.Header.Meta.Service, snapshot, genesis); err != nil {
 			return nil, err

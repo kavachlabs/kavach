@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/kavachlabs/kavach/contract"
 	"github.com/kavachlabs/kavach/replay"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
@@ -22,7 +23,8 @@ const mcpLatestVersion = "2025-06-18"
 var mcpVersions = []string{mcpLatestVersion, "2025-03-26", "2024-11-05"}
 
 const mcpInstructions = `Kavach replays production crashes of journal-driven services from fixture files (*.kavach) and verifies fixes.
-Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.`
+Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.
+Building a feature against a contract (a contract/ directory from kavach contract init): kavach_contract_show shows it; a person approves it, never you; kavach_contract_check checks a build. Only "pass" passes. regression@N: a step outside the feature changed. changed steps: read each against the spec. Stop and report after the same outcome three rounds in a row (streak 3). Never edit the contract to make a check pass.`
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -209,12 +211,35 @@ var mcpTools = []map[string]any{
 			"keep": str("directory to save failing variants in; defaults to a new temporary directory"),
 		}, "fixture", "old", "new"),
 	},
+	{
+		"name":        "kavach_contract_show",
+		"title":       "Show a contract",
+		"description": "Show a behaviour contract: the spec it was written from, every input of its traffic with the feature steps marked, the invariants the build must declare, and whether a person has approved it. Show this to the person before implementing; they approve it with kavach contract approve.",
+		"inputSchema": obj(map[string]any{
+			"dir": str("contract directory; defaults to ./contract"),
+		}),
+		"annotations": map[string]any{"readOnlyHint": true},
+	},
+	{
+		"name":  "kavach_contract_check",
+		"title": "Check a build against a contract",
+		"description": "Replay the contract's traffic on a build. Steps outside the feature must produce the recorded outputs (else regression@N); feature steps should change (else unreached@N), and every change is listed with the old and new outputs to read against the spec; invariants must hold on the traffic and on variants of the feature steps (else invariant_violated(X)@N or variant_failed(K)@N, saved for kavach_replay). " +
+			"Other verdicts: still_failing@N, nondeterministic@N, missing_invariant(X), baseline_mismatch(V), unapproved, stale_lock. Only \"pass\" passes. streak is how many checks in a row had the same outcome; at 3, stop and report.",
+		"inputSchema": obj(map[string]any{
+			"dir":         str("contract directory; defaults to ./contract"),
+			"old":         str("host command for the base build; optional, checks that the traffic matches it"),
+			"new":         str("host command for the build under test"),
+			"no_variants": map[string]any{"type": "boolean", "description": "skip variants of the feature steps"},
+		}, "new"),
+	},
 }
 
 var mcpHandlers = map[string]func(json.RawMessage) (map[string]any, error){
 	"kavach_list_incidents": mcpListIncidents,
 	"kavach_replay":         mcpReplay,
 	"kavach_diff":           mcpDiff,
+	"kavach_contract_show":  mcpContractShow,
+	"kavach_contract_check": mcpContractCheck,
 }
 
 func decodeArgs(raw json.RawMessage, v any) error {
@@ -315,5 +340,47 @@ func mcpDiff(raw json.RawMessage) (map[string]any, error) {
 	}
 	out := o.report()
 	out["passed"] = o.v.Passed()
+	return out, nil
+}
+
+func mcpContractShow(raw json.RawMessage) (map[string]any, error) {
+	var a struct {
+		Dir string `json:"dir"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	if a.Dir == "" {
+		a.Dir = contract.DefaultDir
+	}
+	d, err := contract.Load(a.Dir)
+	if err != nil {
+		return nil, err
+	}
+	return showReport(d), nil
+}
+
+func mcpContractCheck(raw json.RawMessage) (map[string]any, error) {
+	var a struct {
+		Dir        string `json:"dir"`
+		Old        string `json:"old"`
+		New        string `json:"new"`
+		NoVariants bool   `json:"no_variants"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	if a.New == "" {
+		return nil, errors.New("new is required")
+	}
+	if a.Dir == "" {
+		a.Dir = contract.DefaultDir
+	}
+	r, wall, err := checkContract(a.Dir, a.Old, a.New, a.NoVariants)
+	if err != nil {
+		return nil, err
+	}
+	out := contractReport(a.Dir, r)
+	out["wall_ms"] = ms(wall)
 	return out, nil
 }

@@ -80,6 +80,30 @@ type Result struct {
 	// environment.
 	Drift      []Drift     `json:"drift,omitempty"`
 	EnvChanges []EnvChange `json:"environment_changes,omitempty"`
+	// Invariants are the names of the invariants the handler declared.
+	Invariants []string `json:"invariants,omitempty"`
+	// Changed and Unreached are set only for a replay with feature steps
+	// (SPEC.md §6.4): the feature steps whose outputs differ from the recorded
+	// ones, and the seqs of those whose outputs do not.
+	Changed   []Change `json:"changed,omitempty"`
+	Unreached []uint64 `json:"unreached,omitempty"`
+}
+
+// Change is a feature step whose outputs differ from the recorded ones.
+type Change struct {
+	Seq      uint64          `json:"seq"` // seq of the step's input
+	Recorded []kavach.Output `json:"recorded"`
+	Replay   []kavach.Output `json:"replay"`
+	Detail   string          `json:"detail"` // the first difference
+}
+
+// Options configure a replay.
+type Options struct {
+	// Features are the seqs of the journal's feature inputs (SPEC.md §6.4):
+	// inputs that reach behaviour the replayed build adds or changes. Their
+	// steps read leniently, and outputs that differ from the recorded ones are
+	// reported in Result.Changed instead of stopping the replay.
+	Features map[uint64]bool
 }
 
 // String formats the status as an agent-facing verdict, e.g. "diverged@12",
@@ -119,7 +143,12 @@ type step struct {
 // serving reads from the journal and capturing outputs. It returns an error
 // only if the journal cannot be replayed at all.
 func Run(j *journal.Journal, newHandler func() kavach.Handler) (*Result, error) {
-	return replayJournal(j, func(snapshot []byte) (kavach.Handler, error) {
+	return RunWith(j, newHandler, Options{})
+}
+
+// RunWith is Run with options.
+func RunWith(j *journal.Journal, newHandler func() kavach.Handler, opts Options) (*Result, error) {
+	return replayJournal(j, opts, func(snapshot []byte) (kavach.Handler, error) {
 		h := newHandler()
 		if snapshot == nil {
 			return h, nil
@@ -137,7 +166,7 @@ func Run(j *journal.Journal, newHandler func() kavach.Handler) (*Result, error) 
 
 // replayJournal is the replay engine. open creates the handler the journal
 // starts from; snapshot is nil unless the journal starts from one.
-func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handler, error)) (*Result, error) {
+func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) (kavach.Handler, error)) (*Result, error) {
 	res := &Result{Service: j.Header.Meta.Service, Start: j.Header.Meta.Start, Records: len(j.Records), Steps: []StepResult{}}
 	// A variant never happened, so it has no recorded outputs to match and its
 	// recorded reads are only a source of plausible values: every step is lenient.
@@ -183,10 +212,16 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handle
 	if err != nil {
 		return nil, err
 	}
+	if c, ok := h.(kavach.Checker); ok {
+		for _, inv := range c.Invariants() {
+			res.Invariants = append(res.Invariants, inv.Name)
+		}
+	}
 	env := &replayEnv{hist: hist}
 	for _, st := range steps {
 		seq := st.input.Seq
-		env.reset(st, variant || st.marker != nil)
+		feature := opts.Features[seq]
+		env.reset(st, variant || st.marker != nil || feature)
 		sr := StepResult{Seq: seq}
 		pv, panicked, herr := runReplayStep(h, env, kavach.Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
 		sr.Outputs = append([]kavach.Output{}, env.outs...)
@@ -229,7 +264,13 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handle
 			return res.set(StatusInvariantViolated, seq, ierr.Error()), nil
 		}
 		if st.marker == nil && !variant {
-			if d := diffOutputs(st.outputs, sr.Outputs); d != "" {
+			d := diffOutputs(st.outputs, sr.Outputs)
+			switch {
+			case feature && d != "":
+				res.Changed = append(res.Changed, Change{Seq: seq, Recorded: orNone(st.outputs), Replay: orNone(sr.Outputs), Detail: d})
+			case feature:
+				res.Unreached = append(res.Unreached, seq)
+			case d != "":
 				return res.set(StatusDiverged, seq, d), nil
 			}
 		}
@@ -241,6 +282,13 @@ func replayJournal(j *journal.Journal, open func(snapshot []byte) (kavach.Handle
 		res.Status = StatusOK
 	}
 	return res, nil
+}
+
+func orNone(o []kavach.Output) []kavach.Output {
+	if o == nil {
+		return []kavach.Output{}
+	}
+	return o
 }
 
 func (r *Result) set(s Status, seq uint64, detail string) *Result {
