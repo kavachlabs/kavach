@@ -70,6 +70,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/settings", s.getSettings)
 	s.mux.HandleFunc("POST /api/settings", s.postSettings)
 	s.mux.HandleFunc("GET /api/tasks", s.getTasks)
+	s.mux.HandleFunc("GET /api/tasks/{task}/environment", s.getTaskEnvironment)
 	s.mux.HandleFunc("GET /api/models", s.getModels)
 	s.mux.HandleFunc("GET /api/jobs", s.getJobs)
 	s.mux.HandleFunc("POST /api/jobs", s.postJob)
@@ -181,6 +182,19 @@ func (s *Server) getTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (s *Server) getTaskEnvironment(w http.ResponseWriter, r *http.Request) {
+	env, err := harbor.TaskEnvironment(s.cfg.TasksDir, r.PathValue("task"))
+	if errors.Is(err, harbor.ErrNoTask) {
+		writeError(w, http.StatusNotFound, "no task named %q", r.PathValue("task"))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, env)
 }
 
 func (s *Server) getModels(w http.ResponseWriter, r *http.Request) {
