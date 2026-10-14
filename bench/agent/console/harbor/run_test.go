@@ -276,7 +276,10 @@ while :; do sleep 0.05; done
 		t.Fatal(err)
 	}
 	reader := &Reader{Dir: jobs, Runs: runner}
-	waitFor(t, func() bool { _, err := os.Stat(filepath.Join(jobs, "demo", "demo__2", "result.json")); return err == nil })
+	waitFor(t, func() bool {
+		_, err := os.Stat(filepath.Join(jobs, "demo", "demo__2", "result.json"))
+		return err == nil
+	})
 	if err := runner.Resume("demo"); !errors.Is(err, ErrNotStopped) {
 		t.Fatalf("resume while running: %v", err)
 	}
@@ -300,7 +303,10 @@ while :; do sleep 0.05; done
 	if err := runner.Resume("demo"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { b, _ := os.ReadFile(filepath.Join(dir, "env")); return strings.TrimSpace(string(b)) == "1" })
+	waitFor(t, func() bool {
+		b, _ := os.ReadFile(filepath.Join(dir, "env"))
+		return strings.TrimSpace(string(b)) == "1"
+	})
 	args, _ := os.ReadFile(filepath.Join(dir, "args"))
 	if got := strings.TrimSpace(string(args)); got != "jobs resume -p "+filepath.Join(jobs, "demo") {
 		t.Errorf("args %q", got)
