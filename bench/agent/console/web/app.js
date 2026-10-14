@@ -137,7 +137,7 @@ function jobShape(job, compact) {
   const models = job.models.length;
   const per = job.tasks.length * Math.max(models, 1);
   const runs = per ? Math.round(job.trials_total / per) : 0;
-  const name = bases.join(", ") || job.id;
+  const name = (compact && bases.length > 2 ? `${bases[0]} +${bases.length - 1}` : bases.join(", ")) || job.id;
   if (!job.tasks.length) return { name, shape: "" };
   const who = models ? (compact ? `${models}` : `${models} model${models > 1 ? "s" : ""}`) : job.agent;
   const shape = compact ? `${who}×${arms}×${runs}` : `${who} × ${arms} arm${arms > 1 ? "s" : ""} × ${runs}`;
@@ -920,11 +920,21 @@ function gradeLine(t) {
   return g.failed ? `${g.failed} of ${n} tests failed` : `${n} of ${n} tests passed`;
 }
 
+function isContractTrial(t, verdict) {
+  return Boolean(
+    (t.kavach && t.kavach.features) ||
+    t.arm === "workflow" ||
+    t.arm === "kavach-implement" ||
+    /^(pass|unreached|regression|missing_invariant|baseline_mismatch|unapproved|stale_lock)/.test(verdict || "")
+  );
+}
+
 function kavachLine(t) {
   const g = state.grades.get(`${t.job}/${t.id}`);
   const verdict = t.kavach ? t.kavach.verdict : g && g.grade && g.grade.kavach_diff;
   if (!verdict) return "";
-  return `kavach diff ${verdict}${t.arm === "control" || t.arm === "workflow" ? " · checked after the run" : ""}`;
+  const cmd = isContractTrial(t, verdict) ? "kavach contract check" : "kavach diff";
+  return `${cmd} ${verdict}${t.arm === "control" || t.arm === "workflow" ? " · checked after the run" : ""}`;
 }
 
 function renderAttempt(t) {
@@ -936,9 +946,11 @@ function renderAttempt(t) {
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
   if (t.kavach) {
+    const cmd = isContractTrial(t, t.kavach.verdict) ? "kavach contract check " : "kavach diff ";
+    const meta = [t.kavach.features, t.kavach.variants].filter(Boolean).join(" · ");
     kids.push(h("div", { class: "kcard" },
-      h("span", {}, h("span", { class: "peach" }, "kavach diff "), h("b", {}, t.kavach.verdict)),
-      t.kavach.variants ? h("span", { class: "dim" }, t.kavach.variants) : null,
+      h("span", {}, h("span", { class: "peach" }, cmd), h("b", {}, t.kavach.verdict)),
+      meta ? h("span", { class: "dim" }, meta) : null,
       t.kavach.old ? h("span", { class: "faint" }, `old build: ${t.kavach.old}`) : null));
   }
   kids.push(renderSteps(t, job));
@@ -963,14 +975,138 @@ function renderSteps(t, job) {
     else if (t.status === "running") why = "Waiting for the agent's first step…";
     return h("div", { class: "dim" }, why);
   }
-  shown.forEach((s, i) => box.append(renderStep(s, i)));
+  let lastTextIdx = -1;
+  shown.forEach((s, idx) => { if (s.kind === "text") lastTextIdx = idx; });
+  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx)));
   return box;
 }
 
-function renderStep(s, i) {
+function inlineMD(str) {
+  const out = [];
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*)/g;
+  let last = 0, m;
+  while ((m = re.exec(str)) !== null) {
+    if (m.index > last) out.push(str.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("`")) out.push(h("code", {}, tok.slice(1, -1)));
+    else if (tok.startsWith("**")) out.push(h("strong", {}, inlineMD(tok.slice(2, -2))));
+    else out.push(h("em", {}, inlineMD(tok.slice(1, -1))));
+    last = re.lastIndex;
+  }
+  if (last < str.length) out.push(str.slice(last));
+  return out;
+}
+
+function splitTableCells(line) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+}
+
+function renderMarkdown(raw) {
+  const lines = String(raw || "").replace(/\r\n/g, "\n").split("\n");
+  const nodes = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (line.trim().startsWith("```")) {
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) {
+        code.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++;
+      nodes.push(h("pre", { class: "md-pre" }, code.join("\n")));
+      continue;
+    }
+    const hm = line.match(/^(#{1,4})\s+(.*)$/);
+    if (hm) {
+      nodes.push(h(`h${hm[1].length}`, { class: "md-h" }, inlineMD(hm[2])));
+      i++;
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1])) {
+      const headers = splitTableCells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        rows.push(splitTableCells(lines[i]));
+        i++;
+      }
+      nodes.push(h("table", { class: "md-table" },
+        h("thead", {}, h("tr", {}, headers.map((c) => h("th", {}, inlineMD(c))))),
+        h("tbody", {}, rows.map((r) => h("tr", {}, r.map((c) => h("td", {}, inlineMD(c))))))
+      ));
+      continue;
+    }
+    if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const items = [];
+      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
+        items.push(h("li", {}, inlineMD(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ""))));
+        i++;
+      }
+      nodes.push(h(ordered ? "ol" : "ul", { class: "md-list" }, items));
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const q = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        q.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      nodes.push(h("blockquote", {}, inlineMD(q.join(" "))));
+      continue;
+    }
+    const para = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !lines[i].trim().startsWith("```") &&
+      !/^(#{1,4})\s+/.test(lines[i]) &&
+      !/^\s*([-*]|\d+\.)\s+/.test(lines[i]) &&
+      !/^\s*>\s?/.test(lines[i]) &&
+      !(lines[i].includes("|") && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1]))
+    ) {
+      para.push(lines[i]);
+      i++;
+    }
+    nodes.push(h("p", {}, inlineMD(para.join(" "))));
+  }
+  return nodes;
+}
+
+function compactKavachJSON(detail) {
+  if (!detail) return detail;
+  return detail.replace(/\[\s*\n(\s*(?:\d+|"[^"\n]{1,24}")(?:,\s*\n\s*(?:\d+|"[^"\n]{1,24}"))*)\s*\n\s*\]/g, (_, inner) => {
+    const items = inner.split(",").map((s) => s.trim()).filter(Boolean);
+    return `[${items.join(", ")}]`;
+  });
+}
+
+function renderStep(s, i, isLastText) {
   const ts = h("span", { class: "ts" }, clock(s.t_ms / 1000));
   if (s.kind === "text") {
-    return h("div", { class: "step text" }, h("p", { class: "say", title: "Click to expand", onclick: (e) => e.currentTarget.classList.toggle("open") }, s.title));
+    const text = s.title || "";
+    const lineCount = text.split("\n").length;
+    const isLong = text.length > 260 || lineCount > 4;
+    const startCollapsed = isLong && !isLastText;
+    const body = h("div", { class: `say md${startCollapsed ? " collapsed" : ""}` }, renderMarkdown(text));
+    let toggleBtn = null;
+    if (isLong) {
+      toggleBtn = h("button", {
+        type: "button",
+        class: "step-toggle",
+        onclick: (e) => {
+          e.stopPropagation();
+          const collapsed = body.classList.toggle("collapsed");
+          toggleBtn.textContent = collapsed ? "Expand ▾" : "Collapse ▴";
+        },
+      }, startCollapsed ? "Expand ▾" : "Collapse ▴");
+    }
+    return h("div", { class: "step text" },
+      h("div", { class: "step-head" }, h("span", { class: "k" }, "Agent"), toggleBtn, ts),
+      body);
   }
   let label = KIND[s.kind] || s.kind;
   let title = [s.title];
@@ -978,7 +1114,12 @@ function renderStep(s, i) {
     const [path, range] = s.title.split(" lines ");
     title = [path, range ? h("span", { class: "faint" }, ` ${range}`) : null];
   }
-  if (s.kind === "shell") title = [h("span", { class: "m" }, s.title), s.exit ? h("span", { class: "x" }, `exit ${s.exit}`) : null];
+  if (s.kind === "shell") {
+    const cmdLines = String(s.title || "").split("\n");
+    const firstLine = cmdLines[0];
+    const more = cmdLines.length > 1 ? h("span", { class: "faint" }, ` (+${cmdLines.length - 1} lines)`) : null;
+    title = [h("span", { class: "m" }, firstLine), more, s.exit ? h("span", { class: "x" }, `exit ${s.exit}`) : null];
+  }
   if (s.kavach) label = "Kavach";
   const cls = `step ${s.kind}${s.kavach ? " kavach" : ""}`;
   const head = [h("span", { class: "k" }, label), h("span", { class: "t" }, title), ts];
@@ -986,7 +1127,8 @@ function renderStep(s, i) {
     s.verdict ? h("span", { class: `pill ${s.passed ? "pass" : s.passed === false ? "fail" : "queued"}` }, s.verdict) : null,
     s.variants ? h("span", { class: "dim" }, s.variants) : null) : null;
   if (!s.detail) return h("div", { class: cls }, h("div", { class: "line" }, head), verdict);
-  const body = s.kind === "edit" ? diffView(s.detail) : h("pre", {}, s.detail);
+  const detailText = s.kavach ? compactKavachJSON(s.detail) : s.detail;
+  const body = s.kind === "edit" ? diffView(detailText) : h("pre", {}, detailText);
   if (verdict) return h("div", { class: cls }, h("details", { dataset: { i } }, h("summary", {}, head), body), verdict);
   return h("details", { class: cls, dataset: { i } }, h("summary", {}, head), body);
 }

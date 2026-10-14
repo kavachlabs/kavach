@@ -115,6 +115,7 @@ type Trial struct {
 // Kavach is the verifier's kavach.json: Kavach's verdict on the agent's fix.
 type Kavach struct {
 	Verdict  string `json:"verdict"`
+	Features string `json:"features,omitempty"`
 	Variants string `json:"variants"`
 	Old      string `json:"old"`
 }
