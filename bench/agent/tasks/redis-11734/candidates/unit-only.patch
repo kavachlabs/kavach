@@ -1,0 +1,16 @@
+diff --git a/src/bitops.c b/src/bitops.c
+--- a/src/bitops.c
++++ b/src/bitops.c
+@@ -897,6 +897,12 @@
+         return;
+     }
+ 
++    /* Reject an unknown unit even when the key does not exist. */
++    if (c->argc == 6 && strcasecmp(c->argv[5]->ptr,"bit") && strcasecmp(c->argv[5]->ptr,"byte")) {
++        addReplyErrorObject(c,shared.syntaxerr);
++        return;
++    }
++
+     /* If the key does not exist, from our point of view it is an infinite
+      * array of 0 bits. If the user is looking for the first clear bit return 0,
+      * If the user is looking for the first set bit, return -1. */
