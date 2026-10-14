@@ -1,0 +1,266 @@
+diff --git a/examples/kavach-driver/Cargo.toml b/examples/kavach-driver/Cargo.toml
+new file mode 100644
+index 0000000..7c2a062
+--- /dev/null
++++ b/examples/kavach-driver/Cargo.toml
+@@ -0,0 +1,14 @@
++[package]
++name = "kavach-driver"
++version = "0.1.0"
++edition = "2021"
++publish = false
++
++[dependencies]
++axum = { path = "../../axum" }
++hyper = "0.14"
++# The Kavach Rust SDK, as installed in the task image.
++kavach = { path = "/opt/kavach/sdk/rust" }
++serde_json = "1.0"
++tokio = { version = "1.0", features = ["rt"] }
++tower = { version = "0.4", features = ["util"] }
+diff --git a/examples/kavach-driver/src/app.rs b/examples/kavach-driver/src/app.rs
+new file mode 100644
+index 0000000..edf7f15
+--- /dev/null
++++ b/examples/kavach-driver/src/app.rs
+@@ -0,0 +1,110 @@
++//! The service: a small todo API with per-route request metrics, and the web
++//! front end's static assets served by a `Router` used as the fallback.
++
++use std::collections::BTreeMap;
++use std::convert::Infallible;
++use std::sync::{Arc, Mutex};
++
++use axum::{
++    body::Body,
++    extract::{MatchedPath, Path, State},
++    http::{header, Request, StatusCode},
++    middleware::{self, Next},
++    response::{IntoResponse, Response},
++    routing::{get, get_service},
++    Extension, Json, Router,
++};
++use serde_json::{json, Value};
++use tower::service_fn;
++
++/// The time of the request, in nanoseconds since the Unix epoch. The driver
++/// sets it from the Kavach clock; handlers must not read the system clock.
++#[derive(Clone, Copy)]
++pub struct Now(pub i64);
++
++/// The route a request was served by, as the metrics middleware saw it. Set
++/// as a response extension; the driver reports it.
++#[derive(Clone)]
++pub struct RouteLabel(pub String);
++
++#[derive(Default)]
++struct Todos {
++    next_id: u64,
++    items: BTreeMap<u64, Value>,
++}
++
++type Store = Arc<Mutex<Todos>>;
++
++pub fn app() -> Router {
++    let api = Router::new()
++        .route("/api/todos", get(list_todos).post(create_todo))
++        .route("/api/todos/:id", get(get_todo).delete(delete_todo))
++        .route_layer(middleware::from_fn(metrics))
++        .with_state(Store::default());
++
++    // The front end's files, mounted at the root so that every path the API
++    // does not serve is looked up here.
++    let assets = Router::new().nest_service("/", get_service(service_fn(asset)));
++
++    api.fallback_service(assets)
++}
++
++/// Labels each request with the route that matched it, for per-route metrics.
++async fn metrics(req: Request<Body>, next: Next<Body>) -> Response {
++    let route = req
++        .extensions()
++        .get::<MatchedPath>()
++        .map(|p| p.as_str().to_owned())
++        .unwrap_or_else(|| "unmatched".to_owned());
++    let mut res = next.run(req).await;
++    res.extensions_mut().insert(RouteLabel(route));
++    res
++}
++
++async fn list_todos(State(store): State<Store>) -> Json<Value> {
++    let todos = store.lock().unwrap();
++    Json(Value::Array(todos.items.values().cloned().collect()))
++}
++
++async fn create_todo(
++    State(store): State<Store>,
++    Extension(now): Extension<Now>,
++    Json(body): Json<Value>,
++) -> Result<(StatusCode, Json<Value>), (StatusCode, &'static str)> {
++    let Some(title) = body.get("title").and_then(Value::as_str) else {
++        return Err((StatusCode::UNPROCESSABLE_ENTITY, "title is required"));
++    };
++    let mut todos = store.lock().unwrap();
++    todos.next_id += 1;
++    let id = todos.next_id;
++    let todo = json!({ "id": id, "title": title, "done": false, "created": now.0 });
++    todos.items.insert(id, todo.clone());
++    Ok((StatusCode::CREATED, Json(todo)))
++}
++
++async fn get_todo(State(store): State<Store>, Path(id): Path<u64>) -> Result<Json<Value>, StatusCode> {
++    let todos = store.lock().unwrap();
++    todos.items.get(&id).cloned().map(Json).ok_or(StatusCode::NOT_FOUND)
++}
++
++async fn delete_todo(State(store): State<Store>, Path(id): Path<u64>) -> StatusCode {
++    match store.lock().unwrap().items.remove(&id) {
++        Some(_) => StatusCode::NO_CONTENT,
++        None => StatusCode::NOT_FOUND,
++    }
++}
++
++const INDEX: &str = "<!doctype html><title>Todos</title><link rel=stylesheet href=/style.css><div id=app></div><script src=/app.js></script>\n";
++const APP_JS: &str = "fetch('/api/todos').then(r => r.json()).then(render);\n";
++const STYLE: &str = "body { font-family: sans-serif; }\n";
++
++/// Serves the front end's files, which are compiled in.
++async fn asset(req: Request<Body>) -> Result<Response, Infallible> {
++    let (body, kind) = match req.uri().path() {
++        "/" | "/index.html" => (INDEX, "text/html"),
++        "/app.js" => (APP_JS, "application/javascript"),
++        "/style.css" => (STYLE, "text/css"),
++        _ => return Ok((StatusCode::NOT_FOUND, "not found").into_response()),
++    };
++    Ok(([(header::CONTENT_TYPE, kind)], body).into_response())
++}
+diff --git a/examples/kavach-driver/src/main.rs b/examples/kavach-driver/src/main.rs
+new file mode 100644
+index 0000000..9d00886
+--- /dev/null
++++ b/examples/kavach-driver/src/main.rs
+@@ -0,0 +1,124 @@
++//! Runs the service in `app.rs` under Kavach: one HTTP request per step.
++//!
++//! Each line of standard input is a request as JSON:
++//!
++//!     {"method":"POST","uri":"/api/todos","headers":{"content-type":"application/json"},"body":"{\"title\":\"x\"}"}
++//!
++//! (`method` defaults to GET, `headers` and `body` to empty). The driver sends
++//! it to the `Router` with `tower::ServiceExt::oneshot`, as hyper would, and
++//! emits the response on the `http.response` sink, and the metrics
++//! middleware's route label on `metrics.requests`. It records a journal through
++//! `kavach-recorder` (from `KAVACH_RECORDER`, else PATH; without one it runs
++//! unrecorded), into `KAVACH_DIR` if set. Outputs are printed to standard
++//! output.
++//!
++//! A panic in the service is recorded, logged, and answered with no response;
++//! the driver goes on with the next request, as hyper does when a connection's
++//! task panics.
++//!
++//! Run as `kavach-driver kavach-host`, the binary is a replay host.
++
++mod app;
++
++use std::io::BufRead;
++
++use axum::{body::Body, http::Request, Router};
++use kavach::{Env, Handler, HandlerResult, HostOptions, Input, Recorder, StepError};
++use serde_json::{json, Map, Value};
++use tower::ServiceExt;
++
++struct Driver {
++    rt: tokio::runtime::Runtime,
++    app: Router,
++}
++
++impl Driver {
++    fn new() -> Driver {
++        Driver {
++            rt: tokio::runtime::Builder::new_current_thread()
++                .build()
++                .expect("tokio runtime"),
++            app: app::app(),
++        }
++    }
++}
++
++impl Handler for Driver {
++    fn handle(&mut self, env: &mut dyn Env, input: &Input) -> HandlerResult {
++        let r: Value = serde_json::from_slice(&input.data)?;
++        let uri = r.get("uri").and_then(Value::as_str).ok_or("request has no uri")?;
++        let method = r.get("method").and_then(Value::as_str).unwrap_or("GET");
++        let mut req = Request::builder().method(method).uri(uri);
++        if let Some(headers) = r.get("headers").and_then(Value::as_object) {
++            for (k, v) in headers {
++                req = req.header(k.as_str(), v.as_str().unwrap_or_default());
++            }
++        }
++        let body = r.get("body").and_then(Value::as_str).unwrap_or_default();
++        let mut req = req.body(Body::from(body.to_owned()))?;
++        req.extensions_mut().insert(app::Now(env.now_nanos()));
++
++        let app = self.app.clone();
++        let (status, headers, route, body) = self.rt.block_on(async move {
++            let res = app.oneshot(req).await.expect("Router is infallible");
++            let route = res.extensions().get::<app::RouteLabel>().map(|l| l.0.clone());
++            let (parts, body) = res.into_parts();
++            let body = hyper::body::to_bytes(body).await?;
++            let headers: Map<String, Value> = parts
++                .headers
++                .iter()
++                .map(|(k, v)| (k.to_string(), Value::from(String::from_utf8_lossy(v.as_bytes()))))
++                .collect();
++            Ok::<_, axum::Error>((parts.status.as_u16(), headers, route, body))
++        })?;
++
++        let res = json!({
++            "status": status,
++            "headers": headers,
++            "body": String::from_utf8_lossy(&body),
++        });
++        env.emit_remote("http.response", res.to_string().as_bytes());
++        if let Some(route) = route {
++            let m = json!({ "method": method, "route": route, "status": status });
++            env.emit_remote("metrics.requests", m.to_string().as_bytes());
++        }
++        Ok(())
++    }
++}
++
++fn main() {
++    kavach::maybe_host(|| Box::new(Driver::new()), HostOptions::new());
++
++    let mut builder = Recorder::builder("todo-app")
++        .recover_panics(true)
++        .capture_backtraces(true)
++        .deliver(|outs| {
++            for o in outs {
++                println!("{} {}", o.sink, String::from_utf8_lossy(&o.data));
++            }
++            Ok(())
++        });
++    if let Ok(dir) = std::env::var("KAVACH_DIR") {
++        builder = builder.dir(dir);
++    }
++    let mut rec = builder.build(Box::new(Driver::new())).unwrap_or_else(|e| {
++        eprintln!("kavach-driver: {e}");
++        std::process::exit(1);
++    });
++
++    for (i, line) in std::io::stdin().lock().lines().enumerate() {
++        let line = line.expect("reading requests");
++        if line.trim().is_empty() {
++            continue;
++        }
++        let input = Input::new("http", (i + 1).to_string(), line.into_bytes());
++        match rec.step(&input) {
++            Ok(()) => {}
++            Err(StepError::Panic { message }) => {
++                eprintln!("kavach-driver: request {}: panic: {message}", i + 1)
++            }
++            Err(e) => eprintln!("kavach-driver: request {}: {e}", i + 1),
++        }
++    }
++    rec.close();
++}

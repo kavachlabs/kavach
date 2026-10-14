@@ -1,0 +1,12 @@
+# The verifier runs in the task's grader image, which holds the hidden test,
+# both arms' starting trees, the old build and the fixture. It never shares a
+# container with the agent. test.sh is mounted rather than baked in so the
+# grader image stays the task's.
+services:
+  main:
+    build:
+      context: ${KAVACH_ROOT:-../../../../../..}
+      dockerfile: bench/agent/tasks/axum-1934/Dockerfile
+      target: grader
+    volumes:
+      - ./:/tests
