@@ -6,7 +6,7 @@ arm = "kavach"
 description = "Redis at the base commit with the Kavach integration, the recorded incident and the kavach tools."
 
 [agent]
-timeout_sec = 3600.0
+timeout_sec = 2700.0
 # No network while the agent works: the OpenCode agent
 # (bench/agent/harbor/agents) lets it reach only its model proxy, which
 # holds the API key.
