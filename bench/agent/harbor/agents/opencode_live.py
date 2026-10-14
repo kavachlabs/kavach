@@ -116,6 +116,13 @@ class KavachOpenCode(OpenCode):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        # Ensure ripgrep (rg) is present for OpenCode's grep/glob tools and bash,
+        # even if the task container was started from an older cached image layer.
+        await environment.exec(
+            "command -v rg >/dev/null 2>&1 || "
+            "(apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends ripgrep >/dev/null 2>&1 && rm -rf /var/lib/apt/lists/*)",
+            user="root",
+        )
         # Task images may ship OpenCode already, for a non-root user that
         # cannot install packages.
         nvm = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; "

@@ -30,7 +30,7 @@ RUN cmake -S sdk/c -B /tmp/c -DCMAKE_BUILD_TYPE=Release -DKAVACH_BUILD_TESTS=OFF
 FROM debian:bookworm-slim AS base
 ARG BASE
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential pkg-config tcl procps git ca-certificates curl python3 nodejs npm \
+      build-essential pkg-config tcl procps git ca-certificates curl python3 nodejs npm ripgrep \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out

