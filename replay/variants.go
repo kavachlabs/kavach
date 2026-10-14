@@ -99,6 +99,7 @@ func candidates(steps []*step, k int) [][]candidate {
 	}
 	return [][]candidate{
 		fieldMutations(base, k),
+		pairMutations(base, k),
 		moves(base, k),
 		drops(base, k),
 		duplicates(base, k),
@@ -261,18 +262,174 @@ type field struct {
 	val json.RawMessage
 }
 
+type fieldMutation struct {
+	desc   string
+	fields []field
+}
+
 // fieldMutations perturbs the failing input when it is a JSON object: each
 // field set to values the same field takes in other inputs and to nearby
-// values, removed, and fields seen in other inputs added. Mutations are
-// interleaved across fields so that every field is varied early.
+// values, removed, and fields seen in other inputs added. An array field is
+// also varied one element at a time, with values from the same index in other
+// inputs, from other indices of earlier arrays that share the element, and
+// nearby values. Mutations are interleaved across fields so that every field
+// is varied early.
 func fieldMutations(base []vstep, k int) []candidate {
 	fields, ok := objectFields(base[k].input.Data)
 	if !ok {
 		return nil
 	}
-	// Values each key takes in the other inputs, in order of first appearance.
-	seen := map[string][]json.RawMessage{}
-	var order []string
+	seen, recent, order := seenFields(base, k)
+
+	var perKey [][]fieldMutation
+	present := map[string]bool{}
+	for fi, f := range fields {
+		present[f.key] = true
+		var ms []fieldMutation
+		for _, v := range fieldReplacements(f.val, seen[f.key]) {
+			fs := append([]field(nil), fields...)
+			fs[fi].val = v
+			ms = append(ms, fieldMutation{fmt.Sprintf("%q %s → %s", f.key, f.val, v), fs})
+		}
+		if len(fields) > 1 {
+			fs := append(append([]field(nil), fields[:fi]...), fields[fi+1:]...)
+			ms = append(ms, fieldMutation{fmt.Sprintf("%q removed", f.key), fs})
+		}
+		perKey = append(perKey, ms)
+
+		elems, ok := arrayElements(f.val)
+		if !ok {
+			continue
+		}
+		var crossPerElem [][]fieldMutation
+		for ei, e := range elems {
+			setElem := func(v json.RawMessage) fieldMutation {
+				es := append([]json.RawMessage(nil), elems...)
+				es[ei] = v
+				fs := append([]field(nil), fields...)
+				fs[fi].val = encodeArray(es)
+				return fieldMutation{fmt.Sprintf("%q[%d] %s → %s", f.key, ei, e, v), fs}
+			}
+			same, cross, near := elemReplacements(elems, ei, seen[f.key], recent[f.key])
+			var ems []fieldMutation
+			for _, v := range append(same, near...) {
+				ems = append(ems, setElem(v))
+			}
+			if len(ems) > 0 {
+				perKey = append(perKey, ems)
+			}
+			var cms []fieldMutation
+			for _, v := range cross {
+				cms = append(cms, setElem(v))
+			}
+			if len(cms) > 0 {
+				crossPerElem = append(crossPerElem, cms)
+			}
+		}
+		if cms := interleaveMutations(crossPerElem); len(cms) > 0 {
+			perKey = append(perKey, cms)
+		}
+	}
+	added := 0
+	for _, key := range order {
+		if present[key] || added == 2 {
+			continue
+		}
+		added++
+		v := seen[key][0]
+		fs := append(append([]field(nil), fields...), field{key, v})
+		perKey = append(perKey, []fieldMutation{{fmt.Sprintf("%q: %s added", key, v), fs}})
+	}
+	return buildFieldCandidates(base, k, interleaveMutations(perKey))
+}
+
+// pairMutations changes two fields, or two elements of an array field, of the
+// failing input at once, starting from the trailing fields and arguments.
+func pairMutations(base []vstep, k int) []candidate {
+	fields, ok := objectFields(base[k].input.Data)
+	if !ok {
+		return nil
+	}
+	seen, recent, _ := seenFields(base, k)
+	var ms []fieldMutation
+
+	if len(fields) > 1 {
+		fvals := make([][]json.RawMessage, len(fields))
+		for fi, f := range fields {
+			fvals[fi] = fieldReplacements(f.val, seen[f.key])
+		}
+		for fj := len(fields) - 1; fj >= 1; fj-- {
+			for fi := fj - 1; fi >= 0; fi-- {
+				vi, vj := fvals[fi], fvals[fj]
+				if len(vi) == 0 || len(vj) == 0 {
+					continue
+				}
+				addPair := func(a, b json.RawMessage) {
+					fs := append([]field(nil), fields...)
+					fs[fi].val, fs[fj].val = a, b
+					ms = append(ms, fieldMutation{
+						fmt.Sprintf("%q %s → %s, %q %s → %s", fields[fi].key, fields[fi].val, a, fields[fj].key, fields[fj].val, b),
+						fs,
+					})
+				}
+				addPair(vi[0], vj[0])
+				if len(vi) > 1 {
+					addPair(vi[len(vi)-1], vj[0])
+				}
+			}
+		}
+	}
+
+	for fi, f := range fields {
+		elems, ok := arrayElements(f.val)
+		if !ok || len(elems) < 2 {
+			continue
+		}
+		evals := make([][]json.RawMessage, len(elems))
+		for ei := range elems {
+			same, cross, near := elemReplacements(elems, ei, seen[f.key], recent[f.key])
+			evals[ei] = append(append(same, cross...), near...)
+		}
+		for _, minIdx := range []int{1, 0} {
+			for ej := len(elems) - 1; ej >= 1; ej-- {
+				for ei := ej - 1; ei >= 0; ei-- {
+					if (ei == 0) != (minIdx == 0) {
+						continue
+					}
+					vi, vj := evals[ei], evals[ej]
+					if len(vi) == 0 || len(vj) == 0 {
+						continue
+					}
+					addElemPair := func(a, b json.RawMessage) {
+						es := append([]json.RawMessage(nil), elems...)
+						es[ei], es[ej] = a, b
+						fs := append([]field(nil), fields...)
+						fs[fi].val = encodeArray(es)
+						ms = append(ms, fieldMutation{
+							fmt.Sprintf("%q[%d] %s → %s, %q[%d] %s → %s", f.key, ei, elems[ei], a, f.key, ej, elems[ej], b),
+							fs,
+						})
+					}
+					addElemPair(vi[0], vj[0])
+					if len(vi) > 1 {
+						addElemPair(vi[len(vi)-1], vj[0])
+					}
+					if len(vj) > 1 {
+						addElemPair(vi[0], vj[1])
+					}
+				}
+			}
+		}
+	}
+	return buildFieldCandidates(base, k, ms)
+}
+
+// seenFields collects the values each key takes in the other inputs in order
+// of first appearance (seen) and in reverse step order from k-1 down to 0
+// (recent).
+func seenFields(base []vstep, k int) (seen, recent map[string][]json.RawMessage, order []string) {
+	seen = map[string][]json.RawMessage{}
+	recent = map[string][]json.RawMessage{}
 	for i, st := range base {
 		if i == k {
 			continue
@@ -290,103 +447,112 @@ func fieldMutations(base []vstep, k int) []candidate {
 			}
 		}
 	}
-
-	type mutation struct {
-		desc   string
-		fields []field
-	}
-	var perKey [][]mutation
-	present := map[string]bool{}
-	for fi, f := range fields {
-		present[f.key] = true
-		var ms []mutation
-		set := func(v json.RawMessage) {
-			if bytes.Equal(v, f.val) {
-				return
-			}
-			fs := append([]field(nil), fields...)
-			fs[fi].val = v
-			ms = append(ms, mutation{fmt.Sprintf("%q %s → %s", f.key, f.val, v), fs})
-		}
-		others := seen[f.key]
-		for i := 0; i < len(others) && i < 3; i++ {
-			set(others[i])
-		}
-		for _, v := range nearby(f.val) {
-			if !containsRaw(others, v) {
-				set(v)
-			}
-		}
-		if len(fields) > 1 {
-			fs := append(append([]field(nil), fields[:fi]...), fields[fi+1:]...)
-			ms = append(ms, mutation{fmt.Sprintf("%q removed", f.key), fs})
-		}
-		perKey = append(perKey, ms)
-		// An array is varied one element at a time, so that a command's
-		// arguments are changed one by one: each element set to the values at
-		// the same index in other inputs and to nearby values.
-		elems, ok := arrayElements(f.val)
+	for i := k - 1; i >= 0; i-- {
+		fs, ok := objectFields(base[i].input.Data)
 		if !ok {
 			continue
 		}
-		for ei, e := range elems {
-			var ems []mutation
-			setElem := func(v json.RawMessage) {
-				if bytes.Equal(v, e) {
-					return
-				}
-				es := append([]json.RawMessage(nil), elems...)
-				es[ei] = v
-				fs := append([]field(nil), fields...)
-				fs[fi].val = encodeArray(es)
-				ems = append(ems, mutation{fmt.Sprintf("%q[%d] %s → %s", f.key, ei, e, v), fs})
-			}
-			var at []json.RawMessage
-			for _, o := range others {
-				if oes, ok := arrayElements(o); ok && ei < len(oes) && !containsRaw(at, oes[ei]) && !bytes.Equal(oes[ei], e) {
-					at = append(at, oes[ei])
-				}
-			}
-			for i := 0; i < len(at) && i < 3; i++ {
-				setElem(at[i])
-			}
-			for _, v := range nearby(e) {
-				if !containsRaw(at, v) {
-					setElem(v)
-				}
-			}
-			if len(ems) > 0 {
-				perKey = append(perKey, ems)
+		for _, f := range fs {
+			if !containsRaw(recent[f.key], f.val) {
+				recent[f.key] = append(recent[f.key], f.val)
 			}
 		}
 	}
-	added := 0
-	for _, key := range order {
-		if present[key] || added == 2 {
+	return seen, recent, order
+}
+
+func fieldReplacements(val json.RawMessage, others []json.RawMessage) []json.RawMessage {
+	var out []json.RawMessage
+	for _, o := range others {
+		if !bytes.Equal(o, val) && !containsRaw(out, o) {
+			out = append(out, o)
+			if len(out) == 3 {
+				break
+			}
+		}
+	}
+	for _, v := range nearby(val) {
+		if !bytes.Equal(v, val) && !containsRaw(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// elemReplacements returns replacement values for elems[ei]: up to 3 values at
+// the same index in other inputs (same), up to 3 values at other indices of
+// earlier arrays that contain elems[ei] at another index (cross), and nearby
+// values (near).
+func elemReplacements(elems []json.RawMessage, ei int, others, recent []json.RawMessage) (same, cross, near []json.RawMessage) {
+	e := elems[ei]
+	for _, o := range others {
+		if oes, ok := arrayElements(o); ok && ei < len(oes) && !bytes.Equal(oes[ei], e) && !containsRaw(same, oes[ei]) {
+			same = append(same, oes[ei])
+			if len(same) == 3 {
+				break
+			}
+		}
+	}
+	for _, o := range recent {
+		oes, ok := arrayElements(o)
+		if !ok {
 			continue
 		}
-		added++
-		v := seen[key][0]
-		fs := append(append([]field(nil), fields...), field{key, v})
-		perKey = append(perKey, []mutation{{fmt.Sprintf("%q: %s added", key, v), fs}})
-	}
-
-	var out []candidate
-	for i := 0; ; i++ {
-		more := false
-		for _, ms := range perKey {
-			if i >= len(ms) {
+		shifted := false
+		for ej, oe := range oes {
+			if ej != ei && (ei == 0) == (ej == 0) && bytes.Equal(oe, e) {
+				shifted = true
+				break
+			}
+		}
+		if !shifted {
+			continue
+		}
+		for ej, oe := range oes {
+			if (ei == 0) != (ej == 0) || bytes.Equal(oe, e) || containsRaw(same, oe) || containsRaw(cross, oe) {
 				continue
 			}
-			more = true
-			s := cloneSteps(base)
-			s[k].input.Data = encodeObject(ms[i].fields)
-			out = append(out, candidate{fmt.Sprintf("failing input (seq %d): %s", base[k].input.Seq, ms[i].desc), s})
+			cross = append(cross, oe)
+			if len(cross) == 3 {
+				break
+			}
+		}
+		if len(cross) == 3 {
+			break
+		}
+	}
+	for _, v := range nearby(e) {
+		if !bytes.Equal(v, e) && !containsRaw(same, v) && !containsRaw(cross, v) {
+			near = append(near, v)
+		}
+	}
+	return same, cross, near
+}
+
+func interleaveMutations(groups [][]fieldMutation) []fieldMutation {
+	var out []fieldMutation
+	for i := 0; ; i++ {
+		more := false
+		for _, ms := range groups {
+			if i < len(ms) {
+				out = append(out, ms[i])
+				more = true
+			}
 		}
 		if !more {
 			return out
 		}
 	}
+}
+
+func buildFieldCandidates(base []vstep, k int, ms []fieldMutation) []candidate {
+	var out []candidate
+	for _, m := range ms {
+		s := cloneSteps(base)
+		s[k].input.Data = encodeObject(m.fields)
+		out = append(out, candidate{fmt.Sprintf("failing input (seq %d): %s", base[k].input.Seq, m.desc), s})
+	}
+	return out
 }
 
 // arrayElements splits a compacted JSON array into its compacted elements.

@@ -42,46 +42,42 @@ the hidden test, separately:
 | Candidate | `kavach diff` | Variants that reproduce on the old build / pass on the new | Hidden test |
 | --- | --- | --- | --- |
 | (old build) | — | — | fail |
-| `upstream`: block on `keys, numkeys` | `fixed` | 37 of 59 / 37 | pass |
-| `key-specs`: block on the keys `getKeysFromCommand` finds (what the issue suggests) | `fixed` | 37 of 59 / 37 | pass |
-| `skip-leading-args`: block from the first key to the argument before the last | `fixed` | 37 of 59 / 37 | **fail** |
+| `upstream`: block on `keys, numkeys` | `fixed` | 38 of 64 / 38 | pass |
+| `key-specs`: block on the keys `getKeysFromCommand` finds (what the issue suggests) | `fixed` | 38 of 64 / 38 | pass |
+| `skip-leading-args`: block from the first key to the argument before the last | `variant_failed(30)@54` | 38 of 64 / 36 | fail |
 | `count-only`: the right count from the wrong place (`argv+1, numkeys`) | `nondeterministic@35` | — | fail |
 
-Kavach and the hidden test disagree on `skip-leading-args`; see below.
+Kavach and the hidden test agree on all four candidates.
 
 ## What this does and does not show
 
-- **Kavach passes a narrow fix.** `skip-leading-args` stops BZMPOP from
-  blocking on its timeout and numkeys, the arguments the report and the
-  incident are about, but still blocks on `MIN`/`MAX`, `COUNT` and the count
-  when COUNT is given. The hidden test writes `min`, `max`, `count` and `10`
-  and catches it. Kavach does not:
-  - The recorded trigger is the key `1`, which the narrow fix handles.
-  - No variant changes which argument the write hits. Field variants act on
-    the input's top-level JSON fields, and the integration's input is
-    `{"argv":[...]}`: the 3 field variants replace the whole ZADD with another
-    recorded command (`PING`, a ZADD to `jobs`, a BZMPOP), and none
-    reproduces. Variants never edit inside an array.
-  - The variants that reproduce are reorderings (the ZADD moved earlier while
-    a worker still waits), drops and duplicates of other steps, and the four
-    clock shifts. They confirm that the fix holds under other timings; they
-    say nothing about other argument positions.
+- **Cross-position array-element variants catch `skip-leading-args`.**
+  `skip-leading-args` stops BZMPOP from blocking on its timeout and numkeys,
+  the arguments the report and the incident are about, but still blocks on
+  `MIN`/`MAX`, `COUNT` and the count when COUNT is given. The hidden test
+  writes `min`, `max`, `count` and `10` and catches it.
+  - Before array-element variants (`cdfafd3`, 37 of 59 reproducing), and with
+    same-index array-element variants alone (41 of 64 reproducing),
+    `skip-leading-args` passed `kavach diff`: the recorded trigger is `"1"`
+    (`argv[1]` of ZADD, `argv[2]` of BZMPOP), and same-index variants only
+    replaced `argv[1]` of ZADD with `argv[1]` of other commands (`"jobs"`,
+    `"0"`, `"2"`).
+  - With cross-position array-element variants (§6.1), `"1"` in the failing
+    ZADD is also replaced by other arguments of the earlier array where `"1"`
+    appeared at another index (`BZMPOP 0 1 jobs MIN COUNT 2`), producing
+    `"argv"[1] "1" → "MIN"` (variant 30) and `"argv"[1] "1" → "COUNT"`
+    (variant 60). Both reproduce `pop-key-contract` on the old build and fail
+    on `skip-leading-args`, while passing on `upstream` and `key-specs`.
 - **The ledger's two claims, checked.**
-  - *"Field variants on the ZADD's key reach the trigger"*: not with this
-    integration. 37 of 59 variants reproduce, so the verdict is `fixed`, not
-    `unverified`, but none of them is a field variant (above). With an input
-    encoding that puts the key in its own field (`{"cmd":"ZADD","key":"1",
-    ...}`), field variants would set it to the 3 first keys seen in other
-    inputs plus `"1-1"`; whether one hits a blocked non-key argument depends
-    on the traffic. Not tried.
+  - *"Field variants on the ZADD's key reach the trigger"*: true once array
+    elements are varied across argument positions of earlier commands that
+    share the element (above).
   - *"No identified capability gap"*: true of Kavach, false of the pilot's
     integration. Its `redis-kavach.patch` ran blocking commands outside the
     step model, so this incident could not be recorded at all. Kavach's model
     held: a step's outputs may go to sinks other than the step's own client,
     so the reply of a command that waited is an output of the step that
-    served it. Nothing in Kavach changed; the integration grew by about 340
-    lines (below). The gap that does show is the one above: variants cannot
-    move a write to another argument position.
+    served it. The integration grew by about 340 lines (below).
 - **The invariant comes close to the bug, but no closer than the report.**
   `pop-key-contract` says that a pop which names the key it popped from
   (BLPOP, BRPOP, BLMPOP, LMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, ZMPOP) replies with

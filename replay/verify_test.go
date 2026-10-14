@@ -147,14 +147,15 @@ func TestVariantsOfJSONInput(t *testing.T) {
 		got[info.Mutation] = string(recordAt(t, v, info.Incident).Data)
 	}
 	for mut, data := range map[string]string{
-		`failing input (seq 5): "id" "c" → "a"`:      `{"id":"a","n":3,"ok":false,"amount":null}`,
-		`failing input (seq 5): "id" "c" → "c-1"`:    `{"id":"c-1","n":3,"ok":false,"amount":null}`,
-		`failing input (seq 5): "n" 3 → 4`:           `{"id":"c","n":4,"ok":false,"amount":null}`,
-		`failing input (seq 5): "n" 3 → -3`:          `{"id":"c","n":-3,"ok":false,"amount":null}`,
-		`failing input (seq 5): "ok" false → true`:   `{"id":"c","n":3,"ok":true,"amount":null}`,
-		`failing input (seq 5): "amount" null → 2.5`: `{"id":"c","n":3,"ok":false,"amount":2.5}`,
-		`failing input (seq 5): "amount" removed`:    `{"id":"c","n":3,"ok":false}`,
-		`failing input (seq 5): "tag": "t" added`:    `{"id":"c","n":3,"ok":false,"amount":null,"tag":"t"}`,
+		`failing input (seq 5): "id" "c" → "a"`:                         `{"id":"a","n":3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "id" "c" → "c-1"`:                       `{"id":"c-1","n":3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "n" 3 → 4`:                              `{"id":"c","n":4,"ok":false,"amount":null}`,
+		`failing input (seq 5): "n" 3 → -3`:                             `{"id":"c","n":-3,"ok":false,"amount":null}`,
+		`failing input (seq 5): "ok" false → true`:                      `{"id":"c","n":3,"ok":true,"amount":null}`,
+		`failing input (seq 5): "amount" null → 2.5`:                    `{"id":"c","n":3,"ok":false,"amount":2.5}`,
+		`failing input (seq 5): "amount" removed`:                       `{"id":"c","n":3,"ok":false}`,
+		`failing input (seq 5): "tag": "t" added`:                       `{"id":"c","n":3,"ok":false,"amount":null,"tag":"t"}`,
+		`failing input (seq 5): "ok" false → true, "amount" null → 2.5`: `{"id":"c","n":3,"ok":true,"amount":2.5}`,
 	} {
 		if got[mut] != data {
 			t.Errorf("variant %q: got %q, want %q", mut, got[mut], data)
@@ -315,14 +316,16 @@ func TestVariantsOfArrayElements(t *testing.T) {
 	}
 
 	for mut, data := range map[string]string{
-		`"argv"[0] "SET" → "GET"`: `{"argv":["GET","boom","2"]}`,
-		`"argv"[1] "boom" → "a"`:  `{"argv":["SET","a","2"]}`,
-		`"argv"[1] "boom" → "b"`:  `{"argv":["SET","b","2"]}`,
-		`"argv"[2] "2" → "1"`:     `{"argv":["SET","boom","1"]}`,
+		`"argv"[0] "SET" → "GET"`:                        `{"argv":["GET","boom","2"]}`,
+		`"argv"[1] "boom" → "a"`:                         `{"argv":["SET","a","2"]}`,
+		`"argv"[1] "boom" → "b"`:                         `{"argv":["SET","b","2"]}`,
+		`"argv"[2] "2" → "1"`:                            `{"argv":["SET","boom","1"]}`,
+		`"argv"[1] "boom" → "a", "argv"[2] "2" → "1"`:    `{"argv":["SET","a","1"]}`,
+		`"argv"[0] "SET" → "GET", "argv"[1] "boom" → "a"`: `{"argv":["GET","a","2"]}`,
 	} {
 		found := false
 		for m, d := range got {
-			if strings.HasSuffix(m, mut) {
+			if strings.HasSuffix(m, ": "+mut) {
 				found = true
 				if d != data {
 					t.Errorf("variant %q: got %q, want %q", m, d, data)
@@ -398,3 +401,204 @@ func (h *bobFormat) Handle(env kavach.Env, in kavach.Input) error {
 	h.wallet.newFormat = strings.HasPrefix(string(in.Data), "bob:")
 	return h.wallet.Handle(env, in)
 }
+
+func TestVerifyRejectsNarrowFixesViaCrossIndexAndPairMutations(t *testing.T) {
+	// 1. Cross-index array element mutation (redis-10764 pattern):
+	// BZMPOP blocks on non-key arguments when waiting; ZADD to "1" wakes it.
+	// A narrow fix skips leading arguments ("0", "1") but still blocks on
+	// trailing options ("MIN", "COUNT"). Cross-index mutation replaces ZADD's
+	// key ("1", which appeared at argv[2] of BZMPOP) with "MIN" (argv[4] of
+	// BZMPOP) and catches the narrow fix.
+	t.Run("cross-index", func(t *testing.T) {
+		makePop := func(mode string) func() kavach.Handler {
+			return func() kavach.Handler {
+				var blocked []string
+				var popped string
+				return &invHandler{
+					handle: func(env kavach.Env, in kavach.Input) error {
+						popped = ""
+						var cmd struct{ Argv []string }
+						if err := json.Unmarshal(in.Data, &cmd); err != nil {
+							return err
+						}
+						a := cmd.Argv
+						switch a[0] {
+						case "BZMPOP":
+							switch mode {
+							case "old":
+								blocked = a[1 : len(a)-1] // blocks on "0","1","jobs","MIN","COUNT"
+							case "narrow":
+								blocked = a[3 : len(a)-1] // skips "0","1", still blocks on "MIN","COUNT"
+							case "fixed":
+								blocked = a[3:4] // blocks only on "jobs"
+							}
+						case "ZADD":
+							for _, k := range blocked {
+								if k == a[1] {
+									popped = k
+									env.Emit("reply:waiter", []byte(k))
+									break
+								}
+							}
+							env.Emit("reply", []byte(":1"))
+						default:
+							env.Emit("reply", []byte("OK"))
+						}
+						return nil
+					},
+					inv: kavach.Invariant{Name: "pop-key-contract", Check: func() error {
+						if popped != "" && popped != "jobs" {
+							return errors.New("popped foreign key " + popped)
+						}
+						return nil
+					}},
+				}
+			}
+		}
+		opts := testOptions(t)
+		r := newRecorder(t, makePop("old")(), opts)
+		err := feed(t, r,
+			`{"argv":["PING"]}`,
+			`{"argv":["ZADD","2","10","p1"]}`,
+			`{"argv":["ZADD","3","20","p2"]}`,
+			`{"argv":["BZMPOP","0","1","jobs","MIN","COUNT","2"]}`,
+			`{"argv":["ZCARD","2"]}`,
+			`{"argv":["ZADD","1","10","p3"]}`,
+		)
+		if err == nil {
+			t.Fatal("expected invariant failure")
+		}
+		j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		vNarrow, err := replay.Verify(j, makePop("old"), makePop("narrow"), replay.VerifyOptions{MinVariants: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vNarrow.Status != replay.StatusVariantFailed || !strings.Contains(vNarrow.Detail, `"argv"[1] "1" → "MIN"`) {
+			t.Fatalf("narrow fix: got %s (%s), want variant_failed on MIN", vNarrow, vNarrow.Detail)
+		}
+		vFixed, err := replay.Verify(j, makePop("old"), makePop("fixed"), replay.VerifyOptions{MinVariants: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vFixed.Status != replay.StatusFixed {
+			t.Fatalf("fixed build: got %s (%s)", vFixed, vFixed.Detail)
+		}
+	})
+
+	// 2. Pairwise array element mutation (redis-11734 pattern):
+	// BITPOS on a missing key returns -1 before validating start/end/unit.
+	// A narrow fix ("unit-only") validates only argv[5] (the unit), so a single
+	// element mutation either keeps argv[5]="BITS" (which unit-only rejects) or
+	// changes argv[5] to "BIT" while argv[3..4] are valid integers (which does
+	// not fail on the old build). Pairwise mutation changes argv[4] ("-1" →
+	// "BIT") and argv[5] ("BITS" → "BIT") together and catches unit-only.
+	t.Run("pairwise", func(t *testing.T) {
+		makeBitpos := func(mode string) func() kavach.Handler {
+			return func() kavach.Handler {
+				keys := map[string]bool{}
+				var lastArgv []string
+				var lastReply string
+				validUnit := func(u string) bool { return u == "BIT" || u == "BYTE" }
+				validInt := func(s string) bool { _, err := strconv.ParseInt(s, 10, 64); return err == nil }
+				return &invHandler{
+					handle: func(env kavach.Env, in kavach.Input) error {
+						var cmd struct{ Argv []string }
+						if err := json.Unmarshal(in.Data, &cmd); err != nil {
+							return err
+						}
+						a := cmd.Argv
+						lastArgv = a
+						reply := func(s string) { lastReply = s; env.Emit("reply", []byte(s)) }
+						switch a[0] {
+						case "SETBIT":
+							keys[a[1]] = true
+							reply(":0")
+						case "BITCOUNT":
+							if len(a) == 5 && (!validInt(a[2]) || !validInt(a[3]) || !validUnit(a[4])) {
+								reply("-ERR syntax")
+								return nil
+							}
+							reply(":1")
+						case "BITPOS":
+							if a[2] != "0" && a[2] != "1" {
+								reply("-ERR bit")
+								return nil
+							}
+							if mode == "unit-only" && len(a) == 6 && !validUnit(a[5]) {
+								reply("-ERR syntax")
+								return nil
+							}
+							if mode == "fixed" && len(a) == 6 && (!validInt(a[3]) || !validInt(a[4]) || !validUnit(a[5])) {
+								reply("-ERR syntax")
+								return nil
+							}
+							if !keys[a[1]] {
+								reply(":-1")
+								return nil
+							}
+							if len(a) == 6 && (!validInt(a[3]) || !validInt(a[4]) || !validUnit(a[5])) {
+								reply("-ERR syntax")
+								return nil
+							}
+							reply(":3")
+						}
+						return nil
+					},
+					inv: kavach.Invariant{Name: "bit-range-syntax", Check: func() error {
+						if len(lastArgv) == 6 && lastArgv[0] == "BITPOS" {
+							if (lastArgv[2] != "0" && lastArgv[2] != "1") || !validInt(lastArgv[3]) || !validInt(lastArgv[4]) || !validUnit(lastArgv[5]) {
+								if !strings.HasPrefix(lastReply, "-ERR") {
+									return errors.New("accepted invalid syntax")
+								}
+							}
+						}
+						return nil
+					}},
+				}
+			}
+		}
+		opts := testOptions(t)
+		r := newRecorder(t, makeBitpos("old")(), opts)
+		err := feed(t, r,
+			`{"argv":["SETBIT","k1","3","1"]}`,
+			`{"argv":["BITCOUNT","k1","0","-1","BIT"]}`,
+			`{"argv":["BITPOS","k1","1","0","-1","BIT"]}`,
+			`{"argv":["BITPOS","k1","1","1","-1","BYTE"]}`,
+			`{"argv":["BITPOS","k1","1","0","-1","BITS"]}`,
+			`{"argv":["BITPOS","missing","1","0","-1","BITS"]}`,
+		)
+		if err == nil {
+			t.Fatal("expected invariant failure")
+		}
+		j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		vNarrow, err := replay.Verify(j, makeBitpos("old"), makeBitpos("unit-only"), replay.VerifyOptions{MinVariants: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vNarrow.Status != replay.StatusVariantFailed || !strings.Contains(vNarrow.Detail, `"argv"[4] "-1" → "BIT", "argv"[5] "BITS" → "BIT"`) {
+			t.Fatalf("unit-only fix: got %s (%s), want variant_failed on pair mutation", vNarrow, vNarrow.Detail)
+		}
+		vFixed, err := replay.Verify(j, makeBitpos("old"), makeBitpos("fixed"), replay.VerifyOptions{MinVariants: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vFixed.Status != replay.StatusFixed {
+			t.Fatalf("fixed build: got %s (%s)", vFixed, vFixed.Detail)
+		}
+	})
+}
+
+type invHandler struct {
+	handle func(kavach.Env, kavach.Input) error
+	inv    kavach.Invariant
+}
+
+func (h *invHandler) Handle(env kavach.Env, in kavach.Input) error { return h.handle(env, in) }
+func (h *invHandler) Invariants() []kavach.Invariant               { return []kavach.Invariant{h.inv} }
+

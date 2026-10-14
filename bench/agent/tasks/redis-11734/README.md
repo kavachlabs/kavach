@@ -53,29 +53,28 @@ the hidden test, separately:
 | Candidate | `kavach diff` | Variants that reproduce on the old build / pass on the new | Hidden test |
 | --- | --- | --- | --- |
 | (old build) | — | — | fail |
-| `upstream`: parse every argument, then look the key up and check its type, then answer for a missing key | `fixed` | 61 of 64 / 61 | pass |
-| `validate-first`: check start, unit and end before the existing lookup; nothing else changes (14 lines added) | `fixed` | 61 of 64 / 61 | pass |
-| `unit-only` (narrow): reject an unknown unit before the lookup; non-integer `start`/`end` on a missing key still succeed | `fixed` | 61 of 64 / 61 | fail |
-| `type-before-args` (wrong): answer for a missing key after parsing, but keep the type check before it, so a list key answers WRONGTYPE where the arguments are invalid | `fixed` | 61 of 64 / 61 | fail |
-| `missing-as-empty` (wrong): drop the early reply and treat a missing key as an empty string; `BITPOS missing 0` now replies `-1` instead of `0` | `fixed` | 61 of 64 / 61 | fail |
+| `upstream`: parse every argument, then look the key up and check its type, then answer for a missing key | `fixed` | 46 of 64 / 46 | pass |
+| `validate-first`: check start, unit and end before the existing lookup; nothing else changes (14 lines added) | `fixed` | 46 of 64 / 46 | pass |
+| `unit-only` (narrow): reject an unknown unit before the lookup; non-integer `start`/`end` on a missing key still succeed | `variant_failed(2)@73` | 46 of 64 / 42 | fail |
+| `type-before-args` (wrong): answer for a missing key after parsing, but keep the type check before it, so a list key answers WRONGTYPE where the arguments are invalid | `fixed` | 46 of 64 / 46 | fail |
+| `missing-as-empty` (wrong): drop the early reply and treat a missing key as an empty string; `BITPOS missing 0` now replies `-1` instead of `0` | `fixed` | 46 of 64 / 46 | fail |
 
-**Kavach does not separate the right fixes from the wrong ones here.** All
-five fix the recorded failure, and on the recorded traffic they reply
-identically. The three that fail the hidden test differ only on inputs the
-traffic does not contain:
-- non-integer `start` or `end` on a missing key (`unit-only`);
-- invalid arguments on a key of another type (`type-before-args`);
+**Pairwise array-element variants catch `unit-only`; `type-before-args` and
+`missing-as-empty` still pass.** All five fix the recorded failure, and on the
+recorded traffic they reply identically. The three that fail the hidden test
+differ on inputs the recorded traffic does not contain:
+- non-integer `start` or `end` on a missing key (`unit-only`), which pairwise
+  array-element variants (§6.1) now reach by changing both the unit and
+  `start` or `end` at once on the failing input (variants 2, 8, 14 and 26:
+  `"argv"[4] "-1" → "BIT", "argv"[5] "BITS" → "BIT"`, `"argv"[4] "-1" →
+  "-1-1", "argv"[5] "BITS" → "BIT"`, `"argv"[4] "-1" → "BIT", "argv"[5] "BITS"
+  → "BYTE"`, and `"argv"[3] "0" → "0-1", "argv"[5] "BITS" → "BIT"`);
+- invalid arguments on a key of another type (`type-before-args`), which no
+  variant reaches because the fixture contains only string keys;
 - `BITPOS <missing> 0` (`missing-as-empty`). The dashboard only looks for
-  set bits.
-
-The variants do not reach them either. Of the 64, 38 drop or repeat an
-earlier step, 19 move the failing step earlier, 4 shift the clock, and 3
-replace the failing input's whole `argv` with another recorded `argv` (those
-3 no longer reproduce). That is the ledger's
-`variants-cannot-reach`: no variant changes one argument of a command, such
-as a `0` to `a` or a `1` to `0`. Each of the three would be caught by a
-variant that did, because `bit-range-syntax` or the output comparison would
-then fire on the old build and not on the new.
+  set bits, and on the failing input any variant that reproduces on the old
+  build has invalid syntax and replies with `-ERR` under both `upstream` and
+  `missing-as-empty`.
 
 The traffic was written before the candidates and was not changed to catch
 them. Adding `BITPOS <today> 0` to the dashboard would catch

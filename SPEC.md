@@ -610,10 +610,13 @@ The reference implementation uses *M* = 10 and derives up to 64 variants from
 an incident: the failing input's JSON fields set to values the same field
 takes in other inputs and to nearby values, removed, or added from other
 inputs; an array field's elements changed one at a time, each set to the
-element at the same index of the same field in other inputs and to nearby
-values, so that a command's arguments (`{"argv":[...]}`) are varied one by
-one; the failing input moved earlier; earlier inputs dropped or delivered
-twice; and every clock read shifted. Variant generation is deterministic.
+element at the same index of the same field in other inputs, to other
+elements of earlier arrays that hold the element at another index, and to
+nearby values, so that a command's arguments (`{"argv":[...]}`) are varied
+one by one and across argument positions; fields and array elements changed
+in pairs; the failing input moved earlier; earlier inputs dropped or
+delivered twice; and every clock read shifted. Variant generation is
+deterministic.
 
 Responses are inputs from the world too, so from 0.2 variants also perturb
 the `gateway` records of the failing step: the response's JSON fields mutated
