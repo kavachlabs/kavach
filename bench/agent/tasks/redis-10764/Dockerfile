@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd cmd
+COPY contract contract
 COPY internal internal
 COPY journal journal
 COPY replay replay

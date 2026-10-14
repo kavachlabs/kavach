@@ -16,6 +16,7 @@ FROM golang:1.23-bookworm AS tools
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd cmd
+COPY contract contract
 COPY internal internal
 COPY journal journal
 COPY replay replay
