@@ -67,7 +67,7 @@ func TestVerifyCandidateFixes(t *testing.T) {
 }
 
 // BenchmarkVerifyFixture measures in-process verification of the correct fix:
-// two replays of the fixture, 44 variants under the old build and the 41 that
+// two replays of the fixture, 56 variants under the old build and the 47 that
 // reproduce under the new one.
 func BenchmarkVerifyFixture(b *testing.B) {
 	j, err := journal.ReadFile(fixture)
