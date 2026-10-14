@@ -20,12 +20,15 @@ const modelsTTL = time.Hour
 // Model is one OpenRouter model. Prices are USD per million tokens, null
 // when OpenRouter gives none or a variable one.
 type Model struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Context  int64    `json:"context_length"`
-	PriceIn  *float64 `json:"price_in"`
-	PriceOut *float64 `json:"price_out"`
-	Tools    bool     `json:"tools"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Modality    string   `json:"modality,omitempty"`
+	Context     int64    `json:"context_length"`
+	MaxOutput   int64    `json:"max_completion_tokens,omitempty"`
+	PriceIn     *float64 `json:"price_in"`
+	PriceOut    *float64 `json:"price_out"`
+	Tools       bool     `json:"tools"`
 }
 
 type modelList struct {
@@ -71,9 +74,16 @@ func (m *modelList) fetch(ctx context.Context) ([]Model, error) {
 	}
 	var body struct {
 		Data []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Context int64  `json:"context_length"`
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Context     int64  `json:"context_length"`
+			Arch        struct {
+				Modality string `json:"modality"`
+			} `json:"architecture"`
+			TopProvider struct {
+				MaxCompletion int64 `json:"max_completion_tokens"`
+			} `json:"top_provider"`
 			Pricing struct {
 				Prompt     string `json:"prompt"`
 				Completion string `json:"completion"`
@@ -86,9 +96,16 @@ func (m *modelList) fetch(ctx context.Context) ([]Model, error) {
 	}
 	list := make([]Model, 0, len(body.Data))
 	for _, d := range body.Data {
+		desc := d.Description
+		if len(desc) > 360 {
+			desc = desc[:360] + "…"
+		}
 		list = append(list, Model{
-			ID: d.ID, Name: d.Name, Context: d.Context,
-			PriceIn: perMillion(d.Pricing.Prompt), PriceOut: perMillion(d.Pricing.Completion),
+			ID: d.ID, Name: d.Name, Description: desc,
+			Modality:  d.Arch.Modality,
+			Context:   d.Context,
+			MaxOutput: d.TopProvider.MaxCompletion,
+			PriceIn:   perMillion(d.Pricing.Prompt), PriceOut: perMillion(d.Pricing.Completion),
 			Tools: slices.Contains(d.Params, "tools"),
 		})
 	}

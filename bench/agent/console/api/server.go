@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,8 @@ func New(cfg Config) *Server {
 		mux:    http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /api/status", s.getStatus)
+	s.mux.HandleFunc("GET /api/settings", s.getSettings)
+	s.mux.HandleFunc("POST /api/settings", s.postSettings)
 	s.mux.HandleFunc("GET /api/tasks", s.getTasks)
 	s.mux.HandleFunc("GET /api/models", s.getModels)
 	s.mux.HandleFunc("GET /api/jobs", s.getJobs)
@@ -359,3 +362,229 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
 }
+
+// KeyEntry describes one API key in bench/agent/.env (never returning the raw secret).
+type KeyEntry struct {
+	Name   string `json:"name"`
+	Label  string `json:"label"`
+	Hint   string `json:"hint"`
+	Set    bool   `json:"set"`
+	Masked string `json:"masked"`
+}
+
+// SettingsResponse is returned by GET and POST /api/settings.
+type SettingsResponse struct {
+	EnvFile string     `json:"env_file"`
+	Exists  bool       `json:"exists"`
+	Keys    []KeyEntry `json:"keys"`
+}
+
+var knownKeys = []struct {
+	name, label, hint string
+}{
+	{"OPENROUTER_API_KEY", "OpenRouter API Key", "Used by the OpenCode agent for frontier & open-weight models"},
+	{"ANTHROPIC_API_KEY", "Anthropic API Key", "Direct Anthropic API access for Claude models"},
+	{"OPENAI_API_KEY", "OpenAI API Key", "Direct OpenAI API access for GPT & o-series models"},
+	{"NVIDIA_API_KEY", "NVIDIA NIM API Key", "Hosted Nemotron endpoints on build.nvidia.com"},
+	{"ZAI_API_KEY", "Z.ai API Key", "Direct Z.ai API access for GLM models"},
+}
+
+func (s *Server) envFilePath() string {
+	if s.cfg.EnvFile != "" {
+		return s.cfg.EnvFile
+	}
+	if s.cfg.Root != "" {
+		return filepath.Join(s.cfg.Root, "bench", "agent", ".env")
+	}
+	if s.cfg.JobsDir != "" {
+		return filepath.Join(s.cfg.JobsDir, ".env")
+	}
+	return ""
+}
+
+func maskSecret(val string) string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return ""
+	}
+	if len(val) <= 8 {
+		return "••••••••"
+	}
+	prefix := val[:min(8, len(val)-4)]
+	suffix := val[len(val)-4:]
+	return prefix + "••••" + suffix
+}
+
+func readEnvMap(path string) (map[string]string, bool) {
+	out := map[string]string{}
+	if path == "" {
+		return out, false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out, false
+	}
+	for _, raw := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+			v = v[1 : len(v)-1]
+		}
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out, true
+}
+
+func (s *Server) buildSettingsResponse() SettingsResponse {
+	path := s.envFilePath()
+	vals, exists := readEnvMap(path)
+	seen := map[string]bool{}
+	keys := make([]KeyEntry, 0, len(knownKeys))
+	for _, k := range knownKeys {
+		seen[k.name] = true
+		v := vals[k.name]
+		keys = append(keys, KeyEntry{
+			Name:   k.name,
+			Label:  k.label,
+			Hint:   k.hint,
+			Set:    v != "",
+			Masked: maskSecret(v),
+		})
+	}
+	for name, v := range vals {
+		if seen[name] || !strings.HasSuffix(name, "_KEY") {
+			continue
+		}
+		keys = append(keys, KeyEntry{
+			Name:   name,
+			Label:  name,
+			Hint:   "Custom environment key in .env",
+			Set:    v != "",
+			Masked: maskSecret(v),
+		})
+	}
+	return SettingsResponse{EnvFile: path, Exists: exists, Keys: keys}
+}
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.buildSettingsResponse())
+}
+
+func isValidEnvKey(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for i, c := range s {
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || (i > 0 && c >= '0' && c <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Server) postSettings(w http.ResponseWriter, r *http.Request) {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+	var req struct {
+		Keys map[string]string `json:"keys"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body: %v", err)
+		return
+	}
+	for k := range req.Keys {
+		if !isValidEnvKey(k) {
+			writeError(w, http.StatusBadRequest, "invalid key name %q", k)
+			return
+		}
+	}
+	path := s.envFilePath()
+	if path == "" {
+		writeError(w, http.StatusInternalServerError, "no .env path configured")
+		return
+	}
+	if err := writeEnvKeys(path, req.Keys); err != nil {
+		writeError(w, http.StatusInternalServerError, "saving .env: %v", err)
+		return
+	}
+	s.statusMu.Lock()
+	s.statusTime = time.Time{}
+	s.statusMu.Unlock()
+	writeJSON(w, http.StatusOK, s.buildSettingsResponse())
+}
+
+func writeEnvKeys(path string, updates map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var lines []string
+	if b, err := os.ReadFile(path); err == nil {
+		lines = strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+	} else if os.IsNotExist(err) {
+		lines = []string{
+			"# Copy to bench/agent/.env (gitignored) and fill in the keys you use.",
+			"# run.sh and bench load it automatically.",
+			"",
+		}
+	} else {
+		return err
+	}
+
+	written := map[string]bool{}
+	for i, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		clean := strings.TrimSpace(strings.TrimPrefix(trimmed, "export "))
+		k, _, ok := strings.Cut(clean, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if newVal, has := updates[k]; has {
+			sanitized := strings.NewReplacer("\r", "", "\n", "").Replace(strings.TrimSpace(newVal))
+			lines[i] = k + "=" + sanitized
+			written[k] = true
+		}
+	}
+	for _, kk := range knownKeys {
+		if newVal, has := updates[kk.name]; has && !written[kk.name] {
+			sanitized := strings.NewReplacer("\r", "", "\n", "").Replace(strings.TrimSpace(newVal))
+			lines = append(lines, kk.name+"="+sanitized)
+			written[kk.name] = true
+		}
+	}
+	for k, newVal := range updates {
+		if !written[k] {
+			sanitized := strings.NewReplacer("\r", "", "\n", "").Replace(strings.TrimSpace(newVal))
+			lines = append(lines, k+"="+sanitized)
+		}
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+

@@ -397,3 +397,27 @@ func TestPauseAndResumeRun(t *testing.T) {
 	post(t, url+"/run1/stop", "", "")
 	wait(harbor.JobStopped)
 }
+
+func TestSettings(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "bench", "agent", ".env")
+	_, ts := newServer(t, Config{EnvFile: envPath})
+
+	var st SettingsResponse
+	if code := get(t, ts.URL+"/api/settings", &st); code != 200 || st.Exists || len(st.Keys) == 0 {
+		t.Fatalf("initial settings: %d %+v", code, st)
+	}
+
+	code, v := post(t, ts.URL+"/api/settings", "application/json", `{"keys":{"OPENROUTER_API_KEY":"sk-or-v1-secret1234567890"}}`, "Origin", ts.URL)
+	if code != 200 || v["exists"] != true {
+		t.Fatalf("post settings: %d %v", code, v)
+	}
+	if code := get(t, ts.URL+"/api/settings", &st); code != 200 || !st.Exists || !st.Keys[0].Set || st.Keys[0].Masked != "sk-or-v1••••7890" {
+		t.Fatalf("after save: %d %+v", code, st)
+	}
+	b, err := os.ReadFile(envPath)
+	if err != nil || !strings.Contains(string(b), "OPENROUTER_API_KEY=sk-or-v1-secret1234567890\n") {
+		t.Fatalf("env file: %v %q", err, string(b))
+	}
+}
+

