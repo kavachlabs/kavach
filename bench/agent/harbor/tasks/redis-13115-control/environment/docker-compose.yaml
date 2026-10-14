@@ -1,0 +1,9 @@
+# The image is the task's, built from the repository root because it builds
+# Kavach from source. KAVACH_ROOT points copies of this task elsewhere back at
+# the repository.
+services:
+  main:
+    build:
+      context: ${KAVACH_ROOT:-../../../../../..}
+      dockerfile: bench/agent/tasks/redis-13115/Dockerfile
+      target: control

@@ -1,0 +1,14 @@
+diff --git a/src/script_lua.c b/src/script_lua.c
+index eca21d60c..092d443e0 100644
+--- a/src/script_lua.c
++++ b/src/script_lua.c
+@@ -819,8 +819,7 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
+             /* We can't use lua_tolstring() for number -> string conversion
+              * since Lua uses a format specifier that loses precision. */
+             lua_Number num = lua_tonumber(lua,j+1);
+-            obj_len = fpconv_dtoa((double)num, dbuf);
+-            dbuf[obj_len] = '\0';
++            obj_len = snprintf(dbuf,sizeof(dbuf),"%.17g",(double)num);
+             obj_s = dbuf;
+         } else {
+             obj_s = (char*)lua_tolstring(lua,j+1,&obj_len);

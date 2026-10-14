@@ -1,0 +1,23 @@
+diff --git a/src/t_hash.c b/src/t_hash.c
+index ff8746384..b541e8010 100644
+--- a/src/t_hash.c
++++ b/src/t_hash.c
+@@ -636,7 +636,17 @@ void hincrbyCommand(client *c) {
+     unsigned char *vstr;
+     unsigned int vlen;
+ 
+-    if (getLongLongFromObjectOrReply(c,c->argv[3],&incr,NULL) != C_OK) return;
++    if (getLongLongFromObject(c->argv[3],&incr) != C_OK) {
++        /* Scripts pass Lua numbers, which may be printed as 2e+8. */
++        long double ld;
++        if (getLongDoubleFromObject(c->argv[3],&ld) != C_OK ||
++            ld < LLONG_MIN || ld > LLONG_MAX || ld != (long long)ld)
++        {
++            addReplyError(c,"value is not an integer or out of range");
++            return;
++        }
++        incr = (long long)ld;
++    }
+     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
+     if (hashTypeGetValue(o,c->argv[2]->ptr,&vstr,&vlen,&value) == C_OK) {
+         if (vstr) {
