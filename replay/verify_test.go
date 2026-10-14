@@ -316,11 +316,11 @@ func TestVariantsOfArrayElements(t *testing.T) {
 	}
 
 	for mut, data := range map[string]string{
-		`"argv"[0] "SET" → "GET"`:                        `{"argv":["GET","boom","2"]}`,
-		`"argv"[1] "boom" → "a"`:                         `{"argv":["SET","a","2"]}`,
-		`"argv"[1] "boom" → "b"`:                         `{"argv":["SET","b","2"]}`,
-		`"argv"[2] "2" → "1"`:                            `{"argv":["SET","boom","1"]}`,
-		`"argv"[1] "boom" → "a", "argv"[2] "2" → "1"`:    `{"argv":["SET","a","1"]}`,
+		`"argv"[0] "SET" → "GET"`:                         `{"argv":["GET","boom","2"]}`,
+		`"argv"[1] "boom" → "a"`:                          `{"argv":["SET","a","2"]}`,
+		`"argv"[1] "boom" → "b"`:                          `{"argv":["SET","b","2"]}`,
+		`"argv"[2] "2" → "1"`:                             `{"argv":["SET","boom","1"]}`,
+		`"argv"[1] "boom" → "a", "argv"[2] "2" → "1"`:     `{"argv":["SET","a","1"]}`,
 		`"argv"[0] "SET" → "GET", "argv"[1] "boom" → "a"`: `{"argv":["GET","a","2"]}`,
 	} {
 		found := false
@@ -601,4 +601,3 @@ type invHandler struct {
 
 func (h *invHandler) Handle(env kavach.Env, in kavach.Input) error { return h.handle(env, in) }
 func (h *invHandler) Invariants() []kavach.Invariant               { return []kavach.Invariant{h.inv} }
-
