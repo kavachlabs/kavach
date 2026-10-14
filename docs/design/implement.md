@@ -2,9 +2,10 @@
 
 Status: implemented. The pieces are `replay.Options.Features` and
 `replay.FeatureVariants` (SPEC.md §6.4), array-element variants (§6.1), the
-`contract` package, `kavach contract`, two MCP tools, and
-[commands/kavach-implement.md](../../commands/kavach-implement.md). The
-benchmark arms at the end aren't built yet.
+`contract` package, `kavach contract`, two MCP tools,
+[commands/kavach-implement.md](../../commands/kavach-implement.md), and the
+locked contracts and four benchmark arms (`control`, `workflow`, `kavach`,
+`kavach-implement`) across all five Track B feature tasks.
 
 ## Why
 
@@ -132,32 +133,59 @@ In order, all now built:
 Step 1 is the prerequisite. Without it, `check` can't continue past the
 first feature step.
 
-## First results
+## Results across all five Track B feature tasks
 
-Measured 2026-10-13 on an Apple M3 Pro, with the task branches' `run.sh`
-builds.
+Measured on an Apple M3 Pro, with each task's committed `contract/` and builds:
 
-**go-genai-streamed-function-args** (feature task, #23). The contract is the
-task's committed `traffic.kavach`, `task.md` as the spec, feature steps
-`31-55` and the invariant `streamed-call-args`.
+| Task | Build | `kavach diff` | `kavach contract check` | Feature / variants | Hidden tests |
+| --- | --- | --- | --- | --- | --- |
+| **go-genai-streamed-function-args** | base commit | `ok` | `unreached@31` | 0/13, 64/64 pass | fail |
+| | `solution` (reference) | `diverged@31` | `pass` | 13/13, 64/64 pass | pass |
+| | `client-scoped-state` (wrong) | `invariant_violated(streamed-call-args)@31` | `invariant_violated(streamed-call-args)@31` | 0/13 | **pass** |
+| **httpx-deterministic-cookie-store** | `none` (base) | `ok` | `unreached@91` | 0/59, 64/64 pass | fail |
+| | `solution` (DeepSWE reference) | `diverged@91` | `invariant_violated(cookie-limits)@190` | 33/59 | pass |
+| | `solution-set-limits` (reference + `_enforce_limits` in `_set_cookie`) | `diverged@91` | `pass` | 59/59, 64/64 pass | pass |
+| | `no-host-only-no-secure` | `diverged@91` | `invariant_violated(cookie-scope)@112` | 7/59 | fail |
+| | `store-for-every-client` | `diverged@13` | `regression@13` | 0/59 | **pass** |
+| **kombu-single-active-consumer-priority** | `(base)` | `ok` | `unreached@137` | 0/44, 64/64 pass | fail |
+| | `reference` | `diverged@137` | `pass` | 44/44, 64/64 pass | pass |
+| | `no-cancel-guard` | `diverged@137` | `invariant_violated(cancel-callback-errors-contained)@265` | 33/44 | fail |
+| | `last-consumer-dispatch` | `diverged@145` | `unreached@137` | 36/44, 64/64 pass | fail |
+| **kombu-virtual-queue-dead-lettering** | `base` | `invariant_violated(dead-letter-delivery)@205` | `unreached@244` | 0/46, 64/64 pass | fail |
+| | `deepswe` (reference) | `fixed` | `pass` | 46/46, 64/64 pass | pass |
+| | `no-property-cleanup` | `diverged@800` | `regression@661` | 46/46 | fail |
+| | `x-death-no-count` | `invariant_violated(dead-letter-headers)@594` | `invariant_violated(dead-letter-headers)@499` | 33/46 | fail |
+| **updo-policy-alerting** | base commit | `ok` | `unreached@2` | 0/90, 64/64 pass | fail |
+| | `reference-kavach` | `diverged@2` | `pass` | 90/90, 64/64 pass | pass |
+| | `unwired` | `invariant_violated(alert-payload)@56` | `invariant_violated(alert-payload)@56` | 0/90 | **pass** |
+| | `wrong` | `diverged@2` | `invariant_violated(alert-delivery)@130` | 42/90 | fail |
 
-| Build | `kavach diff` | `kavach contract check` | Hidden tests |
-| --- | --- | --- | --- |
-| base commit | `ok` | `unreached@31`; 64 of 64 variants pass | fail |
-| `solution` (DeepSWE reference) | `diverged@31` | meets the contract: 13 of 13 feature steps changed, 64 of 64 variants pass | pass |
-| `client-scoped-state` (wrong) | `invariant_violated(streamed-call-args)@31` | `invariant_violated(streamed-call-args)@31` | pass |
-
-- **The reference now passes.** `diff` can't tell a correct implementation
-  from a wrong one here, because it stops at the first intended change. The
-  contract separates them.
-- **The cascade rule fired on real traffic.** With only the `partialArgs`
-  steps marked, the reference gave `regression@45`: a `chat_send` whose
-  request replays the history that a feature step built. Marking it, and step
-  49, as feature steps (`31-55`) was right. The check named the step and both
-  outputs.
-- **Each check took 0.2 s**, including 64 variants.
-- **The catch still isn't independent.** One agent wrote the traffic, the
-  invariant and the wrong implementation (see the task's README).
+- **Every reference implementation passes `kavach contract check`** (and on
+  `httpx-deterministic-cookie-store`, `contract check` directly surfaces the
+  `cookie-limits@190` violation in DeepSWE's `solution` where `_set_cookie`
+  omits `_enforce_limits()`, passing once that one-line call is added).
+- **Wrong and partial builds that `kavach diff` could not distinguish from the
+  reference are now separated:**
+  - In `updo-policy-alerting`, `wrong` previously gave `diverged@2` (the same
+    as `reference-kavach`); `contract check` continues past the 90 feature
+    steps and catches `invariant_violated(alert-delivery)@130`.
+  - In `kombu-single-active-consumer-priority`, `no-cancel-guard` previously
+    gave `diverged@137` and `last-consumer-dispatch` gave `diverged@145`;
+    `contract check` catches `no-cancel-guard` via
+    `invariant_violated(cancel-callback-errors-contained)@265` and
+    `last-consumer-dispatch` via `unreached@137` (only 36 of 44 feature steps
+    changed because delivery steps still dispatch to the last registered
+    callback).
+  - In `kombu-virtual-queue-dead-lettering`, recording the base build without
+    artificial failure markers in Part B allows `contract check` to verify the
+    baseline as `ok` (`unreached@244`), pass `deepswe` (`46/46`), and catch
+    `no-property-cleanup` (`regression@661`) and `x-death-no-count`
+    (`invariant_violated(dead-letter-headers)@499`).
+- **The cascade rule fired on real traffic.** In
+  `go-genai-streamed-function-args`, with only the `partialArgs` steps marked,
+  the reference gave `regression@45`: a `chat_send` whose request replays the
+  history that a feature step built. Marking it, and step 49, as feature steps
+  (`31-55`) was right.
 
 **Array-element variants on the incident tasks.** Rerunning the candidates:
 
@@ -188,14 +216,18 @@ mutations is the next step for that, at a cost in variant count.
 
 ## Effect on the benchmark
 
-The kavach arm would measure Kavach plus a disciplined workflow, so a win
-couldn't be credited to Kavach alone. Two arms would separate them:
+The `kavach` arm measures Kavach plus a disciplined workflow, so a win
+couldn't be credited to Kavach alone. Four Track B arms separate them in each
+task's `Dockerfile`, `grade.sh` and `bench/agent/harbor/tasks/<task>-<arm>/`:
 
-- **workflow:** the same contract-first command, with the project's own tests
-  in place of `kavach contract check`;
+- **control:** base commit and the feature specification;
+- **workflow:** the same contract-first command, with the project's own focused
+  tests in place of `kavach contract check`;
+- **kavach:** Kavach integration and the pre-built, locked `/task/contract`
+  supplied;
 - **kavach-implement:** no contract supplied; the agent builds and locks it
-  itself, with an automatic approval. This is closer to real use, and it shows
-  whether agents write contracts that catch their own mistakes.
+  itself, with automatic approval (`--yes`). This is closer to real use, and it
+  shows whether agents write contracts that catch their own mistakes.
 
 ## Open questions
 

