@@ -133,15 +133,37 @@ type OpenCode struct {
 	Export   string     `json:"export,omitempty"`
 }
 
+// Arms are the benchmark arms in display order.
+var Arms = []string{"control", "workflow", "kavach", "kavach-implement"}
+
 // SplitArm splits a task name into its base name and arm: redis-10068-kavach
 // is redis-10068 in the kavach arm. A name with no arm suffix has arm "".
 func SplitArm(task string) (base, arm string) {
-	for _, a := range []string{"control", "kavach"} {
+	for _, a := range []string{"kavach-implement", "workflow", "control", "kavach"} {
 		if b, ok := strings.CutSuffix(task, "-"+a); ok && b != "" {
 			return b, a
 		}
 	}
 	return task, ""
+}
+
+// CompareArms reports whether arm a comes before arm b in benchmark order
+// (control, workflow, kavach, kavach-implement, then lexical order).
+func CompareArms(a, b string) bool {
+	ra, rb := armRank(a), armRank(b)
+	if ra != rb {
+		return ra < rb
+	}
+	return a < b
+}
+
+func armRank(arm string) int {
+	for i, a := range Arms {
+		if a == arm {
+			return i
+		}
+	}
+	return len(Arms)
 }
 
 // Reader reads the job folders under Dir.
@@ -453,13 +475,25 @@ func appendNew(list []string, s string) []string {
 	return append(list, s)
 }
 
+func compareTask(a, b string) bool {
+	ba, aa := SplitArm(a)
+	bb, ab := SplitArm(b)
+	if ba != bb {
+		return ba < bb
+	}
+	if aa != ab {
+		return CompareArms(aa, ab)
+	}
+	return a < b
+}
+
 // number gives each trial its attempt number within its task and model, in
 // the order they started, and adds the trials the job has yet to start.
 func number(trials []Trial, planned []lockTrial, job string, running bool) []Trial {
 	sort.SliceStable(trials, func(i, k int) bool {
 		a, b := trials[i], trials[k]
 		if a.Task != b.Task {
-			return a.Task < b.Task
+			return compareTask(a.Task, b.Task)
 		}
 		if a.Model != b.Model {
 			return a.Model < b.Model
@@ -497,7 +531,7 @@ func number(trials []Trial, planned []lockTrial, job string, running bool) []Tri
 	sort.SliceStable(trials, func(i, k int) bool {
 		a, b := trials[i], trials[k]
 		if a.Task != b.Task {
-			return a.Task < b.Task
+			return compareTask(a.Task, b.Task)
 		}
 		if a.Model != b.Model {
 			return a.Model < b.Model

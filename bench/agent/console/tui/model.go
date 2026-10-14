@@ -452,7 +452,7 @@ func (m *Model) order() []harbor.Trial {
 			return rank[a.Model] < rank[b.Model]
 		}
 		if a.Arm != b.Arm {
-			return a.Arm < b.Arm
+			return harbor.CompareArms(a.Arm, b.Arm)
 		}
 		return a.Attempt < b.Attempt
 	})
@@ -873,11 +873,24 @@ func (m *Model) complete(s suggestion) {
 }
 
 func (m *Model) cycleArm() {
-	next := map[string]string{"kavach": "control", "control": "both", "both": "kavach"}
-	m.set.Arm = next[m.set.Arm]
-	if m.set.Arm == "" {
-		m.set.Arm = "kavach"
+	arms := []string{"kavach", "control", "both"}
+	if t := m.taskByName(m.set.Task); t != nil && len(t.Arms) > 2 {
+		arms = nil
+		for _, a := range t.Arms {
+			if a.Arm != "" {
+				arms = append(arms, a.Arm)
+			}
+		}
+		arms = append(arms, "both")
 	}
+	for i, a := range arms {
+		if a == m.set.Arm || (a == "both" && m.set.Arm == "all") {
+			m.set.Arm = arms[(i+1)%len(arms)]
+			m.save()
+			return
+		}
+	}
+	m.set.Arm = arms[0]
 	m.save()
 }
 

@@ -17,7 +17,7 @@ type Task struct {
 
 // TaskArm is one Harbor task: one arm of a benchmark task.
 type TaskArm struct {
-	Arm  string `json:"arm"`  // control, kavach or ""
+	Arm  string `json:"arm"`  // control, workflow, kavach, kavach-implement or ""
 	Task string `json:"task"` // the Harbor task's name: redis-10068-kavach
 	Path string `json:"path"`
 }
@@ -53,7 +53,7 @@ func FindTasks(dir string) ([]Task, error) {
 		t.Arms = append(t.Arms, TaskArm{Arm: arm, Task: e.Name(), Path: path})
 	}
 	for _, t := range tasks {
-		sort.Slice(t.Arms, func(i, j int) bool { return t.Arms[i].Arm < t.Arms[j].Arm })
+		sort.Slice(t.Arms, func(i, j int) bool { return CompareArms(t.Arms[i].Arm, t.Arms[j].Arm) })
 	}
 	return tasks, nil
 }

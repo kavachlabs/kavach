@@ -391,3 +391,64 @@ func TestFormats(t *testing.T) {
 		}
 	}
 }
+
+func TestImplementArms(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.tasks = append(m.tasks, harbor.Task{
+		Name:  "go-genai-23",
+		Title: "Streamed function call arguments",
+		Arms: []harbor.TaskArm{
+			{Arm: "control", Task: "go-genai-23-control"},
+			{Arm: "workflow", Task: "go-genai-23-workflow"},
+			{Arm: "kavach", Task: "go-genai-23-kavach"},
+			{Arm: "kavach-implement", Task: "go-genai-23-kavach-implement"},
+		},
+	})
+	drive(m, m.exec("/task go-genai-23"))
+	typeLine(m, "/arm ")
+	s := m.suggestions()
+	if len(s) < 5 || s[0].value != "/arm control" || s[1].value != "/arm workflow" || s[2].value != "/arm kavach" || s[3].value != "/arm kavach-implement" {
+		t.Fatalf("/arm suggestions for 4-arm task: %+v", s)
+	}
+	press(m, tea.KeyEsc)
+
+	for _, arm := range []string{"workflow", "kavach-implement"} {
+		drive(m, m.exec("/arm "+arm))
+		if m.set.Arm != arm {
+			t.Fatalf("arm = %q, want %q", m.set.Arm, arm)
+		}
+		tasks, err := m.runTasks(m.set.Arm)
+		if err != nil || len(tasks) != 1 || tasks[0] != "go-genai-23-"+arm {
+			t.Fatalf("runTasks(%q) = %v, %v", arm, tasks, err)
+		}
+	}
+	for _, all := range []string{"both", "all"} {
+		drive(m, m.exec("/arm "+all))
+		tasks, err := m.runTasks(m.set.Arm)
+		want := "go-genai-23-control,go-genai-23-workflow,go-genai-23-kavach,go-genai-23-kavach-implement"
+		if err != nil || strings.Join(tasks, ",") != want {
+			t.Fatalf("runTasks(%q) = %v, %v", all, tasks, err)
+		}
+	}
+
+	sec := 120.0
+	m.job = &harbor.Job{
+		ID:     "feat-job",
+		Status: harbor.JobDone,
+		Tasks:  []string{"go-genai-23-control", "go-genai-23-workflow", "go-genai-23-kavach", "go-genai-23-kavach-implement"},
+		Models: []string{"openrouter/z-ai/glm-5.3"},
+		Done:   4,
+		Total:  4,
+	}
+	m.compare = []harbor.CompareRow{
+		{Task: "go-genai-23", Model: "openrouter/z-ai/glm-5.3", Arm: "control", Passes: 0, Attempts: 1, MedianSeconds: &sec},
+		{Task: "go-genai-23", Model: "openrouter/z-ai/glm-5.3", Arm: "workflow", Passes: 0, Attempts: 1, MedianSeconds: &sec},
+		{Task: "go-genai-23", Model: "openrouter/z-ai/glm-5.3", Arm: "kavach", Passes: 1, Attempts: 1, MedianSeconds: &sec},
+		{Task: "go-genai-23", Model: "openrouter/z-ai/glm-5.3", Arm: "kavach-implement", Passes: 1, Attempts: 1, MedianSeconds: &sec},
+	}
+	m.showPage(pageCompare, "/compare")
+	out := screen(m)
+	if !strings.Contains(out, "control → workflow → kavach → kavach-implement") || !strings.Contains(out, "1 model × 4 arms") {
+		t.Errorf("compare output for 4-arm job:\n%s", out)
+	}
+}

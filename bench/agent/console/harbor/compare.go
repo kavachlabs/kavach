@@ -70,7 +70,7 @@ func Compare(trials []Trial) []CompareRow {
 		if a.model != b.model {
 			return a.model < b.model
 		}
-		return a.arm < b.arm
+		return CompareArms(a.arm, b.arm)
 	})
 	rows := []CompareRow{}
 	for _, k := range order {

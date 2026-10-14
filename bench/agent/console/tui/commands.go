@@ -24,7 +24,7 @@ func init() {
 		{"run", "", "Run the agent on the task with the settings below", false, (*Model).cmdRun},
 		{"model", "<id>", "Choose the model, an OpenRouter id", true, (*Model).cmdModel},
 		{"models", "[filter]", "List OpenRouter models with prices", false, (*Model).cmdModels},
-		{"arm", "control|kavach|both", "control (no Kavach), kavach, or both", true, (*Model).cmdArm},
+		{"arm", "control|workflow|kavach|kavach-implement|both", "control (no Kavach), workflow, kavach, kavach-implement, or both", true, (*Model).cmdArm},
 		{"runs", "<n>", "Attempts per model and arm", true, (*Model).cmdRuns},
 		{"task", "<name>", "Choose the task", true, (*Model).cmdTask},
 		{"agent", "opencode|oracle|nop", "Choose the agent; oracle applies the known fix, for checking a task", true, (*Model).cmdAgent},
@@ -51,6 +51,14 @@ type suggestion struct {
 
 // menuLimit caps the argument suggestions; the pop-up scrolls through them.
 const menuLimit = 50
+
+// armDescs describes each benchmark arm in /arm's completion menu.
+var armDescs = map[string]string{
+	"control":          "without Kavach",
+	"workflow":         "contract-first workflow, without Kavach",
+	"kavach":           "with Kavach's tools",
+	"kavach-implement": "agent writes and checks its own contract",
+}
 
 // suggestions are the completions for what the prompt holds: commands
 // while the first word is typed, then the command's argument values.
@@ -80,9 +88,23 @@ func (m *Model) suggestions() []suggestion {
 	}
 	switch name {
 	case "arm":
-		add("control", "without Kavach")
-		add("kavach", "with Kavach's tools")
-		add("both", "both arms")
+		if t := m.taskByName(m.set.Task); t != nil && len(t.Arms) > 0 {
+			for _, a := range t.Arms {
+				if a.Arm != "" {
+					add(a.Arm, armDescs[a.Arm])
+				}
+			}
+			if len(t.Arms) > 2 {
+				add("both", "all arms")
+				add("all", "all arms")
+			} else if len(t.Arms) == 2 {
+				add("both", "both arms")
+			}
+		} else {
+			add("control", armDescs["control"])
+			add("kavach", armDescs["kavach"])
+			add("both", "both arms")
+		}
 	case "agent":
 		add("opencode", "OpenCode with the chosen model")
 		add("oracle", "applies the task's known fix; no model, no cost")
@@ -155,7 +177,7 @@ func (m *Model) runTasks(arm string) ([]string, error) {
 	}
 	var out []string
 	for _, a := range t.Arms {
-		if arm == "both" || a.Arm == arm || a.Arm == "" {
+		if arm == "both" || arm == "all" || a.Arm == arm || a.Arm == "" {
 			out = append(out, a.Task)
 		}
 	}
@@ -267,11 +289,11 @@ func (m *Model) cmdModels(arg string) tea.Cmd {
 
 func (m *Model) cmdArm(arg string) tea.Cmd {
 	switch arg {
-	case "control", "kavach", "both":
+	case "control", "workflow", "kavach", "kavach-implement", "both", "all":
 		m.set.Arm = arg
 		m.save()
 	default:
-		m.fail("/arm takes control, kavach or both.")
+		m.fail("/arm takes control, workflow, kavach, kavach-implement, both or all.")
 	}
 	return nil
 }

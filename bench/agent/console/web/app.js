@@ -8,7 +8,7 @@ const COMMANDS = [
   ["/run", "start the run"],
   ["/model <id>", "add a model by its OpenRouter id"],
   ["/models [search]", "pick models from OpenRouter"],
-  ["/arm kavach|control|both", "choose the arms"],
+  ["/arm kavach|control|workflow|kavach-implement|both", "choose the arms"],
   ["/runs <n>", "attempts per task and model"],
   ["/timeout <minutes>|default", "override the tasks' agent timeout"],
   ["/agent opencode|oracle|nop", "choose the Harbor agent"],
@@ -17,7 +17,8 @@ const COMMANDS = [
   ["/compare", "open the latest run's results"],
 ];
 const AGENTS = { opencode: "OpenCode", oracle: "Oracle", nop: "Nop" };
-const ARMS = ["control", "kavach"];
+const ARMS = ["control", "workflow", "kavach", "kavach-implement"];
+const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
 const SETTINGS_KEY = "kavach-bench.new-run";
 
 const state = {
@@ -75,7 +76,7 @@ function saveForm() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.form)); } catch {}
 }
 
-const base = (task) => task.replace(/-(control|kavach)$/, "");
+const base = (task) => task.replace(ARM_SUFFIX, "");
 const orId = (model) => model.replace(/^openrouter\//, "");
 const shortModel = (model) => orId(model).split("/").pop();
 const needsModel = (agent) => agent !== "oracle" && agent !== "nop";
@@ -132,7 +133,7 @@ function arrow(a, b, fmt) {
 
 function jobShape(job, compact) {
   const bases = [...new Set(job.tasks.map(base))];
-  const arms = new Set(job.tasks.map((t) => (t.match(/-(control|kavach)$/) || [])[1] || "")).size;
+  const arms = new Set(job.tasks.map((t) => (t.match(ARM_SUFFIX) || [])[1] || "")).size;
   const models = job.models.length;
   const per = job.tasks.length * Math.max(models, 1);
   const runs = per ? Math.round(job.trials_total / per) : 0;
@@ -433,10 +434,13 @@ function renderNew(view) {
     ];
   }
 
-  const taskArms = task ? task.arms.map((a) => a.arm) : ARMS;
-  const armChips = ["kavach", "control"].filter((a) => taskArms.includes(a)).map((a) => {
+  const taskArms = task ? task.arms.map((a) => a.arm).filter(Boolean) : ["control", "kavach"];
+  const chipOrder = ["kavach", "kavach-implement", "workflow", "control"];
+  const chipArms = [...chipOrder.filter((a) => taskArms.includes(a)), ...taskArms.filter((a) => !chipOrder.includes(a))];
+  const armChips = chipArms.map((a) => {
     const on = f.arms.includes(a);
-    return h("button", { type: "button", class: `chip ${on ? "on" : ""} ${a === "control" ? "blue" : ""}`, "aria-pressed": String(on), onclick: () => toggleArm(a) }, a);
+    const tone = a === "control" || a === "workflow" ? "blue" : "";
+    return h("button", { type: "button", class: `chip ${on ? "on" : ""} ${tone}`, "aria-pressed": String(on), onclick: () => toggleArm(a) }, a);
   });
 
   let modelVal;
@@ -606,11 +610,13 @@ function runCommand(line) {
     case "/models":
       return openPicker(arg);
     case "/arm": {
-      const arms = arg === "both" ? ["kavach", "control"] : ARMS.includes(arg) ? [arg] : null;
-      if (!arms) return say("Usage: /arm kavach, /arm control or /arm both", true);
+      const task = (state.tasks || []).find((t) => t.name === f.task);
+      const avail = task ? task.arms.map((a) => a.arm).filter(Boolean) : ["kavach", "control"];
+      const arms = (arg === "both" || arg === "all") ? avail : ARMS.includes(arg) ? [arg] : null;
+      if (!arms || !arms.length) return say("Usage: /arm kavach, /arm control, /arm workflow, /arm kavach-implement or /arm both", true);
       f.arms = arms;
       saveForm();
-      return say(`Arms: ${arms.join(" and ")}.`);
+      return say(`Arms: ${arms.join(arms.length === 2 ? " and " : ", ")}.`);
     }
     case "/runs": {
       if (!arg) {
@@ -819,7 +825,7 @@ async function select(t) {
 }
 
 function trialLabel(t) {
-  return `${t.model ? shortModel(t.model) : t.task.replace(/-(control|kavach)$/, "")} · ${t.arm || "task"} · #${t.attempt}`;
+  return `${t.model ? shortModel(t.model) : base(t.task)} · ${t.arm || "task"} · #${t.attempt}`;
 }
 
 function pill(t) {
@@ -918,7 +924,7 @@ function kavachLine(t) {
   const g = state.grades.get(`${t.job}/${t.id}`);
   const verdict = t.kavach ? t.kavach.verdict : g && g.grade && g.grade.kavach_diff;
   if (!verdict) return "";
-  return `kavach diff ${verdict}${t.arm === "control" ? " · checked after the run" : ""}`;
+  return `kavach diff ${verdict}${t.arm === "control" || t.arm === "workflow" ? " · checked after the run" : ""}`;
 }
 
 function renderAttempt(t) {
@@ -1123,9 +1129,17 @@ function compareGroups(rows) {
   for (const r of rows) {
     const key = `${r.task}|${r.model}`;
     if (!groups.has(key)) groups.set(key, { task: r.task, model: r.model, arms: {} });
-    groups.get(key).arms[r.arm] = r;
+    groups.get(key).arms[r.arm || "control"] = r;
   }
   return [...groups.values()];
+}
+
+function compareArmsOf(rows) {
+  const present = new Set(rows.map((r) => r.arm).filter(Boolean));
+  const extra = [...present].some((a) => a !== "control" && a !== "kavach");
+  if (!extra) return ["control", "kavach"];
+  if (present.size === 1) present.add("control");
+  return [...ARMS.filter((a) => present.has(a)), ...[...present].filter((a) => !ARMS.includes(a))];
 }
 
 const freshMedian = (r) => r && (r.median_fresh_tokens ?? null);
@@ -1134,10 +1148,11 @@ function renderCompare(view) {
   const job = state.job;
   const rows = state.compare || [];
   const groups = compareGroups(rows);
+  const arms = compareArmsOf(rows);
   const multi = new Set(groups.map((g) => g.task)).size > 1;
   const kids = [];
   if (job.error) kids.push(banner("Harbor exited before it wrote the run's folder.", job.error));
-  kids.push(h("h2", { class: "h" }, "Pass rate, control → kavach"));
+  kids.push(h("h2", { class: "h" }, `Pass rate, ${arms.join(" → ")}`));
   if (!groups.length) {
     kids.push(h("div", { class: "dim" }, job.status === "running" ? "No attempt has finished yet." : "This run has no attempts."));
   } else {
@@ -1147,18 +1162,27 @@ function renderCompare(view) {
       const extra = [r.errors ? `${r.errors} error${r.errors > 1 ? "s" : ""}` : "", r.pending ? `${r.pending} pending` : ""].filter(Boolean).join(" · ");
       return h("td", { class: better ? "b" : null }, r.attempts ? `${r.passes} / ${r.attempts}` : "–", extra ? h("span", { class: "sub" }, extra) : null);
     };
-    const pick = (g, f) => [f(g.arms.control), f(g.arms.kavach)];
+    const chain = (g, f, fmt) => {
+      const vals = arms.map((a) => f(g.arms[a]));
+      if (vals.every((v) => v == null)) return "–";
+      return vals.map(fmt).join(" → ");
+    };
     kids.push(h("div", { class: "tablewrap" }, h("table", { class: "mx" },
-      h("thead", {}, h("tr", {}, ["model", "control", "kavach", "median time", "median tokens", "cost / attempt"].map((c) => h("th", {}, c)))),
+      h("thead", {}, h("tr", {}, ["model", ...arms, "median time", "median tokens", "cost / attempt"].map((c) => h("th", {}, c)))),
       h("tbody", {}, groups.map((g) => {
-        const [c, k] = [g.arms.control, g.arms.kavach];
+        const rates = arms.map((a) => rate(g.arms[a])).filter((v) => v != null);
+        const best = rates.length ? Math.max(...rates) : null;
+        const varied = new Set(arms.map((a) => rate(g.arms[a]) ?? -1)).size > 1;
         const who = g.model ? orId(g.model) : job.agent;
         return h("tr", {},
           h("td", {}, multi ? `${g.task} · ${who}` : who),
-          cell(c, false), cell(k, rate(k) != null && rate(k) > (rate(c) ?? -1)),
-          h("td", {}, arrow(...pick(g, (r) => r && r.median_seconds), fmtDur)),
-          h("td", { title: "fresh tokens: input not served from cache, plus output" }, arrow(...pick(g, freshMedian), fmtTok)),
-          h("td", {}, arrow(...pick(g, (r) => r && r.mean_cost), fmtCost)));
+          ...arms.map((a) => {
+            const r = g.arms[a];
+            return cell(r, varied && best != null && rate(r) === best && a !== "control");
+          }),
+          h("td", {}, chain(g, (r) => r && r.median_seconds, fmtDur)),
+          h("td", { title: "fresh tokens: input not served from cache, plus output" }, chain(g, freshMedian, fmtTok)),
+          h("td", {}, chain(g, (r) => r && r.mean_cost, fmtCost)));
       })))));
     kids.push(h("div", { class: "faint", style: "font-size:13px" }, "Rates count graded attempts; errors and pending attempts are left out of them and of the medians. Tokens are fresh tokens: input not served from cache, plus output."));
   }
