@@ -137,21 +137,21 @@ func TestCLI(t *testing.T) {
 	mustContain(run(0, "replay", "--json", paths[0], "--bin", newBin), `"verdict": "fixed"`)
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", newBin),
 		"old       still_failing@32", "new       fixed", "first divergence at step seq 32", "missing amount",
-		"variants  41 of 44 reproduce the incident on the old build · 41 of those pass", "verdict   fixed")
+		"variants  47 of 56 reproduce the incident on the old build · 47 of those pass", "verdict   fixed")
 	mustContain(run(1, "diff", paths[0], "--old", newBin, "--new", oldBin), "verdict   still_failing@32")
 
 	// A fix that passes the recorded incident but not its variants is rejected,
 	// and the failing variant is saved for replay.
 	keep := filepath.Join(dir, "variants")
 	out := run(1, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--keep", keep)
-	mustContain(out, "new       fixed", `"type" "deposit" → "transfer"`, "verdict   variant_failed(6)@23")
+	mustContain(out, "new       fixed", `"type" "deposit" → "transfer"`, "verdict   variant_failed(7)@23")
 	saved, _ := filepath.Glob(filepath.Join(keep, "*.kavach"))
 	if len(saved) == 0 {
 		t.Fatalf("no failing variants saved:\n%s", out)
 	}
 	mustContain(run(1, "replay", saved[0], "--bin", partialBin), "still_failing@23")
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--variants", "0"), "verdict   fixed")
-	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 41`)
+	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 47`)
 
 	// The same loop through the MCP server, as an agent drives it.
 	mcp := exec.Command(cli, "mcp")
@@ -186,7 +186,7 @@ func TestCLI(t *testing.T) {
 			verdicts = append(verdicts, v)
 		}
 	}
-	if got := strings.Join(verdicts, " "); got != "still_failing@32 variant_failed(6)@23 fixed" {
+	if got := strings.Join(verdicts, " "); got != "still_failing@32 variant_failed(7)@23 fixed" {
 		t.Fatalf("MCP verdicts %q in:\n%s", got, mcpOut)
 	}
 	mustContain(string(mcpOut), `\"seq\": 32`, `"passed":false`, `"passed":true`)
