@@ -1,5 +1,9 @@
 # Kavach
 
+[![ci](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml)
+[![sdk](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml)
+[![codecov](https://codecov.io/gh/kavachlabs/kavach/graph/badge.svg?branch=main)](https://codecov.io/gh/kavachlabs/kavach)
+
 Kavach turns production crashes in journal-driven services, in any language,
 into deterministic tests that AI coding agents can reproduce, fix, and *verify* — by re-deriving
 state from the journal instead of replaying a tape.
@@ -31,12 +35,12 @@ go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger/sdk  # a fix
 kavach inspect kavach/fixtures/ledger-*.kavach                 # what happened, record by record
 kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@32
 kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
-kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(6)@23
+kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(7)@23
 ```
 
 The partial fix guards only deposits, the event type in the incident. It
-passes the recorded crash, but `diff` also replays 44 variants of it, and the
-old build crashes the same way on 41 of them; the partial fix crashes on 4,
+passes the recorded crash, but `diff` also replays 56 variants of it, and the
+old build crashes the same way on 47 of them; the partial fix crashes on 8,
 starting with the same event as a `transfer`.
 
 Replay runs no external services: the fixture holds every input, clock read and
