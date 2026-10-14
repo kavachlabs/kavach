@@ -105,7 +105,6 @@ const state = {
   sel: "", steps: null, stepsFor: "",
   grades: new Map(),
   side: null, // null follows the screen; true or false once toggled
-  sideView: "nav", // "nav" | "settings" (Antigravity in-sidebar settings view)
   rightSide: true, // right auxiliary pane open/closed
   auxTab: "task", // "task" | "arms" | "models"
   leftW: initialPrefs.leftW || 256,
@@ -117,7 +116,8 @@ const state = {
   modelsLoading: false,
   openSelect: "", // id of currently open custom select menu
   selectFilter: "",
-  settings: { open: false, data: null, loading: false, saving: false, err: "", msg: "", drafts: {}, reveal: {} },
+  // tab: "general" | "keys" | "environment" | "shortcuts"
+  settings: { open: false, tab: "general", data: null, loading: false, saving: false, err: "", msg: "", drafts: {}, reveal: {} },
   confirm: "", actionErr: "", note: "", noteErr: false, starting: false,
 };
 
@@ -635,79 +635,6 @@ function defaultKeySpecs() {
   ];
 }
 
-function renderSideSettingsView() {
-  const keys = defaultKeySpecs();
-  const data = state.settings.data;
-  const rows = keys.map((k) => {
-    const draft = state.settings.drafts[k.name];
-    const isCleared = draft === "";
-    const shown = Boolean(state.settings.reveal[k.name]);
-    return h("div", { class: "side-key-card" },
-      h("div", { class: "side-key-top" },
-        h("span", { class: "side-key-lbl" }, k.label),
-        h("span", { class: `key-badge ${k.set && !isCleared ? "ok" : "warn"}` },
-          isCleared ? "Clear" : k.set ? k.masked : "Unset")),
-      h("div", { class: "side-key-env m" }, k.name),
-      h("div", { class: "side-key-input" },
-        h("input", {
-          type: shown ? "text" : "password",
-          autocomplete: "off",
-          spellcheck: "false",
-          placeholder: isCleared ? "Clearing on save…" : k.set ? "Paste new key to replace…" : `Paste ${k.name}…`,
-          value: draft || "",
-          "aria-label": k.label,
-          oninput: (e) => {
-            const v = e.target.value;
-            if (v === "") delete state.settings.drafts[k.name];
-            else state.settings.drafts[k.name] = v;
-          },
-        }),
-        h("button", {
-          type: "button",
-          class: "side-key-mini",
-          title: shown ? "Hide key" : "Show key",
-          onclick: () => {
-            state.settings.reveal[k.name] = !shown;
-            renderSide();
-          },
-        }, shown ? "Hide" : "Show"),
-        k.set ? h("button", {
-          type: "button",
-          class: "side-key-mini danger",
-          title: `Clear ${k.name}`,
-          onclick: () => {
-            state.settings.drafts[k.name] = "";
-            renderSide();
-          },
-        }, "×") : null));
-  });
-
-  return [
-    h("div", { class: "side-view-bar" },
-      h("button", {
-        type: "button",
-        class: "side-back-btn",
-        onclick: () => {
-          state.sideView = "nav";
-          renderSide();
-        },
-      }, "← Back"),
-      h("span", { class: "side-view-title" }, "Settings & Keys"),
-      h("button", {
-        type: "button",
-        class: "side-expand-btn",
-        title: "Open full Settings modal",
-        onclick: () => openSettingsModal(),
-      }, "↗")),
-    h("div", { class: "side-scroll side-settings-scroll" },
-      h("div", { class: "side-settings-note" },
-        "Saved to ", h("code", {}, data ? data.env_file : "bench/agent/.env"), " (mode 0600)."),
-      rows,
-      state.settings.err ? h("div", { class: "side-settings-msg bad" }, state.settings.err) : null,
-      state.settings.msg ? h("div", { class: "side-settings-msg ok" }, state.settings.msg) : null),
-  ];
-}
-
 function renderSide() {
   const side = document.getElementById("side");
   const open = sideOpen();
@@ -722,43 +649,26 @@ function renderSide() {
   const keyOk = hasConfiguredKey();
   const st = state.status;
   const foot = h("div", { class: "side-foot" },
-    state.sideView === "settings"
-      ? h("button", {
-          type: "button",
-          class: "btn peach side-save-btn",
-          disabled: state.settings.saving,
-          onclick: saveSettingsKeys,
-        }, state.settings.saving ? "Saving…" : "Save API keys")
-      : null,
     st ? h("div", { class: "side-env-row" },
       h("span", { class: "side-env-items" },
         h("span", { title: st.docker.ok ? `Docker ${st.docker.version}` : st.docker.error },
           h("span", { class: `dot ${st.docker.ok ? "" : "bad"}` }), "docker"),
         h("span", { title: st.harbor.ok ? `Harbor ${st.harbor.version}` : st.harbor.error },
           h("span", { class: `dot ${st.harbor.ok ? "" : "bad"}` }), "harbor")),
-      h("span", { class: "m" }, "127.0.0.1:4810")) : null,
+      h("span", { class: "m" }, location.host)) : null,
     h("button", {
       type: "button",
-      class: `side-settings-btn ${state.sideView === "settings" || state.settings.open ? "active" : ""}`,
-      title: "Toggle Settings & API Keys sidebar (bench/agent/.env)",
-      onclick: () => {
-        state.sideView = state.sideView === "settings" ? "nav" : "settings";
-        state.settings.msg = "";
-        state.settings.err = "";
-        if (state.sideView === "settings") loadSettings();
-        renderSide();
-      },
-      "aria-expanded": String(state.sideView === "settings"),
+      class: `side-settings-btn ${state.settings.open ? "active" : ""}`,
+      title: "Open settings (⌘,)",
+      "aria-haspopup": "dialog",
+      "aria-expanded": String(state.settings.open),
+      // With no key saved, land on the tab that fixes that.
+      onclick: () => openSettingsModal(keyOk ? undefined : "keys"),
     },
       h("span", { class: "side-settings-left" },
         h("span", { class: "side-settings-ic", "aria-hidden": "true" }, "⚙"),
-        h("span", {}, state.sideView === "settings" ? "Back to Runs & Tasks" : "Settings & Keys")),
-      h("span", { class: `key-badge ${keyOk ? "ok" : "warn"}` }, keyOk ? "Keys ready" : "Set key")));
-
-  if (state.sideView === "settings") {
-    side.replaceChildren(...renderSideSettingsView(), foot, makeResizeSash("left"));
-    return;
-  }
+        h("span", {}, "Settings")),
+      h("span", { class: `key-badge ${keyOk ? "ok" : "warn"}` }, keyOk ? "Keys ready" : "Add API key")));
 
   const scrollKids = [
     h("a", { href: "#/new", class: `new-run-link ${current.view === "new" ? "on" : ""}` },
@@ -814,47 +724,108 @@ function renderSide() {
 
   const prevScroll = side.querySelector(".side-scroll");
   const top = prevScroll ? prevScroll.scrollTop : 0;
+  // Status polling re-renders the sidebar; keep focus on the Settings button.
+  const hadFocus = document.activeElement && document.activeElement.classList.contains("side-settings-btn");
   const scrollEl = h("div", { class: "side-scroll" }, scrollKids);
   side.replaceChildren(scrollEl, foot, makeResizeSash("left"));
   scrollEl.scrollTop = top;
+  if (hadFocus) side.querySelector(".side-settings-btn").focus({ preventScroll: true });
 }
 
-// Antigravity-style Settings Modal for API Keys (bench/agent/.env)
-function openSettingsModal() {
+// Settings modal: a rail of tabs on the left and one panel on the right, like
+// Antigravity's settings window and t3code's settings layout. Every way into
+// settings (the sidebar button, /settings, the missing-key banner) opens it.
+const SETTINGS_TABS = [
+  { id: "general", label: "General", desc: "Defaults for new benchmark runs. Changes apply to the run form right away." },
+  { id: "keys", label: "API keys", desc: "Provider keys the agents use to call models." },
+  { id: "environment", label: "Environment", desc: "The tools and folders this console found on your machine." },
+  { id: "shortcuts", label: "Shortcuts", desc: "Keyboard shortcuts, and the commands you can type in the run composer.", foot: true },
+];
+const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+let settingsOpener = null;
+
+function openSettingsModal(tab) {
+  if (!state.settings.open) settingsOpener = document.activeElement;
+  // tab is ignored when this runs as an event handler.
+  if (typeof tab === "string" && SETTINGS_TABS.some((t) => t.id === tab)) state.settings.tab = tab;
   state.settings.open = true;
   state.settings.msg = "";
   state.settings.err = "";
   state.settings.drafts = {};
   renderSide();
   renderSettingsModal();
+  focusSettingsTab();
   loadSettings();
 }
 
 function closeSettingsModal() {
   state.settings.open = false;
-  renderSide();
   const existing = document.getElementById("settings-backdrop");
   if (existing) existing.remove();
+  renderSide();
+  // The sidebar re-renders its button, so fall back to the new one.
+  const back = settingsOpener && settingsOpener.isConnected && settingsOpener !== document.body ? settingsOpener : document.querySelector(".side-settings-btn");
+  if (back) back.focus();
+  settingsOpener = null;
+}
+
+function selectSettingsTab(id) {
+  if (state.settings.tab === id) return;
+  state.settings.tab = id;
+  state.settings.msg = "";
+  renderSettingsModal();
+  focusSettingsTab();
+}
+
+function focusSettingsTab() {
+  const el = document.getElementById(`settings-tab-${state.settings.tab}`);
+  if (el) el.focus();
+}
+
+function onSettingsTabKey(e) {
+  const ids = SETTINGS_TABS.map((t) => t.id);
+  let i = ids.indexOf(state.settings.tab);
+  // The rail is vertical on desktop and a horizontal strip on phones.
+  if (e.key === "ArrowDown" || e.key === "ArrowRight") i = (i + 1) % ids.length;
+  else if (e.key === "ArrowUp" || e.key === "ArrowLeft") i = (i - 1 + ids.length) % ids.length;
+  else if (e.key === "Home") i = 0;
+  else if (e.key === "End") i = ids.length - 1;
+  else return;
+  e.preventDefault();
+  selectSettingsTab(ids[i]);
+}
+
+// Keep Tab and Shift+Tab inside the dialog while it is open.
+function trapSettingsFocus(e) {
+  if (e.key !== "Tab") return;
+  const modal = e.currentTarget.querySelector(".settings-modal");
+  if (!modal) return;
+  const els = [...modal.querySelectorAll("button, input, a[href], [tabindex]")]
+    .filter((el) => !el.disabled && el.tabIndex >= 0 && el.offsetParent !== null);
+  if (!els.length) return;
+  const first = els[0];
+  const last = els[els.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 async function saveSettingsKeys(e) {
   if (e) e.preventDefault();
-  const drafts = state.settings.drafts;
-  const payload = {};
-  for (const [k, v] of Object.entries(drafts)) {
-    if (v !== undefined) payload[k] = v;
-  }
+  const payload = { ...state.settings.drafts };
   if (!Object.keys(payload).length) {
-    state.settings.msg = "No changes to save.";
+    state.settings.msg = "Nothing to save. Paste a key first.";
     renderSettingsModal();
-    renderSide();
     return;
   }
   state.settings.saving = true;
   state.settings.err = "";
   state.settings.msg = "";
   renderSettingsModal();
-  renderSide();
   try {
     state.settings.data = await api("/settings", {
       method: "POST",
@@ -862,16 +833,215 @@ async function saveSettingsKeys(e) {
       body: JSON.stringify({ keys: payload }),
     });
     state.settings.drafts = {};
-    state.settings.msg = "Saved API keys to bench/agent/.env.";
+    state.settings.reveal = {};
+    state.settings.msg = `Saved to ${state.settings.data.env_file || "bench/agent/.env"}.`;
     await loadStatus();
   } catch (err) {
-    state.settings.err = err.message;
+    state.settings.err = `Couldn't save keys: ${err.message}`;
   } finally {
     state.settings.saving = false;
     renderSettingsModal();
     renderSide();
   }
 }
+
+function settingsGroup(title, rows, note) {
+  return h("section", { class: "settings-group" },
+    title ? h("h3", { class: "settings-group-title" }, title) : null,
+    note ? h("p", { class: "settings-group-note" }, note) : null,
+    h("div", { class: "settings-rows" }, rows));
+}
+
+function settingsRow({ label, hint, control, below, labelId }) {
+  return h("div", { class: "settings-row" },
+    h("div", { class: "settings-row-main" },
+      h("div", { class: "settings-row-text" },
+        h("div", { class: "settings-row-label", id: labelId }, label),
+        hint ? h("div", { class: "settings-row-hint" }, hint) : null),
+      control ? h("div", { class: "settings-row-control" }, control) : null),
+    below || null);
+}
+
+// A row of buttons where exactly one is pressed.
+function segmented({ id, labelledBy, value, options, onChange }) {
+  return h("div", { class: "seg", role: "group", "aria-labelledby": labelledBy },
+    options.map((o) => {
+      const on = String(o.value) === String(value);
+      return h("button", {
+        type: "button",
+        id: `${id}-${o.value}`,
+        class: on ? "on" : null,
+        "aria-pressed": String(on),
+        title: o.title,
+        onclick: () => { if (!on) onChange(o.value); },
+      }, o.label);
+    }));
+}
+
+function updateRunDefaults(patch) {
+  Object.assign(state.form, patch);
+  saveForm();
+  renderView();
+  renderSettingsModal();
+}
+
+function settingsGeneralTab() {
+  const f = state.form;
+  const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b);
+  return [
+    settingsGroup("Run defaults", [
+      settingsRow({
+        label: "Agent",
+        labelId: "set-agent-lbl",
+        hint: (AGENTS[f.agent] || {}).desc,
+        control: segmented({
+          id: "set-agent", labelledBy: "set-agent-lbl", value: f.agent,
+          options: Object.entries(AGENTS).map(([v, info]) => ({ value: v, label: info.label, title: info.desc })),
+          onChange: (v) => updateRunDefaults({ agent: v }),
+        }),
+      }),
+      settingsRow({
+        label: "Attempts per task and model",
+        labelId: "set-runs-lbl",
+        hint: "Repeat each task this many times to measure how often a model passes.",
+        control: h("input", {
+          id: "set-runs", class: "settings-num", type: "number", min: "1", max: "100",
+          value: String(f.runs), "aria-labelledby": "set-runs-lbl",
+          onchange: (e) => updateRunDefaults({ runs: clampInt(e.target.value, 1, 100, 1) }),
+        }),
+      }),
+      settingsRow({
+        label: "Attempts at once",
+        labelId: "set-conc-lbl",
+        hint: "Each attempt runs in its own container. More at once finishes sooner and uses more memory.",
+        control: segmented({
+          id: "set-conc", labelledBy: "set-conc-lbl", value: f.concurrent,
+          options: [1, 2, 4, 8].map((n) => ({ value: n, label: String(n) })),
+          onChange: (v) => updateRunDefaults({ concurrent: +v }),
+        }),
+      }),
+      settingsRow({
+        label: "Agent timeout",
+        labelId: "set-timeout-lbl",
+        hint: f.timeout ? `The agent is stopped after ${f.timeout} minutes on every task.` : "Each task uses the timeout set in its task.toml.",
+        control: segmented({
+          id: "set-timeout", labelledBy: "set-timeout-lbl", value: f.timeout,
+          options: timeouts.map((m) => ({ value: m, label: m ? `${m}m` : "Task's", title: m ? `${m} minutes` : "Use each task's own timeout" })),
+          onChange: (v) => updateRunDefaults({ timeout: +v }),
+        }),
+      }),
+    ]),
+  ];
+}
+
+function settingsKeysTab() {
+  const data = state.settings.data;
+  const file = data ? data.env_file : "bench/agent/.env";
+  const syncSave = () => {
+    const btn = document.getElementById("settings-save");
+    if (btn) btn.disabled = state.settings.saving || !Object.keys(state.settings.drafts).length;
+  };
+  const rows = defaultKeySpecs().map((k) => {
+    const draft = state.settings.drafts[k.name];
+    const clearing = draft === "";
+    const shown = Boolean(state.settings.reveal[k.name]);
+    const inputId = `set-key-${k.name}`;
+    return settingsRow({
+      label: h("label", { for: inputId }, k.label),
+      hint: [h("code", { class: "settings-env" }, k.name), " ", k.hint],
+      control: h("span", { class: "key-status" },
+        h("span", { class: `key-badge ${clearing ? "warn" : k.set ? "ok" : ""}` },
+          clearing ? "Clears on save" : k.set ? k.masked : "Not set"),
+        k.set && !clearing ? h("button", {
+          type: "button", id: `${inputId}-clear`, class: "link-btn danger",
+          onclick: () => { state.settings.drafts[k.name] = ""; renderSettingsModal(); },
+        }, "Remove") : null),
+      below: h("div", { class: "key-input-row" },
+        h("input", {
+          id: inputId,
+          type: shown ? "text" : "password",
+          autocomplete: "off",
+          spellcheck: "false",
+          placeholder: clearing ? "This key is removed when you save" : k.set ? "Paste a new key to replace it" : `Paste your ${k.label.replace(/ API Key$/, "")} key`,
+          value: draft || "",
+          oninput: (e) => {
+            const v = e.target.value;
+            if (v === "") delete state.settings.drafts[k.name];
+            else state.settings.drafts[k.name] = v;
+            syncSave();
+          },
+        }),
+        h("button", {
+          type: "button", id: `${inputId}-show`, class: "btn",
+          "aria-pressed": String(shown),
+          onclick: () => { state.settings.reveal[k.name] = !shown; renderSettingsModal(); },
+        }, shown ? "Hide" : "Show")),
+    });
+  });
+  const dirty = Object.keys(state.settings.drafts).length > 0;
+  return [
+    settingsGroup(null, rows, ["Saved to ", h("code", {}, file), " with permissions 0600. Harbor passes them to the agent; they are never copied into task containers."]),
+    h("form", { class: "settings-actions", onsubmit: saveSettingsKeys },
+      h("span", { class: state.settings.err ? "bad" : "ok", role: "status" }, state.settings.err || state.settings.msg || ""),
+      h("button", { type: "submit", id: "settings-save", class: "btn peach", disabled: state.settings.saving || !dirty },
+        state.settings.saving ? "Saving…" : "Save keys")),
+  ];
+}
+
+function pathRow(label, path, hint) {
+  return settingsRow({
+    label,
+    hint,
+    below: h("code", { class: "settings-path" }, path || "Unknown"),
+  });
+}
+
+function settingsEnvironmentTab() {
+  const st = state.status;
+  if (!st) {
+    return [h("p", { class: state.statusErr ? "settings-empty bad" : "settings-empty" },
+      state.statusErr ? `Couldn't reach the console server: ${state.statusErr}` : "Checking your machine…")];
+  }
+  const tool = (name, c, fix) => settingsRow({
+    label: name,
+    hint: c.ok ? `Version ${c.version}` : `${c.error || "Not found."} ${fix}`,
+    control: h("span", { class: `key-badge ${c.ok ? "ok" : "bad"}` }, c.ok ? "Working" : "Not working"),
+  });
+  const data = state.settings.data;
+  return [
+    settingsGroup("Tools", [
+      tool("Docker", st.docker, "Start Docker Desktop, then reopen this tab."),
+      tool("Harbor", st.harbor, "Install it with uv tool install harbor."),
+    ]),
+    settingsGroup("Folders", [
+      st.root ? pathRow("Repository", st.root) : null,
+      pathRow("Benchmark tasks", st.tasks_dir, `${st.tasks} task${st.tasks === 1 ? "" : "s"} found.`),
+      pathRow("Run results", st.jobs_dir, st.jobs_warning ? h("span", { class: "bad" }, st.jobs_warning) : null),
+      pathRow("API keys file", data ? data.env_file : "bench/agent/.env",
+        st.env_file ? null : "Not created yet. Saving a key in API keys creates it."),
+    ]),
+  ];
+}
+
+function settingsShortcutsTab() {
+  const kbd = (...keys) => h("span", { class: "kbds" }, keys.map((k) => h("kbd", {}, k)));
+  return [
+    settingsGroup("Keyboard", [
+      settingsRow({ label: "Show or hide the left sidebar", control: kbd(MOD_KEY, "B") }),
+      settingsRow({ label: "Show or hide the right pane", hint: "On the new run and run pages.", control: kbd(MOD_KEY, "J") }),
+      settingsRow({ label: "Close a dialog or menu", control: kbd("Esc") }),
+    ]),
+    settingsGroup("Composer commands", COMMANDS.map(([cmd, desc]) =>
+      settingsRow({ label: h("code", { class: "settings-cmd" }, cmd), hint: desc[0].toUpperCase() + desc.slice(1) + "." }))),
+  ];
+}
+
+const SETTINGS_RENDER = {
+  general: settingsGeneralTab,
+  keys: settingsKeysTab,
+  environment: settingsEnvironmentTab,
+  shortcuts: settingsShortcutsTab,
+};
 
 function renderSettingsModal() {
   let backdrop = document.getElementById("settings-backdrop");
@@ -883,95 +1053,66 @@ function renderSettingsModal() {
     backdrop = h("div", {
       id: "settings-backdrop",
       class: "modal-backdrop",
-      onclick: (e) => { if (e.target === backdrop) closeSettingsModal(); },
+      onmousedown: (e) => { if (e.target === backdrop) closeSettingsModal(); },
+      onkeydown: (e) => { backdrop.dataset.kbd = "1"; trapSettingsFocus(e); },
+      onpointerdown: () => { delete backdrop.dataset.kbd; },
     });
     document.body.append(backdrop);
   }
 
-  const data = state.settings.data;
-  const keys = (data && data.keys) || [
-    { name: "OPENROUTER_API_KEY", label: "OpenRouter API Key", hint: "Used by the OpenCode agent for frontier & open-weight models", set: false, masked: "" },
-    { name: "ANTHROPIC_API_KEY", label: "Anthropic API Key", hint: "Direct Anthropic API access for Claude models", set: false, masked: "" },
-    { name: "OPENAI_API_KEY", label: "OpenAI API Key", hint: "Direct OpenAI API access for GPT & o-series models", set: false, masked: "" },
-    { name: "NVIDIA_API_KEY", label: "NVIDIA NIM API Key", hint: "Hosted Nemotron endpoints on build.nvidia.com", set: false, masked: "" },
-    { name: "ZAI_API_KEY", label: "Z.ai API Key", hint: "Direct Z.ai API access for GLM models", set: false, masked: "" },
-  ];
+  // Re-rendering replaces the DOM: keep the panel's scroll and the focused control.
+  const tab = SETTINGS_TABS.find((t) => t.id === state.settings.tab) || SETTINGS_TABS[0];
+  const prevPane = backdrop.querySelector(".settings-pane");
+  const scroll = prevPane && backdrop.dataset.tab === tab.id ? prevPane.scrollTop : 0;
+  const active = document.activeElement;
+  const focusId = active && backdrop.contains(active) ? active.id : "";
 
-  const fields = keys.map((k) => {
-    const draft = state.settings.drafts[k.name];
-    const isCleared = draft === "";
-    const shown = Boolean(state.settings.reveal[k.name]);
-    const placeholder = isCleared
-      ? "Will be cleared on save…"
-      : k.set
-        ? `Configured (${k.masked}) — paste new key to replace`
-        : `Paste ${k.name}…`;
+  const tabBtn = (t) => {
+    const on = t.id === tab.id;
+    return h("button", {
+      type: "button",
+      role: "tab",
+      id: `settings-tab-${t.id}`,
+      class: `settings-tab ${on ? "on" : ""}`,
+      "aria-selected": String(on),
+      "aria-controls": "settings-panel",
+      tabindex: on ? "0" : "-1",
+      onclick: () => selectSettingsTab(t.id),
+    },
+      h("span", {}, t.label),
+      t.id === "keys" && !hasConfiguredKey() ? h("span", { class: "settings-tab-dot", title: "No API key saved" }) : null);
+  };
 
-    return h("div", { class: "key-field" },
-      h("div", { class: "key-field-top" },
-        h("div", { class: "key-field-title" },
-          h("span", { class: "key-field-name" }, k.label),
-          h("span", { class: "key-field-env" }, k.name)),
-        h("span", { class: `key-badge ${k.set && !isCleared ? "ok" : "warn"}` },
-          isCleared ? "Pending clear" : k.set ? `Active · ${k.masked}` : "Not set")),
-      h("p", { class: "key-field-hint" }, k.hint),
-      h("div", { class: "key-input-row" },
-        h("input", {
-          type: shown ? "text" : "password",
-          autocomplete: "off",
-          spellcheck: "false",
-          placeholder,
-          value: draft || "",
-          "aria-label": k.label,
-          oninput: (e) => {
-            const v = e.target.value;
-            if (v === "") delete state.settings.drafts[k.name];
-            else state.settings.drafts[k.name] = v;
-          },
-        }),
-        h("button", {
-          type: "button",
-          class: "btn",
-          onclick: () => {
-            state.settings.reveal[k.name] = !shown;
-            renderSettingsModal();
-          },
-        }, shown ? "Hide" : "Show"),
-        k.set ? h("button", {
-          type: "button",
-          class: "btn danger",
-          title: `Clear ${k.name}`,
-          onclick: () => {
-            state.settings.drafts[k.name] = "";
-            renderSettingsModal();
-          },
-        }, "Clear") : null));
-  });
+  const rail = h("nav", { class: "settings-rail", "aria-label": "Settings" },
+    h("h2", { class: "settings-rail-title", id: "settings-title" }, "Settings"),
+    h("div", { class: "settings-tabs", role: "tablist", "aria-orientation": window.matchMedia("(max-width: 680px)").matches ? "horizontal" : "vertical", onkeydown: onSettingsTabKey },
+      SETTINGS_TABS.filter((t) => !t.foot).map(tabBtn),
+      h("div", { class: "settings-tabs-gap", role: "presentation" }),
+      SETTINGS_TABS.filter((t) => t.foot).map(tabBtn)));
 
-  const modal = h("form", {
-    class: "settings-modal",
-    role: "dialog",
-    "aria-modal": "true",
-    "aria-label": "Settings & API Keys",
-    onsubmit: saveSettingsKeys,
+  const pane = h("section", {
+    class: "settings-pane",
+    id: "settings-panel",
+    role: "tabpanel",
+    "aria-labelledby": `settings-tab-${tab.id}`,
   },
-    h("div", { class: "settings-head" },
-      h("div", {},
-        h("h3", {}, "Settings & API Keys"),
-        h("p", {}, "Keys are written to ", h("code", {}, data ? data.env_file : "bench/agent/.env"), " (mode 0600, gitignored) and passed to Harbor runs.")),
-      h("button", { type: "button", class: "btn", onclick: closeSettingsModal }, "✕")),
-    h("div", { class: "settings-body" }, fields),
-    h("div", { class: "settings-foot" },
-      h("div", {},
-        state.settings.err ? h("span", { class: "bad" }, state.settings.err)
-          : state.settings.msg ? h("span", { class: "ok" }, state.settings.msg)
-          : h("span", { class: "faint" }, "Keys stay on your machine and never enter task containers directly.")),
-      h("div", { class: "row" },
-        h("button", { type: "button", class: "btn", onclick: closeSettingsModal }, "Close"),
-        h("button", { type: "submit", class: "btn peach", disabled: state.settings.saving },
-          state.settings.saving ? "Saving…" : "Save API keys"))));
+    h("header", { class: "settings-pane-head" },
+      h("h2", {}, tab.label),
+      h("p", {}, tab.desc)),
+    SETTINGS_RENDER[tab.id]());
 
+  const modal = h("div", { class: "settings-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "settings-title" },
+    rail,
+    pane,
+    h("button", { type: "button", id: "settings-close", class: "settings-close", "aria-label": "Close settings", title: "Close (Esc)", onclick: closeSettingsModal }, "✕"));
+
+  backdrop.dataset.tab = tab.id;
   backdrop.replaceChildren(modal);
+  pane.scrollTop = scroll;
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    if (el) el.focus({ preventScroll: true });
+  }
 }
 
 // Custom Select Component (.cselect) to replace broken native <select> menus

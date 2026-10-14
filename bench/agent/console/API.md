@@ -263,6 +263,37 @@ instruction, without its `#` marks or a leading `Task:` label.
 ]
 ```
 
+### GET /api/tasks/{task}/environment
+
+What one Harbor task (`redis-10068-kavach`, not the base name) runs in, for
+reading before a run. `files` holds, in order: the agent's compose file
+(`role: "agent"`), the verifier's (`"verifier"`), each Dockerfile they build
+(`"dockerfile"`, listed once even when both build it) and `task.toml`
+(`"task"`). A compose file's `dockerfile` is the absolute path it builds, with
+`${VAR:-default}` in its context expanded from the server's environment as a
+run would, and `target` its build target. A file that does not exist has
+`missing: true`; one over 256 KiB is cut short with `truncated: true`. The
+other fields come from `task.toml`. 404 when there is no such task.
+
+```json
+{
+  "task": "axum-1934-kavach",
+  "network": "no-network",
+  "workdir": "/work",
+  "build_timeout_sec": 1800,
+  "verifier_mode": "separate",
+  "mcp_servers": ["kavach"],
+  "files": [
+    {"role": "agent", "path": "environment/docker-compose.yaml", "content": "…",
+     "dockerfile": "/…/bench/agent/tasks/axum-1934/Dockerfile", "target": "kavach"},
+    {"role": "verifier", "path": "tests/docker-compose.yaml", "content": "…",
+     "dockerfile": "/…/bench/agent/tasks/axum-1934/Dockerfile", "target": "grader"},
+    {"role": "dockerfile", "path": "/…/bench/agent/tasks/axum-1934/Dockerfile", "content": "…"},
+    {"role": "task", "path": "task.toml", "content": "…"}
+  ]
+}
+```
+
 ### GET /api/models?q=nemotron
 
 OpenRouter's public model list, fetched at most once an hour. `q` is
