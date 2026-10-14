@@ -1,0 +1,22 @@
+diff --git a/src/t_zset.c b/src/t_zset.c
+--- a/src/t_zset.c
++++ b/src/t_zset.c
+@@ -4039,9 +4039,16 @@ void blockingGenericZpopCommand(client *c, robj **keys, int numkeys, int where,
+         return;
+     }
+ 
+-    /* If the keys do not exist we must block */
++    /* If the keys do not exist we must block, on the command's keys as its
++     * key specs give them, not on every argument. */
+     struct blockPos pos = {where};
+-    blockForKeys(c,BLOCKED_ZSET,c->argv+1,c->argc-2,count,timeout,NULL,&pos,NULL);
++    getKeysResult result = GETKEYS_RESULT_INIT;
++    int n = getKeysFromCommand(c->cmd,c->argv,c->argc,&result);
++    robj **bkeys = zmalloc(sizeof(robj*)*(n ? n : 1));
++    for (j = 0; j < n; j++) bkeys[j] = c->argv[result.keys[j].pos];
++    blockForKeys(c,BLOCKED_ZSET,bkeys,n,count,timeout,NULL,&pos,NULL);
++    zfree(bkeys);
++    getKeysFreeResult(&result);
+ }
+ 
+ // BZPOPMIN key [key ...] timeout
