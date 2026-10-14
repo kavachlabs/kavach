@@ -1,8 +1,17 @@
-# Kavach
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/kavach-banner-dark.png">
+    <img alt="kavach" src="assets/kavach-banner-light.png" width="380">
+  </picture>
+</p>
 
 [![ci](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml)
 [![sdk](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml)
 [![codecov](https://codecov.io/gh/kavachlabs/kavach/graph/badge.svg?branch=main)](https://codecov.io/gh/kavachlabs/kavach)
+
+Kavach is an invariant verification and deterministic replay engine for high-throughput, event-driven systems.
+
+It replaces static unit mocks with boundary-level event journaling. When a cross-system invariant is violated, Kavach slices the causal event sequence and reproduces the failure deterministically under a virtual clock in sub-millisecond execution times.
 
 Kavach turns production crashes in journal-driven services, in any language,
 into deterministic tests that AI coding agents can reproduce, fix, and *verify* — by re-deriving
