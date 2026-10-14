@@ -10,7 +10,7 @@ import (
 type settings struct {
 	Agent   string   `json:"agent"`   // a Harbor agent: opencode, oracle, nop
 	Task    string   `json:"task"`    // a task's base name: redis-10068
-	Arm     string   `json:"arm"`     // control, kavach or both
+	Arm     string   `json:"arm"`     // control, workflow, kavach, kavach-implement or both
 	Model   string   `json:"model"`   // an OpenRouter id: z-ai/glm-5.3
 	Name    string   `json:"name"`    // the model's display name: GLM 5.3
 	Runs    int      `json:"runs"`    // attempts per task and model

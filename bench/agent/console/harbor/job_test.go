@@ -252,11 +252,15 @@ func TestNotFound(t *testing.T) {
 
 func TestSplitArm(t *testing.T) {
 	for in, want := range map[string][2]string{
-		"redis-10068-kavach":  {"redis-10068", "kavach"},
-		"redis-10068-control": {"redis-10068", "control"},
-		"hello-world":         {"hello-world", ""},
-		"-kavach":             {"-kavach", ""},
-		"kavach":              {"kavach", ""},
+		"redis-10068-kavach":           {"redis-10068", "kavach"},
+		"redis-10068-control":          {"redis-10068", "control"},
+		"go-genai-23-workflow":         {"go-genai-23", "workflow"},
+		"go-genai-23-kavach-implement": {"go-genai-23", "kavach-implement"},
+		"hello-world":                  {"hello-world", ""},
+		"-kavach":                      {"-kavach", ""},
+		"-kavach-implement":            {"-kavach-implement", ""},
+		"kavach":                       {"kavach", ""},
+		"kavach-implement":             {"kavach-implement", ""},
 	} {
 		if b, a := SplitArm(in); b != want[0] || a != want[1] {
 			t.Errorf("SplitArm(%q) = %q, %q", in, b, a)
@@ -276,6 +280,30 @@ func TestFindTasks(t *testing.T) {
 	}
 	if tasks, err := FindTasks("testdata/none"); err != nil || len(tasks) != 0 {
 		t.Fatalf("missing dir: %v %v", tasks, err)
+	}
+
+	dir := t.TempDir()
+	for _, arm := range []string{"kavach-implement", "kavach", "workflow", "control"} {
+		d := filepath.Join(dir, "go-genai-23-"+arm)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "task.toml"), []byte("version = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, err = FindTasks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Name != "go-genai-23" || len(tasks[0].Arms) != 4 {
+		t.Fatalf("feature task arms: %+v", tasks)
+	}
+	wantArms := []string{"control", "workflow", "kavach", "kavach-implement"}
+	for i, w := range wantArms {
+		if got := tasks[0].Arms[i].Arm; got != w {
+			t.Errorf("arm[%d] = %q, want %q", i, got, w)
+		}
 	}
 }
 
@@ -298,6 +326,21 @@ func TestCompare(t *testing.T) {
 		rows[0].Passes != 1 || rows[0].Attempts != 1 || rows[0].Errors != 1 || rows[0].MedianFresh == nil ||
 		rows[1].Arm != "kavach" || rows[1].Attempts != 0 || rows[1].Errors != 2 {
 		t.Fatalf("%+v", rows)
+	}
+
+	fourArms := Compare([]Trial{
+		{Task: "go-genai-23-kavach-implement", Arm: "kavach-implement", Model: "m", Status: Pass},
+		{Task: "go-genai-23-kavach", Arm: "kavach", Model: "m", Status: Pass},
+		{Task: "go-genai-23-workflow", Arm: "workflow", Model: "m", Status: Fail},
+		{Task: "go-genai-23-control", Arm: "control", Model: "m", Status: Fail},
+	})
+	if len(fourArms) != 4 {
+		t.Fatalf("fourArms: %+v", fourArms)
+	}
+	for i, w := range []string{"control", "workflow", "kavach", "kavach-implement"} {
+		if fourArms[i].Arm != w {
+			t.Errorf("Compare row %d arm = %q, want %q", i, fourArms[i].Arm, w)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -145,8 +146,16 @@ func (m *Model) runLine() string {
 	switch m.set.Arm {
 	case "control":
 		arm = sText.Render("Control")
-	case "both":
-		arm = sPeach.Render("Kavach") + sDim.Render(" + ") + sText.Render("Control")
+	case "workflow":
+		arm = sText.Render("Workflow")
+	case "kavach-implement":
+		arm = sPeach.Render("Kavach-implement")
+	case "both", "all":
+		if t := m.taskByName(m.set.Task); t != nil && len(t.Arms) > 2 {
+			arm = sPeach.Render(fmt.Sprintf("All %d arms", len(t.Arms)))
+		} else {
+			arm = sPeach.Render("Kavach") + sDim.Render(" + ") + sText.Render("Control")
+		}
 	default:
 		arm = sPeach.Render("Kavach")
 	}
@@ -540,7 +549,7 @@ func trialStats(t harbor.Trial) string {
 
 func kavachLine(k harbor.Kavach) string {
 	v := sBold.Render(k.Verdict)
-	if k.Verdict != "fixed" {
+	if k.Verdict != "fixed" && k.Verdict != "pass" && k.Verdict != "ok" {
 		v = lipgloss.NewStyle().Foreground(colRed).Bold(true).Render(k.Verdict)
 	}
 	line := sPeach.Render("kavach diff ") + v
@@ -665,79 +674,127 @@ func (m *Model) cardLines(t harbor.Trial) []string {
 	return lines
 }
 
+// compareArms returns the arms to show as columns in /compare: control and
+// kavach for standard two-arm runs, or every arm present in benchmark order
+// when a run includes workflow or kavach-implement.
+func compareArms(rows []harbor.CompareRow) []string {
+	present := map[string]bool{}
+	extra := false
+	for _, r := range rows {
+		if r.Arm != "" {
+			present[r.Arm] = true
+			if r.Arm != "control" && r.Arm != "kavach" {
+				extra = true
+			}
+		}
+	}
+	if !extra {
+		return []string{"control", "kavach"}
+	}
+	if len(present) == 1 {
+		present["control"] = true
+	}
+	var arms []string
+	for a := range present {
+		arms = append(arms, a)
+	}
+	sort.Slice(arms, func(i, j int) bool { return harbor.CompareArms(arms[i], arms[j]) })
+	return arms
+}
+
 // compareBody is the table the benchmark is for: per model, the pass rate
-// in each arm and what an attempt took, control → kavach.
+// in each arm and what an attempt took, across arms in benchmark order.
 func (m *Model) compareBody() []string {
 	out := []string{sDim.Render("› /compare")}
 	if m.compare == nil {
 		return append(out, sDim.Render("  Comparing…"))
 	}
-	type pair struct{ control, kavach *harbor.CompareRow }
+	type group struct {
+		task, model string
+		arms        map[string]*harbor.CompareRow
+	}
 	var keys []string
-	pairs := map[string]*pair{}
+	groups := map[string]*group{}
 	tasks := map[string]bool{}
 	for i := range m.compare {
 		r := &m.compare[i]
 		tasks[r.Task] = true
 		k := r.Task + "\x00" + r.Model
-		if pairs[k] == nil {
-			pairs[k] = &pair{}
+		if groups[k] == nil {
+			groups[k] = &group{task: r.Task, model: r.Model, arms: map[string]*harbor.CompareRow{}}
 			keys = append(keys, k)
 		}
-		if r.Arm == "kavach" {
-			pairs[k].kavach = r
-		} else {
-			pairs[k].control = r
+		arm := r.Arm
+		if arm == "" {
+			arm = "control"
 		}
+		groups[k].arms[arm] = r
 	}
 	if len(keys) == 0 {
 		return append(out, sDim.Render("  Nothing to compare yet."))
 	}
-	rows := [][]string{{sDim.Render("model"), sDim.Render("control"), sDim.Render("kavach"),
-		sDim.Render("median time"), sDim.Render("median tokens"), sDim.Render("cost / attempt")}}
+	arms := compareArms(m.compare)
+	head := []string{sDim.Render("model")}
+	for _, a := range arms {
+		head = append(head, sDim.Render(a))
+	}
+	head = append(head, sDim.Render("median time"), sDim.Render("median tokens"), sDim.Render("cost / attempt"))
+	rows := [][]string{head}
 	for _, k := range keys {
-		p := pairs[k]
-		first := p.control
-		if first == nil {
-			first = p.kavach
-		}
-		name := m.modelLabel(first.Model, false)
+		g := groups[k]
+		name := m.modelLabel(g.model, false)
 		if len(tasks) > 1 {
-			name = first.Task + " · " + name
+			name = g.task + " · " + name
 		}
-		c, kv := passCell(p.control), passCell(p.kavach)
-		if rate(p.kavach) > rate(p.control) {
-			kv = sBold.Render(kv)
-		} else if rate(p.control) > rate(p.kavach) {
-			c = sBold.Render(c)
+		best, varied := -1.0, false
+		firstRate := -2.0
+		for _, a := range arms {
+			rt := rate(g.arms[a])
+			if firstRate == -2.0 {
+				firstRate = rt
+			} else if rt != firstRate {
+				varied = true
+			}
+			if rt > best {
+				best = rt
+			}
 		}
-		rows = append(rows, []string{name,
-			c + pendingNote(p.control), kv + pendingNote(p.kavach),
-			arrow(p.control, p.kavach, func(r *harbor.CompareRow) string {
+		row := []string{name}
+		for _, a := range arms {
+			r := g.arms[a]
+			c := passCell(r)
+			if varied && best >= 0 && rate(r) == best {
+				c = sBold.Render(c)
+			}
+			row = append(row, c+pendingNote(r))
+		}
+		row = append(row,
+			chain(arms, g.arms, func(r *harbor.CompareRow) string {
 				if r.MedianSeconds == nil {
 					return ""
 				}
 				return duration(*r.MedianSeconds)
 			}),
-			arrow(p.control, p.kavach, func(r *harbor.CompareRow) string {
+			chain(arms, g.arms, func(r *harbor.CompareRow) string {
 				if r.MedianFresh == nil {
 					return ""
 				}
 				return tokens(*r.MedianFresh)
 			}),
-			arrow(p.control, p.kavach, func(r *harbor.CompareRow) string {
+			chain(arms, g.arms, func(r *harbor.CompareRow) string {
 				if r.MeanCost == nil {
 					return ""
 				}
 				return dollars(*r.MeanCost)
 			}),
-		})
+		)
+		rows = append(rows, row)
 	}
 	for _, l := range table(rows, 4) {
 		out = append(out, "  "+l)
 	}
 	return append(out, "",
-		sDim.Render("  control → kavach. A pass is the hidden upstream test passing."),
+		sDim.Render("  "+strings.Join(arms, " → ")+". A pass is the hidden upstream test passing."),
 		sDim.Render("  Tokens are fresh: input not served from cache, plus output."))
 }
 
@@ -772,7 +829,7 @@ func pendingNote(r *harbor.CompareRow) string {
 	return sFaint.Render(" (" + strings.Join(parts, ", ") + ")")
 }
 
-func arrow(control, kavach *harbor.CompareRow, f func(*harbor.CompareRow) string) string {
+func chain(arms []string, byArm map[string]*harbor.CompareRow, f func(*harbor.CompareRow) string) string {
 	get := func(r *harbor.CompareRow) string {
 		if r == nil {
 			return "–"
@@ -782,7 +839,11 @@ func arrow(control, kavach *harbor.CompareRow, f func(*harbor.CompareRow) string
 		}
 		return "–"
 	}
-	return get(control) + sDim.Render(" → ") + get(kavach)
+	parts := make([]string, len(arms))
+	for i, a := range arms {
+		parts[i] = get(byArm[a])
+	}
+	return strings.Join(parts, sDim.Render(" → "))
 }
 
 func (m *Model) modelsBody() []string {
@@ -884,10 +945,13 @@ func (m *Model) matrixBody(width int) []string {
 		}
 	}
 	tasks := 2
+	if t := m.taskByName(m.set.Task); t != nil && len(t.Arms) > 0 {
+		tasks = len(t.Arms)
+	}
 	attempts := chosen * tasks * m.set.Runs
 	out := []string{sDim.Render("› /matrix"),
-		"  " + sText.Render(fmt.Sprintf("%s × 2 arms × %s = %s",
-			plural(chosen, "model", "models"), plural(m.set.Runs, "run", "runs"), plural(attempts, "attempt", "attempts"))) +
+		"  " + sText.Render(fmt.Sprintf("%s × %s × %s = %s",
+			plural(chosen, "model", "models"), plural(tasks, "arm", "arms"), plural(m.set.Runs, "run", "runs"), plural(attempts, "attempt", "attempts"))) +
 			sDim.Render("   on "+m.set.Task),
 		"  " + sDim.Render("filter ") + sText.Render(m.pick.filter) + lipgloss.NewStyle().Background(colText).Render(" "),
 		""}

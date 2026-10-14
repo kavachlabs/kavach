@@ -40,8 +40,8 @@ The console never reads it.
     when its reward is 1. `error` means it has no reward: Harbor raised an
     exception, it was cancelled, or Harbor died while it ran
     (`"error": "interrupted"`).
-- The arm comes from the end of the task name: `-control` or `-kavach`.
-  Any other name has arm `""`.
+- The arm comes from the end of the task name: `-control`, `-workflow`,
+  `-kavach`, or `-kavach-implement`. Any other name has arm `""`.
 - A job is identified by its folder name, and a trial by its folder name
   `<task>__<random>`. A queued trial has `"id": ""`.
 
