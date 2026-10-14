@@ -37,7 +37,12 @@ func newTestModel(t *testing.T) (*Model, *[]harbor.RunRequest) {
 	if err := os.CopyFS(jobs, os.DirFS(fixtures+"/jobs")); err != nil {
 		t.Fatal(err)
 	}
-	tasks, _ := filepath.Abs("../../harbor/tasks")
+	tasks := filepath.Join(t.TempDir(), "tasks")
+	for _, arm := range []string{"redis-10068-control", "redis-10068-kavach"} {
+		if err := os.CopyFS(filepath.Join(tasks, arm), os.DirFS("../../harbor/tasks/"+arm)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := api.New(api.Config{JobsDir: jobs, TasksDir: tasks, Harbor: "true", ModelsURL: modelsServer(t)})
 	var posted []harbor.RunRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
