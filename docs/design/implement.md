@@ -187,19 +187,14 @@ Measured on an Apple M3 Pro, with each task's committed `contract/` and builds:
   history that a feature step built. Marking it, and step 49, as feature steps
   (`31-55`) was right.
 
-**Array-element variants on the incident tasks.** Rerunning the candidates:
+**Array-element, cross-position, and pairwise variants on the incident tasks.** Rerunning the candidates:
 
-| Task | Reproducing variants, before → now | Narrow or wrong fixes that still pass `diff` |
-| --- | --- | --- |
-| redis-10764 | 37 of 59 → 41 of 64 | `skip-leading-args` |
-| redis-11734 | 61 of 64 → 53 of 64 | `unit-only`, `type-before-args`, `missing-as-empty` |
+| Task | Reproducing variants, before → single-element → combined | Caught by combined variants | Narrow or wrong fixes that still pass `diff` |
+| --- | --- | --- | --- |
+| redis-10764 | 37 of 59 → 41 of 64 → 38 of 64 | `skip-leading-args` (`variant_failed(30)@54`) | none (all 4 candidates match the hidden test) |
+| redis-11734 | 61 of 64 → 53 of 64 → 46 of 64 | `unit-only` (`variant_failed(2)@73`) | `type-before-args`, `missing-as-empty` |
 
-The new variants are generated. In redis-11734, for example, `"argv"[4]
-"-1" → "BIT"` puts a non-integer end on the failing input. But none of them
-reaches these fixes' gaps. Each gap needs two changes at once (a valid unit
-and a bad number on a missing key in 11734; a write to a key at another
-argument position in 10764), and a variant changes one element. Combining
-mutations is the next step for that, at a cost in variant count.
+Cross-position array-element replacements (`"argv"[1] "1" → "MIN"` and `"COUNT"` from the earlier `BZMPOP`) catch `skip-leading-args` in redis-10764. Pairwise array-element mutations (`"argv"[4] "-1" → "BIT", "argv"[5] "BITS" → "BIT"` and `"BYTE"`) put a valid unit and a non-integer range bound on the missing key at once, catching `unit-only` in redis-11734. The remaining two wrong fixes in redis-11734 require either a key of another Redis type (`type-before-args`) or a valid `BITPOS <missing> 0` step (`missing-as-empty`, which does not fail on the old build).
 
 ## What it doesn't fix
 
