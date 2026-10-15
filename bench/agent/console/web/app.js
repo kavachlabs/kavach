@@ -2431,7 +2431,7 @@ function kavachLine(t) {
 // container, gave a different verdict from the verifier's.
 function disagreement(t) {
   const g = state.grades.get(`${t.job}/${t.id}`);
-  if (!g || !g.agent_diff || !t.kavach || !t.kavach.verdict || isContractTrial(t, t.kavach.verdict)) return null;
+  if (!g || !g.agent_diff || !t.kavach || isContractTrial(t, t.kavach.verdict)) return null;
   const status = (v) => v.replace(/[(@].*/, "");
   if (status(g.agent_diff) === status(t.kavach.verdict)) return null;
   return h("div", { class: "warn-line" },
