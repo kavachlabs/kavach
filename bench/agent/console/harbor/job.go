@@ -579,11 +579,14 @@ func (r *Reader) readTrial(job, dir string) Trial {
 	return t
 }
 
-func loadTrial(job, dir string) Trial {
+func loadTrial(job, dir string) Trial { return trialFrom(job, dir, os.DirFS(dir)) }
+
+// trialFrom reads the trial in dir from fsys, which holds dir's files.
+func trialFrom(job, dir string, fsys fs.FS) Trial {
 	name := filepath.Base(dir)
 	t := Trial{ID: name, Job: job, Status: Running}
 	var lock lockTrial
-	if readJSON(filepath.Join(dir, "lock.json"), &lock) == nil {
+	if readJSONFS(fsys, "lock.json", &lock) == nil {
 		t.Task, t.Model = lock.Task.Name, lock.Agent.ModelName
 	}
 	if t.Task == "" {
@@ -593,12 +596,12 @@ func loadTrial(job, dir string) Trial {
 	}
 	_, t.Arm = SplitArm(t.Task)
 	// Until result.json exists, the trial started when Harbor wrote its config.
-	if st, err := os.Stat(filepath.Join(dir, "config.json")); err == nil {
+	if st, err := fs.Stat(fsys, "config.json"); err == nil {
 		s := st.ModTime()
 		t.Started = &s
 	}
 
-	if steps, err := readSteps(dir); err == nil {
+	if steps, err := stepsFrom(fsys); err == nil {
 		var cost float64
 		var costed bool
 		for _, s := range steps {
@@ -620,7 +623,7 @@ func loadTrial(job, dir string) Trial {
 	}
 
 	var res trialResult
-	if readJSON(filepath.Join(dir, "result.json"), &res) == nil {
+	if readJSONFS(fsys, "result.json", &res) == nil {
 		if t.Model == "" {
 			t.Model = res.Config.Agent.ModelName
 		}
@@ -653,7 +656,7 @@ func loadTrial(job, dir string) Trial {
 		t.Reward = reward(res)
 		var perr string
 		if res.ExceptionInfo != nil {
-			perr = providerError(dir)
+			perr = providerError(fsys)
 		}
 		switch {
 		case t.Reward != nil && *t.Reward >= 1:
@@ -674,37 +677,39 @@ func loadTrial(job, dir string) Trial {
 	}
 
 	var k Kavach
-	if readJSON(filepath.Join(dir, "verifier", "kavach.json"), &k) == nil {
+	if readJSONFS(fsys, "verifier/kavach.json", &k) == nil {
 		t.Kavach = &k
 	}
 	var live liveFile
-	if readJSON(filepath.Join(dir, "agent", "opencode-live.json"), &live) == nil {
+	if readJSONFS(fsys, "agent/opencode-live.json", &live) == nil {
 		t.OpenCode = &OpenCode{URL: live.URL, Session: live.Session, Started: parseTime(live.Started), Finished: parseTime(live.Finished)}
 		if live.URL != "" && live.Session != "" && live.Dir != "" {
 			// The web UI names a project by its folder, base64url-encoded.
 			t.OpenCode.Web = strings.TrimSuffix(live.URL, "/") + "/" + base64.RawURLEncoding.EncodeToString([]byte(live.Dir)) + "/session/" + live.Session
 		}
 	}
-	if export := filepath.Join(dir, "agent", "opencode-session.json"); exists(export) {
+	if _, err := fs.Stat(fsys, "agent/opencode-session.json"); err == nil {
 		if t.OpenCode == nil {
 			t.OpenCode = &OpenCode{}
 		}
-		t.OpenCode.Export = export
+		t.OpenCode.Export = filepath.Join(dir, "agent", "opencode-session.json")
 	}
 	return t
 }
 
 // providerError is the error that ended OpenCode's run, when its log ends with
 // one: the model's provider failing (a timeout, a 5xx) rather than the agent.
-func providerError(dir string) string {
-	f, err := os.Open(filepath.Join(dir, "agent", "opencode.txt"))
+func providerError(fsys fs.FS) string {
+	f, err := fsys.Open("agent/opencode.txt")
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
 	const tail = 64 << 10
 	if st, err := f.Stat(); err == nil && st.Size() > tail {
-		f.Seek(st.Size()-tail, io.SeekStart)
+		if s, ok := f.(io.Seeker); ok {
+			s.Seek(st.Size()-tail, io.SeekStart)
+		}
 	}
 	b, _ := io.ReadAll(f)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
@@ -770,6 +775,14 @@ func deref(p *int64) int64 {
 
 func readJSON(path string, v any) error {
 	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+func readJSONFS(fsys fs.FS, name string, v any) error {
+	b, err := fs.ReadFile(fsys, name)
 	if err != nil {
 		return err
 	}
