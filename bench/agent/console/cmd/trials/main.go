@@ -2,7 +2,7 @@
 // Kavach service, so that the reader's bugs become fixtures like any
 // service's incidents.
 //
-//	trials -jobs ../results/harbor -fixtures /tmp/trials 2026-10-15__15-47-13
+//	trials -jobs ../results/harbor -fixtures /tmp/trials polite-ruby-wolf-lzzmub9
 //
 // feeds the finished attempts of the named jobs (all of them if none is
 // named) to the reader (with -steps, harbor.StepsReader, which reads their

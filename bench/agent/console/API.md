@@ -581,7 +581,7 @@ rejected.
 | `agent` | a Harbor agent name, or a custom agent's import path (`module.path:ClassName`). Default `opencode`, which runs the repository's OpenCode agent (`bench.agent.harbor.agents:KavachOpenCode`) rather than Harbor's: the model key stays out of the task container, and each attempt can be watched in OpenCode. Jobs list it as `opencode` |
 | `timeout_sec` | overrides the tasks' agent timeout when it is above 0 |
 | `concurrent` | trials at once, 1–32. Default 1 |
-| `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default the start time, `2006-01-02__15-04-05`, as Harbor names jobs |
+| `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default adjective-colour-animal and seven random letters and digits (`brisk-cobalt-heron-x7k2p9q`) |
 
 The trials are every task × model × attempt.
 

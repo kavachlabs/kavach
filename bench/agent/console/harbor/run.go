@@ -46,7 +46,8 @@ type RunRequest struct {
 	TimeoutSec float64 `json:"timeout_sec"`
 	// Concurrent is how many trials run at once. Default 1.
 	Concurrent int `json:"concurrent"`
-	// Name is the job's name and folder; default the time, as Harbor names it.
+	// Name is the job's name and folder; default three random words
+	// (brisk-cobalt-heron).
 	Name string `json:"name"`
 }
 
@@ -192,7 +193,7 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		req.Agent = "opencode"
 	}
 	if req.Name == "" {
-		req.Name = time.Now().Format("2006-01-02__15-04-05")
+		req.Name = r.newName()
 	}
 	if !namePattern.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: job name %q", ErrInvalid, req.Name)
@@ -290,6 +291,11 @@ func (r *Runner) Resume(id string) error {
 	if readJSON(filepath.Join(dir, "result.json"), &res) == nil && res.FinishedAt != nil {
 		return ErrNotStopped
 	}
+	if exists(filepath.Join(dir, "config.json")) {
+		if err := prepareResume(dir, id); err != nil {
+			return err
+		}
+	}
 	envFile, _ := filepath.Abs(r.EnvFile) // . searches PATH for a bare name
 	var cmd *exec.Cmd
 	switch {
@@ -311,6 +317,43 @@ func (r *Runner) Resume(id string) error {
 		return err
 	}
 	os.Remove(r.file(id, ".paused"))
+	return nil
+}
+
+// prepareResume readies a job folder for `harbor jobs resume`. Harbor leaves
+// job_name out of the config.json it writes, and resume then names the job
+// after the current time, running every attempt again in a new folder; the
+// name is written back first. The attempts of a Harbor that was killed have
+// no result.json: resume neither keeps nor removes them, and runs them again
+// under new names, so they are removed like the cancelled ones resume removes.
+func prepareResume(dir, id string) error {
+	cfgFile := filepath.Join(dir, "config.json")
+	var cfg map[string]json.RawMessage
+	if err := readJSON(cfgFile, &cfg); err != nil {
+		return fmt.Errorf("reading %s: %w", cfgFile, err)
+	}
+	if _, ok := cfg["job_name"]; !ok {
+		cfg["job_name"], _ = json.Marshal(id)
+		b, err := json.MarshalIndent(cfg, "", "    ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(cfgFile, b, 0o644); err != nil {
+			return err
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		trial := filepath.Join(dir, e.Name())
+		if e.IsDir() && isTrialDir(trial) && !exists(filepath.Join(trial, "result.json")) {
+			if err := os.RemoveAll(trial); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
