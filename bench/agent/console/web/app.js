@@ -632,7 +632,7 @@ function patchSteps(t, steps) {
   shown.forEach((s, i) => { if (s.kind === "text") lastText = i; });
   shown.forEach((s, i) => {
     if (s === oldShown[i]) return;
-    const el = renderStep(s, i, i === lastText);
+    const el = renderStep(s, i, i === lastText, t.model);
     const prev = box.children[i];
     if (!prev) return box.append(el);
     if (prev.matches("details[open]") || prev.querySelector("details[open]")) {
@@ -2529,7 +2529,7 @@ function stepsBody(t, job) {
   }
   let lastTextIdx = -1;
   shown.forEach((s, idx) => { if (s.kind === "text") lastTextIdx = idx; });
-  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx)));
+  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx, t.model)));
   return box;
 }
 
@@ -2636,7 +2636,7 @@ function compactKavachJSON(detail) {
   });
 }
 
-function renderStep(s, i, isLastText) {
+function renderStep(s, i, isLastText, model) {
   const ts = h("span", { class: "ts" }, clock(s.t_ms / 1000));
   if (s.kind === "text") {
     const text = s.title || "";
@@ -2657,7 +2657,7 @@ function renderStep(s, i, isLastText) {
       }, startCollapsed ? "Expand ▾" : "Collapse ▴");
     }
     return h("div", { class: "step text" },
-      h("div", { class: "step-head" }, h("span", { class: "k" }, "Agent"), toggleBtn, ts),
+      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, model ? shortModel(model) : "Agent"), toggleBtn, ts),
       body);
   }
   let label = KIND[s.kind] || s.kind;
