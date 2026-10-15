@@ -475,7 +475,8 @@ func TestUnfinishedJobWithAllTrialsDone(t *testing.T) {
 	}
 }
 
-// A run the model's provider ended is an error, not a failed attempt.
+// A run the model's provider, or its output limit, ended is an error, not a
+// failed attempt.
 func TestProviderError(t *testing.T) {
 	const timeout = `{"type":"error","error":{"data":{"message":"{\"code\":504,\"message\":\"The operation was aborted\",\"metadata\":{\"error_type\":\"timeout\"}}"},"name":"UnknownError"}}`
 	cases := []struct {
@@ -488,6 +489,10 @@ func TestProviderError(t *testing.T) {
 		{"passed before it", timeout, "NonZeroAgentExitCodeError", 1, Pass, ""},
 		{"agent failed", `{"type":"step_finish"}`, "NonZeroAgentExitCodeError", 0, Fail, ""},
 		{"no exception", timeout, "", 0, Fail, ""},
+		{"output limit", `{"type":"step_finish","part":{"reason":"length","tokens":{"output":32000}}}`, "", 0, Error,
+			"OutputLimit: the model's last turn stopped at its output limit (32000 tokens) without a tool call, which ended the run"},
+		{"output limit, passed", `{"type":"step_finish","part":{"reason":"length"}}`, "", 1, Pass, ""},
+		{"stopped", `{"type":"step_finish","part":{"reason":"stop"}}`, "", 0, Fail, ""},
 	}
 	for _, c := range cases {
 		dir := t.TempDir()

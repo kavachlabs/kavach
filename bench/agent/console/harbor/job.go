@@ -657,13 +657,15 @@ func trialFrom(job, dir string, fsys fs.FS) Trial {
 		var perr string
 		if res.ExceptionInfo != nil {
 			perr = providerError(fsys)
+		} else {
+			perr = outputLimit(fsys)
 		}
 		switch {
 		case t.Reward != nil && *t.Reward >= 1:
 			t.Status = Pass
 		case t.Reward != nil && perr != "":
-			// The model's provider ended the run, not the agent: the reward
-			// grades whatever the agent had done by then.
+			// The model's provider, or its output limit, ended the run, not
+			// the agent: the reward grades whatever it had done by then.
 			t.Status = Error
 			t.Error = perr
 		case t.Reward != nil:
@@ -697,9 +699,8 @@ func trialFrom(job, dir string, fsys fs.FS) Trial {
 	return t
 }
 
-// providerError is the error that ended OpenCode's run, when its log ends with
-// one: the model's provider failing (a timeout, a 5xx) rather than the agent.
-func providerError(fsys fs.FS) string {
+// lastLogLine is the last line of OpenCode's JSON log of the run.
+func lastLogLine(fsys fs.FS) string {
 	f, err := fsys.Open("agent/opencode.txt")
 	if err != nil {
 		return ""
@@ -713,6 +714,32 @@ func providerError(fsys fs.FS) string {
 	}
 	b, _ := io.ReadAll(f)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	return lines[len(lines)-1]
+}
+
+// outputLimit says how the run ended when the model's last turn was cut off
+// at its output limit (finish reason "length"): a turn that ends without a
+// tool call ends OpenCode's run, so the agent stopped mid-thought, not
+// because it was done.
+func outputLimit(fsys fs.FS) string {
+	var ev struct {
+		Type string `json:"type"`
+		Part struct {
+			Reason string `json:"reason"`
+			Tokens struct {
+				Output int `json:"output"`
+			} `json:"tokens"`
+		} `json:"part"`
+	}
+	if json.Unmarshal([]byte(lastLogLine(fsys)), &ev) != nil || ev.Type != "step_finish" || ev.Part.Reason != "length" {
+		return ""
+	}
+	return fmt.Sprintf("OutputLimit: the model's last turn stopped at its output limit (%d tokens) without a tool call, which ended the run", ev.Part.Tokens.Output)
+}
+
+// providerError is the error that ended OpenCode's run, when its log ends with
+// one: the model's provider failing (a timeout, a 5xx) rather than the agent.
+func providerError(fsys fs.FS) string {
 	var ev struct {
 		Type  string `json:"type"`
 		Error struct {
@@ -722,7 +749,7 @@ func providerError(fsys fs.FS) string {
 			} `json:"data"`
 		} `json:"error"`
 	}
-	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || ev.Type != "error" {
+	if json.Unmarshal([]byte(lastLogLine(fsys)), &ev) != nil || ev.Type != "error" {
 		return ""
 	}
 	msg := ev.Error.Data.Message
