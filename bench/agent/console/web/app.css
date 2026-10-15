@@ -1957,7 +1957,13 @@ details.err-more > pre {
   color: var(--dim);
 }
 .step.text .step-head .k { display: inline-flex; align-items: center; gap: 6px; }
-.lab-mark { width: 13px; height: 13px; flex: none; color: var(--text); opacity: 0.85; }
+.lab-mark { width: 13px; height: 13px; flex: none; vertical-align: -2px; }
+.step-head .lab-mark { color: var(--text); opacity: 0.85; }
+.chip .lab-mark { margin-right: 6px; }
+.picker td:first-child button { display: flex; align-items: flex-start; gap: 7px; }
+.picker td .lab-mark { margin-top: 2px; color: var(--text); }
+.model-provider { display: inline-flex; align-items: center; gap: 5px; }
+.model-provider .lab-mark { width: 11px; height: 11px; }
 .lab-mark.mono {
   display: inline-grid;
   place-items: center;

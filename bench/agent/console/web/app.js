@@ -1526,7 +1526,7 @@ function renderModelCard(modelId, { onRemove = null, isPreview = false } = {}) {
       h("div", { class: "model-card-idwrap" },
         h("div", { class: "model-provider-row" },
           isPreview ? h("span", { class: "model-preview-pill" }, "Preview") : null,
-          h("span", { class: "model-provider" }, provider),
+          h("span", { class: "model-provider" }, LABS[labOf(cleanId)] ? labMark(cleanId) : null, provider),
           toolsOk != null
             ? h("span", {
                 class: `model-tool-badge ${toolsOk ? "ok" : "bad"}`,
@@ -1723,6 +1723,7 @@ function renderNew(view) {
   } else {
     modelVal = h("div", { class: "chips" },
       f.models.map((m) => h("span", { class: "chip on" },
+        labMark(m),
         h("span", { class: "m" }, m),
         h("button", {
           type: "button",
@@ -2158,7 +2159,7 @@ function pickerRows() {
         onclick: toggleModel,
       }, text));
       return h("tr", { class: have ? "selected-row" : "" },
-        cell([have ? h("span", { class: "ok" }, "✓ ") : null, m.id]),
+        cell([have ? h("span", { class: "ok" }, "✓ ") : null, labMark(m.id), m.id]),
         cell(h("span", { class: "dim" }, m.name || "–"), "nm"),
         cell(m.context_length ? fmtTok(m.context_length) : "–", "num"),
         cell(price(m.price_in), "num"),
