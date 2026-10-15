@@ -21,6 +21,17 @@ result() {
 if [[ -s /out/patch.diff ]]; then
   git apply --exclude='tests/*' /out/patch.diff 2>&3 || result false false fail - ""
 fi
+# src/ builds deps/ only when its build settings change, and links them
+# without depending on them: a fix in deps/ is rebuilt here, and the binaries
+# relinked, or the old code is graded.
+deps=()
+for d in $(sed -n 's|^+++ b/deps/\([^/]*\)/.*|\1|p' /out/patch.diff | sort -u); do
+  grep -q "^$d:" deps/Makefile && deps+=("$d")
+done
+if ((${#deps[@]})); then
+  make -C deps "${deps[@]}" >&3 2>&3 || result true false fail - ""
+  rm -f src/*-server src/*-cli src/*-benchmark
+fi
 make -j"$(nproc)" >&3 2>&3 || result true false fail - ""
 
 git apply /task/hidden-test.patch
