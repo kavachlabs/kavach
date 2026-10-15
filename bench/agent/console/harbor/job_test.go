@@ -474,3 +474,34 @@ func TestUnfinishedJobWithAllTrialsDone(t *testing.T) {
 		t.Fatalf("%+v", j)
 	}
 }
+
+// A run the model's provider ended is an error, not a failed attempt.
+func TestProviderError(t *testing.T) {
+	const timeout = `{"type":"error","error":{"data":{"message":"{\"code\":504,\"message\":\"The operation was aborted\",\"metadata\":{\"error_type\":\"timeout\"}}"},"name":"UnknownError"}}`
+	cases := []struct {
+		name, log, exception string
+		reward               float64
+		status, err          string
+	}{
+		{"provider timeout", timeout, "NonZeroAgentExitCodeError", 0, Error, "ModelProviderError: 504 The operation was aborted (timeout)"},
+		{"plain message", `{"type":"error","error":{"data":{"message":"rate limited"},"name":"APIError"}}`, "NonZeroAgentExitCodeError", 0, Error, "ModelProviderError: rate limited"},
+		{"passed before it", timeout, "NonZeroAgentExitCodeError", 1, Pass, ""},
+		{"agent failed", `{"type":"step_finish"}`, "NonZeroAgentExitCodeError", 0, Fail, ""},
+		{"no exception", timeout, "", 0, Fail, ""},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "agent"), 0o755)
+		os.WriteFile(filepath.Join(dir, "agent", "opencode.txt"), []byte(`{"type":"step_start"}`+"\n"+c.log+"\n"), 0o644)
+		res := map[string]any{"verifier_result": map[string]any{"rewards": map[string]float64{"reward": c.reward}}}
+		if c.exception != "" {
+			res["exception_info"] = map[string]any{"exception_type": c.exception, "exception_message": "exit 1"}
+		}
+		b, _ := json.Marshal(res)
+		os.WriteFile(filepath.Join(dir, "result.json"), b, 0o644)
+		tr := loadTrial("job", dir)
+		if tr.Status != c.status || (c.err != "" && tr.Error != c.err) {
+			t.Errorf("%s: status %s error %q, want %s %q", c.name, tr.Status, tr.Error, c.status, c.err)
+		}
+	}
+}

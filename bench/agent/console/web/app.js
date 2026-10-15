@@ -3,6 +3,7 @@
 
 import { checksOf, renderInvariantBand, renderInvariants } from "./invariants.js";
 import { closeReplay, renderReplay, replayKey } from "./replay.js";
+import { LABS } from "./logos.js";
 
 // The wordmark, as [kavach, bench] pairs, one per text line.
 const LOGO = [
@@ -256,6 +257,8 @@ function saveForm() {
 const base = (task) => task.replace(ARM_SUFFIX, "");
 const orId = (model) => model.replace(/^openrouter\//, "");
 const shortModel = (model) => orId(model).split("/").pop();
+// OpenRouter prefixes a model that tracks a lab's latest release with "~".
+const labOf = (model) => orId(model).split("/")[0].replace(/^~/, "");
 const needsModel = (agent) => agent !== "oracle" && agent !== "nop";
 const trialKey = (t) => `${t.task}|${t.model}|${t.attempt}`;
 const fresh = (tok) => tok ? (tok.fresh ?? tok.input + tok.output) : 0;
@@ -632,7 +635,7 @@ function patchSteps(t, steps) {
   shown.forEach((s, i) => { if (s.kind === "text") lastText = i; });
   shown.forEach((s, i) => {
     if (s === oldShown[i]) return;
-    const el = renderStep(s, i, i === lastText);
+    const el = renderStep(s, i, i === lastText, t.model);
     const prev = box.children[i];
     if (!prev) return box.append(el);
     if (prev.matches("details[open]") || prev.querySelector("details[open]")) {
@@ -1523,7 +1526,7 @@ function renderModelCard(modelId, { onRemove = null, isPreview = false } = {}) {
       h("div", { class: "model-card-idwrap" },
         h("div", { class: "model-provider-row" },
           isPreview ? h("span", { class: "model-preview-pill" }, "Preview") : null,
-          h("span", { class: "model-provider" }, provider),
+          h("span", { class: "model-provider" }, LABS[labOf(cleanId)] ? labMark(cleanId) : null, provider),
           toolsOk != null
             ? h("span", {
                 class: `model-tool-badge ${toolsOk ? "ok" : "bad"}`,
@@ -1720,6 +1723,7 @@ function renderNew(view) {
   } else {
     modelVal = h("div", { class: "chips" },
       f.models.map((m) => h("span", { class: "chip on" },
+        labMark(m),
         h("span", { class: "m" }, m),
         h("button", {
           type: "button",
@@ -2155,7 +2159,7 @@ function pickerRows() {
         onclick: toggleModel,
       }, text));
       return h("tr", { class: have ? "selected-row" : "" },
-        cell([have ? h("span", { class: "ok" }, "✓ ") : null, m.id]),
+        cell([have ? h("span", { class: "ok" }, "✓ ") : null, labMark(m.id), m.id]),
         cell(h("span", { class: "dim" }, m.name || "–"), "nm"),
         cell(m.context_length ? fmtTok(m.context_length) : "–", "num"),
         cell(price(m.price_in), "num"),
@@ -2427,6 +2431,18 @@ function kavachLine(t) {
   return `${cmd} ${verdict}${t.arm === "control" || t.arm === "workflow" ? " · checked after the run" : ""}`;
 }
 
+// disagreement says when the agent's own last kavach diff, run in its
+// container, gave a different verdict from the verifier's.
+function disagreement(t) {
+  const g = state.grades.get(`${t.job}/${t.id}`);
+  if (!g || !g.agent_diff || !t.kavach || isContractTrial(t, t.kavach.verdict)) return null;
+  const status = (v) => v.replace(/[(@].*/, "");
+  if (status(g.agent_diff) === status(t.kavach.verdict)) return null;
+  return h("div", { class: "warn-line" },
+    "The agent's last kavach diff said ", h("b", { class: "m" }, g.agent_diff), "; the verifier's said ", h("b", { class: "m" }, t.kavach.verdict),
+    ". Either the code changed after that diff, or the two builds differ.");
+}
+
 function renderAttempt(t) {
   const job = state.job;
   const multi = isMultiTaskJob(job);
@@ -2449,6 +2465,8 @@ function renderAttempt(t) {
   if (t.error) kids.push(errorView(t));
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
+  const dis = disagreement(t);
+  if (dis) kids.push(dis);
 
   const key = `${t.job}/${t.id}`;
   const checks = state.stepsFor === key ? checksOf(state.steps) : [];
@@ -2515,7 +2533,7 @@ function stepsBody(t, job) {
   }
   let lastTextIdx = -1;
   shown.forEach((s, idx) => { if (s.kind === "text") lastTextIdx = idx; });
-  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx)));
+  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx, t.model)));
   return box;
 }
 
@@ -2622,7 +2640,28 @@ function compactKavachJSON(detail) {
   });
 }
 
-function renderStep(s, i, isLastText) {
+// labMark is the mark of the lab behind a model, or its initial when there is
+// no mark for it.
+function labMark(model) {
+  const slug = labOf(model);
+  const lab = LABS[slug];
+  if (!lab) return h("span", { class: "lab-mark mono", "aria-hidden": "true" }, slug.charAt(0).toUpperCase());
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "lab-mark");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("fill-rule", "evenodd");
+  svg.setAttribute("aria-hidden", "true");
+  for (const attrs of lab.paths) {
+    const path = document.createElementNS(ns, "path");
+    for (const [k, v] of Object.entries(attrs)) path.setAttribute(k, v);
+    svg.append(path);
+  }
+  return svg;
+}
+
+function renderStep(s, i, isLastText, model) {
   const ts = h("span", { class: "ts" }, clock(s.t_ms / 1000));
   if (s.kind === "text") {
     const text = s.title || "";
@@ -2643,7 +2682,7 @@ function renderStep(s, i, isLastText) {
       }, startCollapsed ? "Expand ▾" : "Collapse ▴");
     }
     return h("div", { class: "step text" },
-      h("div", { class: "step-head" }, h("span", { class: "k" }, "Agent"), toggleBtn, ts),
+      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, model ? labMark(model) : null, model ? shortModel(model) : "Agent"), toggleBtn, ts),
       body);
   }
   let label = KIND[s.kind] || s.kind;
@@ -2924,6 +2963,8 @@ function attemptCard(t, job, multi = false) {
   if (kl) lines.push(h("div", { class: "dim m" }, kl + (t.kavach && t.kavach.variants ? ` · ${t.kavach.variants}` : "")));
   const gl = gradeLine(t);
   if (gl) lines.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
+  const dis = disagreement(t);
+  if (dis) lines.push(dis);
   if (t.error) lines.push(errorView(t));
   lines.push(cardMeta(t));
   const oc = openInOpenCode(t, job);

@@ -18,6 +18,8 @@
   --bad-bg: rgba(240, 82, 82, 0.13);
   --peach: #f5a97f;
   --peach-bg: rgba(245, 169, 127, 0.12);
+  --warn: #e8b84a;
+  --warn-bg: rgba(232, 184, 74, 0.11);
   --blue: #68a0f6;
   --blue-bg: rgba(104, 160, 246, 0.12);
   --teal: #34c3ac;
@@ -1793,6 +1795,15 @@ table.mx {
   border-radius: 6px;
   padding: 6px 10px;
 }
+.warn-line {
+  color: var(--warn);
+  font-size: 12.5px;
+  background: var(--warn-bg);
+  border: 1px solid rgba(232, 184, 74, 0.28);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.warn-line b { color: var(--text); font-weight: 500; }
 details.err-more > summary { cursor: pointer; }
 details.err-more > pre {
   margin: 6px 0 0;
@@ -1944,6 +1955,23 @@ details.err-more > pre {
 .step.text .step-head .who {
   font-weight: 600;
   color: var(--dim);
+}
+.step.text .step-head .k { display: inline-flex; align-items: center; gap: 6px; }
+.lab-mark { width: 13px; height: 13px; flex: none; vertical-align: -2px; }
+.step-head .lab-mark { color: var(--text); opacity: 0.85; }
+.chip .lab-mark { margin-right: 6px; }
+.picker td:first-child button { display: flex; align-items: flex-start; gap: 7px; }
+.picker td .lab-mark { margin-top: 2px; color: var(--text); }
+.model-provider { display: inline-flex; align-items: center; gap: 5px; }
+.model-provider .lab-mark { width: 11px; height: 11px; }
+.lab-mark.mono {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 3px;
+  background: var(--panel3);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 .step.text .step-toggle,
 .step.text .step-tog {

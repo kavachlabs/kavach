@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -650,9 +651,18 @@ func loadTrial(job, dir string) Trial {
 			}
 		}
 		t.Reward = reward(res)
+		var perr string
+		if res.ExceptionInfo != nil {
+			perr = providerError(dir)
+		}
 		switch {
 		case t.Reward != nil && *t.Reward >= 1:
 			t.Status = Pass
+		case t.Reward != nil && perr != "":
+			// The model's provider ended the run, not the agent: the reward
+			// grades whatever the agent had done by then.
+			t.Status = Error
+			t.Error = perr
 		case t.Reward != nil:
 			t.Status = Fail
 		default:
@@ -682,6 +692,56 @@ func loadTrial(job, dir string) Trial {
 		t.OpenCode.Export = export
 	}
 	return t
+}
+
+// providerError is the error that ended OpenCode's run, when its log ends with
+// one: the model's provider failing (a timeout, a 5xx) rather than the agent.
+func providerError(dir string) string {
+	f, err := os.Open(filepath.Join(dir, "agent", "opencode.txt"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	const tail = 64 << 10
+	if st, err := f.Stat(); err == nil && st.Size() > tail {
+		f.Seek(st.Size()-tail, io.SeekStart)
+	}
+	b, _ := io.ReadAll(f)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	var ev struct {
+		Type  string `json:"type"`
+		Error struct {
+			Name string `json:"name"`
+			Data struct {
+				Message string `json:"message"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || ev.Type != "error" {
+		return ""
+	}
+	msg := ev.Error.Data.Message
+	// OpenRouter passes the provider's error on as JSON.
+	var p struct {
+		Code     int    `json:"code"`
+		Message  string `json:"message"`
+		Metadata struct {
+			ErrorType string `json:"error_type"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal([]byte(msg), &p) == nil && p.Message != "" {
+		msg = p.Message
+		if p.Code != 0 {
+			msg = fmt.Sprintf("%d %s", p.Code, msg)
+		}
+		if p.Metadata.ErrorType != "" {
+			msg += " (" + p.Metadata.ErrorType + ")"
+		}
+	}
+	if msg == "" {
+		msg = ev.Error.Name
+	}
+	return "ModelProviderError: " + msg
 }
 
 // reward is the trial's reward: the one named "reward", or the only one.
