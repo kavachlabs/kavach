@@ -2657,7 +2657,7 @@ function renderStep(s, i, isLastText, model) {
       }, startCollapsed ? "Expand ▾" : "Collapse ▴");
     }
     return h("div", { class: "step text" },
-      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, model ? shortModel(model) : "Agent"), toggleBtn, ts),
+      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, h("span", { class: "who-icon", "aria-hidden": "true" }, "🤖"), model ? shortModel(model) : "Agent"), toggleBtn, ts),
       body);
   }
   let label = KIND[s.kind] || s.kind;

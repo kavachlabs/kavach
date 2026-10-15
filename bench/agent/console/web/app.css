@@ -1956,6 +1956,7 @@ details.err-more > pre {
   font-weight: 600;
   color: var(--dim);
 }
+.step.text .who-icon { font-size: 11px; margin-right: 5px; }
 .step.text .step-toggle,
 .step.text .step-tog {
   background: var(--panel2);
