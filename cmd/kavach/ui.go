@@ -114,6 +114,7 @@ var statusStyle = map[replay.Status]struct{ bg, fg, text string }{
 	replay.StatusInvariantViolated: {"\033[48;5;201m", ansiMagenta, "INVARIANT VIOLATED"},
 	replay.StatusNondeterministic:  {"\033[48;5;220m", ansiYellow, "NONDETERMINISTIC"},
 	replay.StatusVariantFailed:     {"\033[48;5;196m", ansiRed, "VARIANT FAILED"},
+	replay.StatusRegressed:         {"\033[48;5;208m", ansiOrange, "REGRESSED"},
 	replay.StatusUnverified:        {"\033[48;5;220m", ansiYellow, "UNVERIFIED"},
 }
 

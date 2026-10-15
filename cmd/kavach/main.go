@@ -36,7 +36,7 @@ Usage:
   kavach list    [dir] [--json]
   kavach inspect <fixture> [--json] [--full]
   kavach replay  <fixture> --bin <host-command> [--json]
-  kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--keep DIR] [--json]
+  kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--regressions N] [--keep DIR] [--json]
   kavach contract init|show|approve|check ...
   kavach mcp
   kavach version
@@ -57,6 +57,10 @@ passes at least N (default 10) variants of the incident: the failing input with
 fields changed, moved earlier, earlier inputs dropped or redelivered, the clock
 shifted. A variant counts only if the old build fails on it exactly as it did
 in production. Variants the new binary fails are saved for kavach replay.
+It also checks up to N (default 48) regression variants: the same mutations
+applied to earlier inputs that resemble the failing one, on which the old
+build did not fail. The new binary must replay them as the old one did, or the
+verdict is regressed(K)@N. --regressions 0 skips them.
 
 On a terminal, output is colored and starts with a banner; --no-banner or
 KAVACH_NO_BANNER=1 drops the banner, NO_COLOR=1 drops all styling. Piped output
@@ -413,6 +417,7 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	oldBin := fs.String("old", "", "host command for the code that failed")
 	newBin := fs.String("new", "", "host command for the candidate fix")
 	minVariants := fs.Int("variants", replay.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
+	regressions := fs.Int("regressions", replay.DefaultRegressions, "regression variants of earlier, similar inputs the fix must leave unchanged; 0 skips them")
 	keep := fs.String("keep", "", "directory to save failing variants in (default: a new temporary directory)")
 	asJSON := fs.Bool("json", false, "print the verification as JSON")
 	pos, err := parse(fs, args)
@@ -431,7 +436,11 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kavach diff: --variants must not be negative")
 		return exitUsage
 	}
-	o, err := verifyFix(path, *oldBin, *newBin, *minVariants, *keep)
+	if *regressions < 0 {
+		fmt.Fprintln(stderr, "kavach diff: --regressions must not be negative")
+		return exitUsage
+	}
+	o, err := verifyFix(path, *oldBin, *newBin, *minVariants, *regressions, *keep)
 	if err != nil {
 		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
 		return exitError
@@ -480,14 +489,43 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
+		if v.Candidates > 0 && *regressions > 0 {
+			if v.Neighbours == 0 {
+				fmt.Fprintf(stdout, "%snone: no earlier input resembles the failing one\n", u.label("regressions", 12))
+			} else {
+				fmt.Fprintf(stdout, "%s%d of %d match the old build · %d variants of %d earlier inputs resembling the failing one\n",
+					u.label("regressions", 12), v.RegressionPassing, v.RegressionCounted, v.RegressionCandidates, v.Neighbours)
+			}
+			shown := 0
+			for _, c := range v.Regressions {
+				if !c.Counted || c.Passed {
+					continue
+				}
+				if shown == 5 {
+					fmt.Fprintf(stdout, "            %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.RegressionCounted-v.RegressionPassing-shown), ansiDim))
+					break
+				}
+				shown++
+				fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
+				fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
+				if f := o.savedRegressions[c.ID]; f != "" {
+					fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
+				}
+			}
+		}
 		fmt.Fprintf(stdout, "%s%s\n", u.label("verdict", 10), u.verdict(v.Status, v.String()))
-		if v.Status == replay.StatusVariantFailed || v.Status == replay.StatusUnverified {
+		if v.Status == replay.StatusVariantFailed || v.Status == replay.StatusRegressed || v.Status == replay.StatusUnverified {
 			fmt.Fprintf(stdout, "          %s\n", u.paint(v.Detail, verdictColor(v.Status)))
 		}
 		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms for %d replays", ms(wall), replays(v)), ansiYellow))
 		if u.color && v.Status == replay.StatusVariantFailed {
 			if f := saved[v.Variant]; f != "" {
 				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --bin %s", f, *newBin), ansiDim))
+			}
+		}
+		if u.color && v.Status == replay.StatusRegressed {
+			if f := o.savedRegressions[v.Regression]; f != "" {
+				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --json --bin %s (and --bin %s), and compare the outputs", f, *oldBin, *newBin), ansiDim))
 			}
 		}
 	}
@@ -499,16 +537,19 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 
 // diffOutcome is a verified fix, as kavach diff and the MCP server report it.
 type diffOutcome struct {
-	fixture    string
-	v          *replay.Verification
-	saved      map[int]string // failing variants written to disk, by ID
-	divergence *replay.Divergence
-	wall       time.Duration
+	fixture string
+	v       *replay.Verification
+	saved   map[int]string // failing variants written to disk, by ID
+	// savedRegressions are the failing regression variants, by ID.
+	savedRegressions map[int]string
+	divergence       *replay.Divergence
+	wall             time.Duration
 }
 
 // verifyFix checks the fix in newBin against the incident in fixture.
-// minVariants 0 checks only the recorded journal.
-func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*diffOutcome, error) {
+// minVariants 0 checks only the recorded journal; regressions 0 skips
+// regression variants.
+func verifyFix(fixture, oldBin, newBin string, minVariants, regressions int, keep string) (*diffOutcome, error) {
 	j, err := journal.ReadFile(fixture)
 	if err != nil {
 		return nil, err
@@ -517,17 +558,21 @@ func verifyFix(fixture, oldBin, newBin string, minVariants int, keep string) (*d
 	if minVariants == 0 {
 		opts.MinVariants = -1
 	}
+	opts.Regressions = regressions
+	if regressions == 0 {
+		opts.Regressions = -1
+	}
 	start := time.Now()
 	v, err := replay.VerifyWith(j, hostReplayer(oldBin), hostReplayer(newBin), opts)
 	wall := time.Since(start)
 	if err != nil {
 		return nil, err
 	}
-	saved, err := saveFailingVariants(v, fixture, keep)
+	saved, savedRegressions, err := saveFailingVariants(v, fixture, keep)
 	if err != nil {
 		return nil, fmt.Errorf("saving failing variants: %w", err)
 	}
-	return &diffOutcome{fixture, v, saved, replay.Compare(v.Old, v.New), wall}, nil
+	return &diffOutcome{fixture, v, saved, savedRegressions, replay.Compare(v.Old, v.New), wall}, nil
 }
 
 // report is the JSON form of a diff outcome.
@@ -548,12 +593,31 @@ func (o *diffOutcome) report() map[string]any {
 		}
 		checks[i] = m
 	}
+	rchecks := make([]map[string]any, len(v.Regressions))
+	for i, c := range v.Regressions {
+		m := map[string]any{"id": c.ID, "mutation": c.Mutation, "input_seq": c.Input,
+			"counted": c.Counted, "old": c.Old, "passed": c.Passed}
+		if c.Counted {
+			m["new"] = c.New
+		}
+		if c.Detail != "" {
+			m["detail"] = c.Detail
+		}
+		if f := o.savedRegressions[c.ID]; f != "" {
+			m["file"] = f
+		}
+		rchecks[i] = m
+	}
 	return map[string]any{
 		"fixture": o.fixture, "verdict": v.String(), "status": v.Status, "detail": v.Detail,
 		"old": v.Old.String(), "new": v.New.String(), "new_detail": v.New.Detail, "divergence": o.divergence,
 		"variants": map[string]any{
 			"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
 			"passing": v.Passing, "checks": checks,
+		},
+		"regressions": map[string]any{
+			"neighbours": v.Neighbours, "candidates": v.RegressionCandidates, "counted": v.RegressionCounted,
+			"passing": v.RegressionPassing, "checks": rchecks,
 		},
 		"wall_ms": ms(o.wall),
 	}
@@ -564,34 +628,45 @@ func hostReplayer(bin string) replay.ReplayFunc {
 	return func(j *journal.Journal) (*replay.Result, error) { return replay.RunHost(j, bin) }
 }
 
-// saveFailingVariants writes the variants the new build failed to dir (a new
-// temporary directory if empty) and returns their paths by variant ID.
-func saveFailingVariants(v *replay.Verification, fixture, dir string) (map[int]string, error) {
-	saved := map[int]string{}
+// saveFailingVariants writes the variants and regression variants the new
+// build failed to dir (a new temporary directory if empty) and returns their
+// paths by ID.
+func saveFailingVariants(v *replay.Verification, fixture, dir string) (variants, regressions map[int]string, err error) {
+	variants, regressions = map[int]string{}, map[int]string{}
+	base := strings.TrimSuffix(filepath.Base(fixture), ".kavach")
+	save := func(kind string, id int, j *journal.Journal) (string, error) {
+		if dir == "" {
+			var err error
+			if dir, err = os.MkdirTemp("", "kavach-variants-"); err != nil {
+				return "", err
+			}
+		} else if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		f := filepath.Join(dir, fmt.Sprintf("%s.%s-%02d.kavach", base, kind, id))
+		return f, journal.WriteFile(f, j.Header.Meta, j.Records)
+	}
 	for _, c := range v.Variants {
 		if !c.Reproduces || c.Passed {
 			continue
 		}
-		if dir == "" {
-			var err error
-			if dir, err = os.MkdirTemp("", "kavach-variants-"); err != nil {
-				return nil, err
-			}
-		} else if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
+		if variants[c.ID], err = save("variant", c.ID, c.Journal); err != nil {
+			return nil, nil, err
 		}
-		base := strings.TrimSuffix(filepath.Base(fixture), ".kavach")
-		f := filepath.Join(dir, fmt.Sprintf("%s.variant-%02d.kavach", base, c.ID))
-		if err := journal.WriteFile(f, c.Journal.Header.Meta, c.Journal.Records); err != nil {
-			return nil, err
-		}
-		saved[c.ID] = f
 	}
-	return saved, nil
+	for _, c := range v.Regressions {
+		if !c.Counted || c.Passed {
+			continue
+		}
+		if regressions[c.ID], err = save("regression", c.ID, c.Journal); err != nil {
+			return nil, nil, err
+		}
+	}
+	return variants, regressions, nil
 }
 
 func replays(v *replay.Verification) int {
-	return 2 + v.Candidates + v.Reproducing
+	return 2 + v.Candidates + v.Reproducing + v.RegressionCandidates + v.RegressionCounted
 }
 
 func showOutput(o *kavach.Output) string {

@@ -604,7 +604,17 @@ only if:
    `failure` string, compared in full); variants that do not reproduce say
    nothing about the fix and are ignored; and
 3. the new build passes every reproducing variant: it replays as `ok`, and
-   every step before the `incident` input produces the old build's outputs.
+   every step before the `incident` input produces the old build's outputs;
+   and
+4. the new build keeps the old build's behaviour on inputs like the failing
+   one that the old build handled. A **regression variant** is a variant of an
+   input before the failing one (a **neighbour**), with no failure expected.
+   It **counts** when the old build replays it as `ok`; variants the old build
+   fails, which includes mutations that recreate the incident, say nothing and
+   are ignored. The new build passes a counted variant when it replays as `ok`
+   and every step produces the old build's outputs. Unlike rule 3, outputs are
+   compared at every step, the perturbed input's included. No minimum number
+   of regression variants is required: with no neighbours, rule 4 holds.
 
 The reference implementation uses *M* = 10 and derives up to 64 variants from
 an incident: the failing input's JSON fields set to values the same field
@@ -617,6 +627,19 @@ one by one and across argument positions; fields and array elements changed
 in pairs; the failing input moved earlier; earlier inputs dropped or
 delivered twice; and every clock read shifted. Variant generation is
 deterministic.
+
+A neighbour is an input before the failing one, at which the recorded journal
+shows no failure, that is a JSON object with the same keys as the failing
+input and shares at least one leaf with it: a (path, value) pair, such as
+`argv[0]` being `"BITPOS"`. Neighbours rank by the number of leaves shared,
+later first on a tie; an input identical to a higher-ranked one is skipped.
+The reference implementation keeps the 6 best and derives up to 48 regression
+variants from them, apart from the 64 above, spread evenly over the
+neighbours: the neighbour's JSON fields and array elements changed, removed or
+added, singly and then in pairs, exactly as for the failing input, with the
+journal up to and including the neighbour as its history. A regression
+variant's `incident` is the `seq` of the neighbour in the variant and its
+`failure` is empty. Generation is deterministic.
 
 Responses are inputs from the world too, so from 0.2 variants also perturb
 the `gateway` records of the failing step: the response's JSON fields mutated
@@ -637,10 +660,12 @@ tests that the fix does not depend on it either. Variants never change
 | Verdict | Meaning |
 | --- | --- |
 | `variant_failed(K)@N` | Rule 3 failed for variant `K`, at input `N` of the variant. |
-| `unverified` | Rules 1 and 3 hold, but fewer than *M* variants reproduce the incident. |
+| `regressed(K)@N` | Rule 4 failed for regression variant `K`: at input `N` of the variant the new build's outputs differ from the old build's, or it failed. |
+| `unverified` | Rules 1, 3 and 4 hold, but fewer than *M* variants reproduce the incident. |
 
 Otherwise the verdict is the new build's replay status on the recorded journal
-(`fixed` when all three rules hold).
+(`fixed` when all four rules hold). `variant_failed` takes precedence over
+`regressed`, and `regressed` over `unverified`.
 
 ### 6.2 Environment drift
 
