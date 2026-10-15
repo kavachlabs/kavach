@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -137,15 +137,18 @@ const maxText = 4000
 // readSteps reads a trial's steps from Harbor's ATIF trajectory, which the
 // agent writes when it finishes, or else from OpenCode's event log, which
 // fills while it runs. A trial with neither has no steps.
-func readSteps(dir string) ([]Step, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "agent", "trajectory.json"))
+func readSteps(dir string) ([]Step, error) { return stepsFrom(os.DirFS(dir)) }
+
+// stepsFrom reads steps from fsys, which holds a trial directory's files.
+func stepsFrom(fsys fs.FS) ([]Step, error) {
+	b, err := fs.ReadFile(fsys, "agent/trajectory.json")
 	if err == nil {
 		return atifSteps(b)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, "agent", "opencode.txt"))
+	f, err := fsys.Open("agent/opencode.txt")
 	if errors.Is(err, os.ErrNotExist) {
 		return []Step{}, nil
 	}
