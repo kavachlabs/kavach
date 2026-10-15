@@ -3,6 +3,7 @@
 
 import { checksOf, renderInvariantBand, renderInvariants } from "./invariants.js";
 import { closeReplay, renderReplay, replayKey } from "./replay.js";
+import { LABS } from "./logos.js";
 
 // The wordmark, as [kavach, bench] pairs, one per text line.
 const LOGO = [
@@ -256,6 +257,8 @@ function saveForm() {
 const base = (task) => task.replace(ARM_SUFFIX, "");
 const orId = (model) => model.replace(/^openrouter\//, "");
 const shortModel = (model) => orId(model).split("/").pop();
+// OpenRouter prefixes a model that tracks a lab's latest release with "~".
+const labOf = (model) => orId(model).split("/")[0].replace(/^~/, "");
 const needsModel = (agent) => agent !== "oracle" && agent !== "nop";
 const trialKey = (t) => `${t.task}|${t.model}|${t.attempt}`;
 const fresh = (tok) => tok ? (tok.fresh ?? tok.input + tok.output) : 0;
@@ -2636,6 +2639,27 @@ function compactKavachJSON(detail) {
   });
 }
 
+// labMark is the mark of the lab behind a model, or its initial when there is
+// no mark for it.
+function labMark(model) {
+  const slug = labOf(model);
+  const lab = LABS[slug];
+  if (!lab) return h("span", { class: "lab-mark mono", "aria-hidden": "true" }, slug.charAt(0).toUpperCase());
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "lab-mark");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("fill-rule", "evenodd");
+  svg.setAttribute("aria-hidden", "true");
+  for (const attrs of lab.paths) {
+    const path = document.createElementNS(ns, "path");
+    for (const [k, v] of Object.entries(attrs)) path.setAttribute(k, v);
+    svg.append(path);
+  }
+  return svg;
+}
+
 function renderStep(s, i, isLastText, model) {
   const ts = h("span", { class: "ts" }, clock(s.t_ms / 1000));
   if (s.kind === "text") {
@@ -2657,7 +2681,7 @@ function renderStep(s, i, isLastText, model) {
       }, startCollapsed ? "Expand ▾" : "Collapse ▴");
     }
     return h("div", { class: "step text" },
-      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, h("span", { class: "who-icon", "aria-hidden": "true" }, "🤖"), model ? shortModel(model) : "Agent"), toggleBtn, ts),
+      h("div", { class: "step-head" }, h("span", { class: "k", title: model || null }, model ? labMark(model) : null, model ? shortModel(model) : "Agent"), toggleBtn, ts),
       body);
   }
   let label = KIND[s.kind] || s.kind;

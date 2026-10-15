@@ -1956,7 +1956,17 @@ details.err-more > pre {
   font-weight: 600;
   color: var(--dim);
 }
-.step.text .who-icon { font-size: 11px; margin-right: 5px; }
+.step.text .step-head .k { display: inline-flex; align-items: center; gap: 6px; }
+.lab-mark { width: 13px; height: 13px; flex: none; color: var(--text); opacity: 0.85; }
+.lab-mark.mono {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 3px;
+  background: var(--panel3);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
 .step.text .step-toggle,
 .step.text .step-tog {
   background: var(--panel2);
