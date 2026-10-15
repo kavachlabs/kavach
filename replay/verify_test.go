@@ -142,9 +142,37 @@ func TestVariantsOfJSONInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
+	kind := map[string]string{}
 	for _, v := range vs {
 		info := v.Header.Meta.Variant
 		got[info.Mutation] = string(recordAt(t, v, info.Incident).Data)
+		kind[info.Mutation] = info.Kind
+	}
+	for mut, k := range map[string]string{
+		`failing input (seq 5): "amount" removed`:                       replay.KindField,
+		`failing input (seq 5): "ok" false → true, "amount" null → 2.5`: replay.KindPair,
+	} {
+		if kind[mut] != k {
+			t.Errorf("variant %q: kind %q, want %q", mut, kind[mut], k)
+		}
+	}
+	for mut, k := range kind {
+		switch {
+		case strings.Contains(mut, "earlier, before"):
+			if k != replay.KindMove {
+				t.Errorf("variant %q: kind %q, want %q", mut, k, replay.KindMove)
+			}
+		case strings.Contains(mut, "delivered twice"):
+			if k != replay.KindDuplicate {
+				t.Errorf("variant %q: kind %q, want %q", mut, k, replay.KindDuplicate)
+			}
+		case strings.Contains(mut, "dropped"):
+			if k != replay.KindDrop {
+				t.Errorf("variant %q: kind %q, want %q", mut, k, replay.KindDrop)
+			}
+		case k == "":
+			t.Errorf("variant %q has no kind", mut)
+		}
 	}
 	for mut, data := range map[string]string{
 		`failing input (seq 5): "id" "c" → "a"`:                         `{"id":"a","n":3,"ok":false,"amount":null}`,
@@ -252,7 +280,9 @@ func TestVariantFileReplaysLeniently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *back.Header.Meta.Variant != *v.Header.Meta.Variant {
+	want := *v.Header.Meta.Variant
+	want.Kind = "" // not stored in the journal
+	if *back.Header.Meta.Variant != want {
 		t.Fatalf("variant meta did not round-trip: %+v", back.Header.Meta.Variant)
 	}
 	res, err := replay.RunFile(path, fixedWallet)

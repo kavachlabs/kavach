@@ -30,6 +30,7 @@ const (
 	FileLock     = "lock.json"
 	FileRounds   = "rounds.jsonl"
 	DirVariants  = "variants"
+	DirRounds    = "rounds"
 )
 
 // DefaultDir is the contract directory used when none is given.

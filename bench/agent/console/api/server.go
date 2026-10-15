@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +84,9 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/grade", s.getGrade)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants", s.getInvariants)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants", s.getVariants)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants/{round}/{id}", s.getVariant)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
 	if cfg.Web != nil {
 		s.mux.Handle("GET /", http.FileServerFS(cfg.Web))
@@ -287,6 +291,45 @@ func (s *Server) getPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write(patch)
+}
+
+// getInvariants serves what the trial's service declares as invariants.
+// names, comma-separated, are invariants its contract checks named.
+func (s *Server) getInvariants(w http.ResponseWriter, r *http.Request) {
+	var names []string
+	if q := r.URL.Query().Get("names"); q != "" {
+		names = strings.Split(q, ",")
+	}
+	inv, err := s.reader.TrialInvariants(s.cfg.TasksDir, r.PathValue("job"), r.PathValue("trial"), names)
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inv)
+}
+
+func (s *Server) getVariants(w http.ResponseWriter, r *http.Request) {
+	v, err := s.reader.TrialVariants(r.PathValue("job"), r.PathValue("trial"))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) getVariant(w http.ResponseWriter, r *http.Request) {
+	round, err1 := strconv.Atoi(r.PathValue("round"))
+	id, err2 := strconv.Atoi(r.PathValue("id"))
+	if err1 != nil || err2 != nil || round < 0 || id < 0 {
+		writeError(w, http.StatusBadRequest, "round and id must be non-negative integers")
+		return
+	}
+	v, err := s.reader.TrialVariant(r.PathValue("job"), r.PathValue("trial"), round, id)
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) getGrade(w http.ResponseWriter, r *http.Request) {
@@ -601,4 +644,3 @@ func writeEnvKeys(path string, updates map[string]string) error {
 	}
 	return os.Rename(tmp, path)
 }
-

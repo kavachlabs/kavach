@@ -43,6 +43,89 @@ type Step struct {
 	Verdict  string `json:"verdict,omitempty"`
 	Passed   *bool  `json:"passed,omitempty"`
 	Variants string `json:"variants,omitempty"`
+	// Contract is the report of a contract check: kavach_contract_check, or
+	// `kavach contract check --json` run in a shell.
+	Contract *ContractCheck `json:"contract,omitempty"`
+}
+
+// ContractCheck is what a console shows of a contract check's report
+// (contract.Report): the round, the verdict, which feature steps changed,
+// which invariants the build declares, and how its variants fared by kind.
+type ContractCheck struct {
+	Round     int      `json:"round"`
+	Streak    int      `json:"streak"`
+	Verdict   string   `json:"verdict"`
+	Passed    bool     `json:"passed"`
+	Detail    string   `json:"detail,omitempty"`
+	Features  []uint64 `json:"feature_steps"`
+	Changed   []uint64 `json:"changed"` // the seqs of the feature steps whose outputs changed
+	Unreached []uint64 `json:"unreached"`
+
+	Invariants        []string `json:"invariants,omitempty"`
+	Declared          []string `json:"declared,omitempty"`
+	MissingInvariants []string `json:"missing_invariants,omitempty"`
+
+	VariantCandidates   int                   `json:"variant_candidates"`
+	VariantsPassed      int                   `json:"variants_passed"`
+	VariantsPreexisting int                   `json:"variants_preexisting"`
+	VariantKinds        map[string]KindCount  `json:"variant_kinds,omitempty"`
+	VariantFailures     []ContractVariantFail `json:"variant_failures"`
+}
+
+// KindCount counts the variants of one class of mutation.
+type KindCount struct {
+	Candidates  int `json:"candidates"`
+	Passed      int `json:"passed"`
+	Preexisting int `json:"preexisting"`
+}
+
+// ContractVariantFail is a variant the new build failed.
+type ContractVariantFail struct {
+	ID       int     `json:"id"`
+	Kind     string  `json:"kind,omitempty"`
+	Mutation string  `json:"mutation"`
+	Feature  uint64  `json:"feature_seq"`
+	Verdict  string  `json:"verdict"`
+	Seq      *uint64 `json:"seq,omitempty"`
+	Detail   string  `json:"detail,omitempty"`
+	// File is where the check saved the variant, inside the task's
+	// container; the next check replaces it.
+	File string `json:"file,omitempty"`
+}
+
+// maxFailText bounds a variant failure's mutation and detail.
+const maxFailText = 600
+
+// contractCheck reads a contract check's report from a tool's output: the
+// JSON object kavach_contract_check and `kavach contract check --json`
+// print, possibly after other output. It returns nil for anything else.
+func contractCheck(out string) *ContractCheck {
+	i := strings.Index(out, "{")
+	if i < 0 {
+		return nil
+	}
+	var v struct {
+		Report *struct {
+			ContractCheck
+			Changed []struct {
+				Seq uint64 `json:"seq"`
+			} `json:"changed"`
+		} `json:"report"`
+	}
+	if json.NewDecoder(strings.NewReader(out[i:])).Decode(&v) != nil || v.Report == nil {
+		return nil
+	}
+	c := v.Report.ContractCheck
+	c.Changed = make([]uint64, 0, len(v.Report.Changed))
+	for _, ch := range v.Report.Changed {
+		c.Changed = append(c.Changed, ch.Seq)
+	}
+	for i := range c.VariantFailures {
+		f := &c.VariantFailures[i]
+		f.Mutation, f.Detail = clipTo(f.Mutation, maxFailText), clipTo(f.Detail, maxFailText)
+	}
+	c.Detail = clipTo(c.Detail, maxFailText)
+	return &c
 }
 
 // maxText bounds a step's title and detail: tool output can be whole files.
@@ -259,6 +342,12 @@ func toolStep(name string, in map[string]any, out string, meta map[string]any) S
 			c := int(code)
 			s.Exit = &c
 		}
+		if strings.Contains(s.Title, "kavach contract check") {
+			if c := contractCheck(s.Detail); c != nil {
+				s.Contract, s.Verdict = c, c.Verdict
+				s.Passed = &c.Passed
+			}
+		}
 	case "read":
 		s.Kind, s.Title = KindRead, str(in["filePath"])
 		offset, _ := in["offset"].(float64)
@@ -333,6 +422,9 @@ func kavachStep(s *Step, in map[string]any, out string) {
 	if json.Unmarshal([]byte(out), &r) != nil {
 		return
 	}
+	if strings.HasSuffix(s.Tool, "contract_check") {
+		s.Contract = contractCheck(out)
+	}
 	s.Verdict = r.Status
 	if s.Verdict == "" {
 		s.Verdict = r.Verdict
@@ -349,11 +441,14 @@ func str(v any) string {
 }
 
 // clip cuts s to maxText bytes on a rune boundary.
-func clip(s string) string {
-	if len(s) <= maxText {
+func clip(s string) string { return clipTo(s, maxText) }
+
+// clipTo cuts s to n bytes on a rune boundary.
+func clipTo(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	cut := maxText
+	cut := n
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}

