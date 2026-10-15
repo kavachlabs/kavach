@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/api"
+	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 	"github.com/kavachlabs/kavach/bench/agent/console/web"
 )
 
@@ -58,6 +59,9 @@ func (o *options) config() (api.Config, error) {
 	}
 	if c.TasksDir == "" {
 		c.TasksDir = filepath.Join(root, "bench", "agent", "harbor", "tasks")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		c.Docker, c.CacheDir = harbor.CLIDocker{}, filepath.Join(home, ".cache", "kavach-bench", "src")
 	}
 	var err error
 	if c.JobsDir, err = filepath.Abs(c.JobsDir); err != nil {

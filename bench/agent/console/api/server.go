@@ -33,6 +33,10 @@ type Config struct {
 	JobsWarning string
 	ModelsURL   string // default OpenRouter's model list
 	Web         fs.FS  // the web app, served at /; nil serves only the API
+	// Docker and CacheDir let the invariants view show the real source files
+	// of a trial; without them it shows the patches.
+	Docker   harbor.Docker
+	CacheDir string
 }
 
 // Server is the API's http.Handler.
@@ -58,7 +62,7 @@ func New(cfg Config) *Server {
 		cfg.ModelsURL = openRouterModels
 	}
 	runner := &harbor.Runner{Harbor: cfg.Harbor, JobsDir: cfg.JobsDir, TasksDir: cfg.TasksDir, EnvFile: cfg.EnvFile, Root: cfg.Root}
-	reader := &harbor.Reader{Dir: cfg.JobsDir, Runs: runner}
+	reader := &harbor.Reader{Dir: cfg.JobsDir, Runs: runner, Docker: cfg.Docker, CacheDir: cfg.CacheDir}
 	s := &Server{
 		cfg:    cfg,
 		reader: reader,
@@ -85,6 +89,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/grade", s.getGrade)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants", s.getInvariants)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants/source", s.getInvariantSource)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants/file", s.getInvariantFile)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants", s.getVariants)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants/{round}/{id}", s.getVariant)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
@@ -300,12 +306,51 @@ func (s *Server) getInvariants(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query().Get("names"); q != "" {
 		names = strings.Split(q, ",")
 	}
-	inv, err := s.reader.TrialInvariants(s.cfg.TasksDir, r.PathValue("job"), r.PathValue("trial"), names)
+	job, trial := r.PathValue("job"), r.PathValue("trial")
+	inv, err := s.reader.TrialInvariants(s.cfg.TasksDir, job, trial, names)
+	if err == nil {
+		err = s.reader.RealSource(s.cfg.TasksDir, job, trial, inv)
+	}
 	if err != nil {
 		writeReadError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, inv)
+}
+
+// getInvariantSource serves the text of one of the patches the invariants
+// are read from: sources[i] of getInvariants. No other file can be read.
+func (s *Server) getInvariantSource(w http.ResponseWriter, r *http.Request) {
+	i, err := strconv.Atoi(r.URL.Query().Get("i"))
+	if err != nil || i < 0 {
+		writeError(w, http.StatusBadRequest, "i must be a non-negative integer")
+		return
+	}
+	text, err := s.reader.InvariantSource(s.cfg.TasksDir, r.PathValue("job"), r.PathValue("trial"), i)
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(text)
+}
+
+// getInvariantFile serves a real source file of the trial, as fetched by
+// getInvariants: path is one of its files. Only files the trial's patches
+// touch can be read.
+func (s *Server) getInvariantFile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	text, err := s.reader.RealFile(s.cfg.TasksDir, r.PathValue("job"), r.PathValue("trial"), path)
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(text)
 }
 
 func (s *Server) getVariants(w http.ResponseWriter, r *http.Request) {

@@ -61,8 +61,8 @@ const goAgentPatch = `diff --git a/kavach.go b/kavach.go
 `
 
 func TestFindInvariants(t *testing.T) {
-	files := append(parsePatch([]byte(pyPatch), false), parsePatch([]byte(cPatch), false)...)
-	files = append(files, parsePatch([]byte(goAgentPatch), true)...)
+	files := append(parsePatch([]byte(pyPatch), "/t/py.patch", false), parsePatch([]byte(cPatch), "/t/c.patch", false)...)
+	files = append(files, parsePatch([]byte(goAgentPatch), "/t/patch.diff", true)...)
 	defs := findInvariants(files, []string{"queue-ttl", "not-in-source"})
 	got := map[string]InvariantDef{}
 	var order []string
@@ -105,5 +105,49 @@ func TestFindInvariants(t *testing.T) {
 	}
 	if got["cookie-scope"].Agent {
 		t.Error("cookie-scope marked as the agent's")
+	}
+}
+
+// A snippet says which lines of its patch show it, removed lines and all.
+func TestPatchLines(t *testing.T) {
+	files := append(parsePatch([]byte(cPatch), "/t/c.patch", false), parsePatch([]byte(goAgentPatch+`@@ -20,4 +21,4 @@ func check() {
+ 	if bad {
+-		a.fail("old", "x")
++		a.fail("streamed-call-args",
++			"call %s lost a field", id)
+ 	}
+`), "/t/patch.diff", true)...)
+	defs := findInvariants(files, nil)
+	got := map[string]InvariantDef{}
+	for _, d := range defs {
+		got[d.Name] = d
+	}
+	type at struct {
+		role, file    string
+		line, fl, hit int
+	}
+	var have []at
+	for _, name := range []string{"stream-trim-contract", "streamed-call-args"} {
+		for _, c := range got[name].Code {
+			have = append(have, at{c.Role, c.File, c.Line, c.FileLine, c.FileHit})
+		}
+	}
+	want := []at{
+		{"declaration", "/t/c.patch", 16, 11, 12},
+		{"check", "/t/c.patch", 11, 6, 6},
+		{"declaration", "/t/patch.diff", 1, 5, 6},
+		{"fails", "/t/patch.diff", 4, 8, 8},
+		{"fails", "/t/patch.diff", 21, 11, 13},
+	}
+	if len(have) != len(want) {
+		t.Fatalf("snippets %+v", have)
+	}
+	for i := range want {
+		if have[i] != want[i] {
+			t.Errorf("snippet %d: %+v, want %+v", i, have[i], want[i])
+		}
+	}
+	if d := got["streamed-call-args"].DocAt; d == nil || d.File != "/t/patch.diff" || d.FileLine != 8 {
+		t.Errorf("doc at %+v", d)
 	}
 }

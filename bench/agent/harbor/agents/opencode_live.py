@@ -46,6 +46,7 @@ from harbor.models.task.config import NetworkMode, NetworkPolicy
 PROXY_SCRIPT = Path(__file__).with_name("proxy.py")
 LIVE_FILE = "opencode-live.json"
 EXPORT_FILE = "opencode-session.json"
+INSTRUCTION_FILE = "instruction.md"
 PINNED_VERSION = "1.1.8"
 SERVER_PORT = 4096
 MODEL_PORT = 8080
@@ -370,14 +371,22 @@ class KavachOpenCode(OpenCode):
                 attach = f"--attach http://127.0.0.1:{SERVER_PORT} "
                 publisher = asyncio.create_task(self._publish_live(view_url, directory))
 
+            # The instruction goes in on stdin, which `opencode run` appends to
+            # the message. On the command line, the agent's own `pkill -f
+            # redis-server` matches it whenever the task names that binary.
+            prompt = self.logs_dir / INSTRUCTION_FILE
+            prompt.write_text(instruction)
+            remote_prompt = f"/tmp/{INSTRUCTION_FILE}"
+            await environment.upload_file(prompt, remote_prompt)
+            await environment.exec(f"chmod 644 {remote_prompt}", user="root")
             flags = self.build_cli_flags()
             await self.exec_as_agent(
                 environment,
                 env=env,
                 command=(
                     f"{nvm}opencode run {attach}--format json --model {shlex.quote(model)} "
-                    f"{flags + ' ' if flags else ''}-- {shlex.quote(instruction)} "
-                    f"2>&1 </dev/null | stdbuf -oL tee "
+                    f"{flags if flags else ''} "
+                    f"2>&1 <{remote_prompt} | stdbuf -oL tee "
                     f"{shlex.quote((logs / self._OUTPUT_FILENAME).as_posix())}"
                 ),
             )
