@@ -291,7 +291,9 @@ body.resizing .body {
   overflow: auto;
   scroll-behavior: smooth;
 }
-.view > * {
+/* Only on navigation: a redraw for new data must not fade the page out and
+   back in. */
+.view.entering > * {
   animation: fadeIn var(--dur-med) var(--ease-out);
 }
 
@@ -1671,26 +1673,16 @@ table.mx {
 
 .dots { display: inline-flex; gap: 7px; flex-wrap: wrap; align-items: center; }
 .dots button {
-  width: 14px;
-  height: 14px;
+  --s: 16px;
   padding: 0;
-  border-radius: 50%;
-  display: block;
-  border: 1.5px solid var(--faint);
-  background: none;
   cursor: pointer;
-  position: relative;
   transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
-.dots button:hover { transform: scale(1.18); }
+.dots button:hover { transform: scale(1.15); }
 .dots button::after { content: ""; position: absolute; inset: -5px; }
-.dots .pass { background: var(--ok); border-color: var(--ok); }
-.dots .fail { background: var(--bad); border-color: var(--bad); }
-.dots .running { background: var(--peach); border-color: var(--peach); }
-.dots .error { border-color: var(--bad); border-style: dashed; }
 .dots button.on {
-  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text);
-  transform: scale(1.12);
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--text);
+  transform: scale(1.08);
 }
 
 .legend {
@@ -1701,19 +1693,77 @@ table.mx {
   flex-wrap: wrap;
   align-items: center;
 }
-.legend i {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1px solid var(--faint);
-  margin-right: 5px;
-  vertical-align: -1px;
+.legend i { --s: 12px; margin-right: 6px; vertical-align: -2px; }
+
+/* Attempt status marks: a tick, a cross, and while it runs Claude's glyph
+   spinner. */
+.st {
+  --s: 14px;
+  width: var(--s);
+  height: var(--s);
+  flex: none;
+  box-sizing: border-box;
+  border-radius: calc(var(--s) * 0.28);
+  border: 1.5px solid var(--faint);
+  background: none;
+  color: var(--app);
+  position: relative;
+  display: inline-grid;
+  place-items: center;
 }
-.legend .pass { background: var(--ok); border-color: var(--ok); }
-.legend .fail { background: var(--bad); border-color: var(--bad); }
-.legend .running { background: var(--peach); border-color: var(--peach); }
-.legend .error { border-color: var(--bad); border-style: dashed; }
+.st::before { content: ""; width: 100%; height: 100%; }
+.st.pass { background: var(--ok); border-color: var(--ok); }
+.st.fail { background: var(--bad); border-color: var(--bad); }
+.st.error { border-color: var(--bad); border-style: dashed; color: var(--bad); }
+.st.pass::before, .st.fail::before, .st.error::before {
+  background: currentColor;
+  -webkit-mask: var(--glyph) center / 100% no-repeat;
+  mask: var(--glyph) center / 100% no-repeat;
+}
+.st.pass { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.st.fail { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 5l6 6M11 5l-6 6' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.st.error { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 4.2v4.6' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='11.6' r='1.2'/%3E%3C/svg%3E"); }
+.st.running { border-color: transparent; color: var(--peach); }
+.st.running::before {
+  content: "·";
+  width: auto;
+  height: auto;
+  font: 600 calc(var(--s) * 1.05) / 1 var(--font-ui);
+  text-shadow: 0 0 calc(var(--s) * 0.5) currentColor;
+  animation: st-glyph 1.2s steps(1) infinite, st-hue 3.6s ease-in-out infinite;
+}
+@keyframes st-glyph {
+  0% { content: "·"; }
+  10% { content: "✢"; }
+  20% { content: "✳"; }
+  30% { content: "✶"; }
+  40% { content: "✻"; }
+  50% { content: "✽"; }
+  60% { content: "✻"; }
+  70% { content: "✶"; }
+  80% { content: "✳"; }
+  90% { content: "✢"; }
+}
+@keyframes st-hue {
+  0%, 100% { color: var(--peach); }
+  33% { color: #ff8f8f; }
+  66% { color: #ffc46b; }
+}
+
+.pill.musing { display: inline-flex; align-items: center; gap: 6px; padding-left: 6px; }
+.pill.musing .st { --s: 12px; }
+.pill.musing .verb {
+  background: linear-gradient(90deg, var(--peach) 35%, #fff1e6 50%, var(--peach) 65%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: st-shimmer 2.4s linear infinite;
+}
+@keyframes st-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+.side-run .st { --s: 13px; }
 
 /* Attempt & Compare Tiles (.kcard) */
 .pill {
@@ -2722,6 +2772,7 @@ details.patch[open] > summary::before { content: "▾ "; }
 .vitem-head .m.faint { margin-left: auto; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vkind { font-size: 11px; padding: 0 6px; border-radius: 99px; background: rgba(169, 155, 255, 0.14); color: #c9c0ff; }
 .vmut { font-size: 11.5px; color: #c9d1dc; overflow-wrap: anywhere; }
+.vitem-more { display: flex; flex-direction: column; gap: 4px; }
 .vcmd { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
 .vcmd code { font-size: 11px; color: var(--text); background: var(--app); border: 1px solid var(--edge); border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; user-select: all; }
 
@@ -3203,3 +3254,11 @@ details.patch[open] > summary::before { content: "▾ "; }
 @media (prefers-reduced-motion: no-preference) {
   .rp-lamp, .rp-input { transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
 }
+
+.card-meta:empty { display: none; }
+.right-pane > .stats:empty { display: none; }
+
+/* The crossfade when the Invariants tab redraws for another invariant,
+   round or page. */
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: 160ms; }
