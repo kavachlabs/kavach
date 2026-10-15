@@ -302,10 +302,37 @@ function elapsed(iso, fmt = clock, prefix = "") {
   return h("span", { dataset: { since: iso, fmt: fmt === clock ? "clock" : "dur", prefix } }, prefix + fmt(since(iso)));
 }
 
+// What a running attempt is up to, shown the way Claude shows it's thinking.
+const VERBS = [
+  "Apparating", "Brewing", "Conjuring", "Transfiguring", "Summoning", "Levitating",
+  "Hexing", "Jinxing", "Unjinxing", "Charming", "Divining", "Scrying", "Sorting",
+  "Wand-waving", "Mischief-managing", "Owl-posting", "Floo-travelling", "Marauding",
+  "Pensieving", "Potion-stirring", "Spell-checking", "Lumos-ing",
+  "Forging", "Questing", "Wandering", "Second-breakfasting", "Riddling", "Ent-mooting",
+  "Beacon-lighting", "Palantír-gazing", "Delving", "Mithril-mining", "Lembas-baking",
+  "Fellowshipping", "Ring-bearing", "Shire-strolling", "Ranger-tracking", "Wizarding",
+];
+const VERB_EVERY = 9000;
+
+// verbFor picks the verb a seed shows now: the same on every redraw, and a
+// new one every few seconds.
+function verbFor(seed) {
+  let n = 0;
+  for (const c of seed) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+  return VERBS[(n + Math.floor(Date.now() / VERB_EVERY)) % VERBS.length] + "…";
+}
+
+// spinner is Claude's glyph spinner, drawn by CSS.
+const spinner = () => h("span", { class: "st running", "aria-hidden": "true" });
+
 setInterval(() => {
   for (const el of document.querySelectorAll("[data-since]")) {
     const s = since(el.dataset.since);
     el.textContent = el.dataset.prefix + (el.dataset.fmt === "clock" ? clock(s) : fmtDur(s));
+  }
+  for (const el of document.querySelectorAll("[data-verb]")) {
+    const v = verbFor(el.dataset.verb);
+    if (el.textContent !== v) el.textContent = v;
   }
 }, 1000);
 
@@ -359,8 +386,19 @@ async function onRoute() {
     state.replay = null;
   }
   if (window.matchMedia("(max-width: 900px)").matches) state.side = false;
-  renderAll();
-  if (current.job) await refreshJob();
+  await enterView(() => {
+    renderAll();
+    if (current.job) return refreshJob();
+  });
+}
+
+// enterView fades in what render draws, including a redraw once the job has
+// loaded; later redraws appear without it.
+async function enterView(render) {
+  const view = document.getElementById("view");
+  view.classList.add("entering");
+  await render();
+  setTimeout(() => view.classList.remove("entering"), 300);
 }
 
 async function loadStatus() {
@@ -476,27 +514,134 @@ async function loadGrades(trials) {
   }));
 }
 
+// Events carry the job or trial as it is now. A model call changes only a
+// trial's steps, tokens and cost, and the job's cost; those are merged in and
+// patched where they are shown, so the page around them stays as it is.
+// Anything else (a trial starting or finishing, a job's status) refetches the
+// job and redraws it.
 function connectEvents() {
   const es = new EventSource("/api/events");
-  es.onopen = () => { state.live = true; renderTop(); };
-  es.onerror = () => { state.live = false; renderTop(); };
-  es.addEventListener("job", (e) => {
-    const job = JSON.parse(e.data);
-    if (!state.jobs) state.jobs = [];
-    const i = state.jobs.findIndex((j) => j.id === job.id);
-    if (i >= 0) state.jobs[i] = job;
-    else state.jobs.push(job);
-    state.jobs.sort((a, b) => (Date.parse(b.started) || 0) - (Date.parse(a.started) || 0));
-    renderSide();
+  let dropped = false;
+  es.onopen = () => {
+    state.live = true;
     renderTop();
-    if (job.id === current.job) scheduleRefresh();
-  });
-  es.addEventListener("trial", (e) => {
-    const t = JSON.parse(e.data);
-    if (t.job !== current.job) return;
+    // Events sent while the stream was down are lost.
+    if (dropped) {
+      dropped = false;
+      loadJobs();
+      scheduleRefresh();
+    }
+  };
+  es.onerror = () => { state.live = false; dropped = true; renderTop(); };
+  es.addEventListener("job", (e) => onJob(JSON.parse(e.data)));
+  es.addEventListener("trial", (e) => onTrial(JSON.parse(e.data)));
+}
+
+const jobShapeOf = ({ trials, cost, ...rest }) => JSON.stringify(rest);
+
+function onJob(job) {
+  if (!state.jobs) state.jobs = [];
+  const i = state.jobs.findIndex((j) => j.id === job.id);
+  const costOnly = i >= 0 && jobShapeOf(state.jobs[i]) === jobShapeOf(job);
+  if (i >= 0) state.jobs[i] = job;
+  else state.jobs.push(job);
+  if (costOnly) {
+    if (job.id !== current.job || !state.job) return;
+    state.job.cost = job.cost;
+    const pill = document.querySelector("#right .cost");
+    if (pill) pill.textContent = fmtCost(job.cost);
+    else renderTop();
+    return;
+  }
+  state.jobs.sort((a, b) => (Date.parse(b.started) || 0) - (Date.parse(a.started) || 0));
+  renderSide();
+  renderTop();
+  if (job.id === current.job) scheduleRefresh();
+}
+
+// Fields that move a trial between states; a change in any redraws the job.
+const TRIAL_SHAPE = ["status", "reward", "started", "finished", "seconds", "error", "kavach", "opencode"];
+
+function onTrial(t) {
+  if (t.job !== current.job) return;
+  const old = state.job && state.job.trials.find((x) => x.id && x.id === t.id);
+  if (!old || TRIAL_SHAPE.some((k) => JSON.stringify(old[k]) !== JSON.stringify(t[k]))) {
     if (finished(t)) state.grades.delete(`${t.job}/${t.id}`);
     scheduleRefresh();
+    return;
+  }
+  const more = old.steps !== t.steps;
+  Object.assign(old, t);
+  patchTrial(old, more);
+}
+
+let stepsReq = 0;
+async function patchTrial(t, moreSteps) {
+  if (current.view === "compare") {
+    const meta = document.querySelector(`.kcard[data-key="${CSS.escape(trialKey(t))}"] .card-meta`);
+    if (meta) meta.replaceWith(cardMeta(t));
+    else renderView();
+    return;
+  }
+  if (current.view !== "runs" || selected() !== t) return;
+  const stats = document.querySelector(".right-pane > .stats");
+  if (stats) stats.textContent = tokenLine(t);
+  const key = `${t.job}/${t.id}`;
+  if (!moreSteps || state.stepsFor !== key) return;
+  const n = ++stepsReq;
+  let steps;
+  try {
+    steps = await api(`/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}/steps`);
+  } catch {
+    return;
+  }
+  if (n === stepsReq && selected() === t && state.stepsFor === key) patchSteps(t, steps);
+}
+
+// patchSteps renders the steps that are new or changed since the last load
+// and leaves the others, with their scroll, selection and expanded state.
+function patchSteps(t, steps) {
+  const old = Array.isArray(state.steps) ? state.steps : [];
+  const same = (a, b) => a && JSON.stringify(a) === JSON.stringify(b);
+  // Unchanged steps keep their objects: the invariants view finds a check's
+  // step by identity.
+  const merged = steps.map((s, i) => same(old[i], s) ? old[i] : s);
+  const checks = checksOf(merged).map((c) => c.step);
+  const before = checksOf(old).map((c) => c.step);
+  state.steps = merged;
+  if (checks.length !== before.length || checks.some((s, i) => s !== before[i])) return renderView();
+
+  const shown = merged.filter((s) => s.kind !== "usage");
+  const badge = document.querySelector(".insp-tabs .aux-tab:first-child .aux-tab-badge");
+  if (badge) badge.textContent = shown.length;
+  if (document.querySelector(".insp-tabs") && state.inspTab === "invariants") return;
+
+  const key = CSS.escape(`${t.job}/${t.id}`);
+  const box = document.querySelector(`.steps[data-key="${key}"]`);
+  const oldShown = old.filter((s) => s.kind !== "usage");
+  const placeholder = !box && document.querySelector(`[data-steps="${key}"]`);
+  if (placeholder) {
+    const el = renderSteps(t, state.job);
+    placeholder.replaceWith(el);
+    el.scrollTop = el.scrollHeight;
+    return;
+  }
+  if (!box || box.children.length !== oldShown.length || shown.length < oldShown.length) return renderView();
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+  let lastText = -1;
+  shown.forEach((s, i) => { if (s.kind === "text") lastText = i; });
+  shown.forEach((s, i) => {
+    if (s === oldShown[i]) return;
+    const el = renderStep(s, i, i === lastText);
+    const prev = box.children[i];
+    if (!prev) return box.append(el);
+    if (prev.matches("details[open]") || prev.querySelector("details[open]")) {
+      const d = el.matches("details") ? el : el.querySelector("details");
+      if (d) d.open = true;
+    }
+    prev.replaceWith(el);
   });
+  if (atBottom && t.status === "running") box.scrollTop = box.scrollHeight;
 }
 
 function statusDot(name, check) {
@@ -522,7 +667,7 @@ function renderTop() {
     kids.push(h("span", { class: "status-pill" },
       h("span", { class: `dot ${dot}` }),
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
-    if (job.cost) kids.push(h("span", { class: "status-pill" }, fmtCost(job.cost)));
+    if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
         job.finished ? fmtDur((Date.parse(job.finished) - Date.parse(job.started)) / 1000) : job.status === "running" ? elapsed(job.started, fmtDur) : "",
@@ -729,7 +874,7 @@ function renderSide() {
   for (const j of state.jobs || []) {
     const { name, shape } = jobShape(j, true);
     const mark = j.status === "running"
-      ? h("span", { class: "peach", title: "running" }, "●")
+      ? h("span", { class: "side-run", title: "running" }, spinner())
       : h("span", { class: j.status === "done" ? "dim" : "faint", title: j.status }, `${j.status === "paused" ? "paused " : ""}${j.trials_done}/${j.trials_total}`);
     scrollKids.push(h("a", {
       href: `#/jobs/${encodeURIComponent(j.id)}`,
@@ -2118,7 +2263,12 @@ function trialLabel(t, includeTask = false) {
 }
 
 function pill(t) {
-  if (t.status === "running") return h("span", { class: "pill running" }, t.started ? elapsed(t.started, clock, "running ") : "running");
+  if (t.status === "running") {
+    return h("span", { class: "pill running musing" },
+      spinner(),
+      h("span", { class: "verb", dataset: { verb: t.id || trialKey(t) } }, verbFor(t.id || trialKey(t))),
+      t.started ? elapsed(t.started, clock) : null);
+  }
   const word = { pass: "PASS", fail: "FAIL", error: "ERROR", queued: "queued" }[t.status] || t.status;
   return h("span", { class: `pill ${t.status}` }, word);
 }
@@ -2181,7 +2331,7 @@ function renderRuns(view) {
       return h("tr", { class: r.trials.includes(sel) ? "sel" : null },
         h("td", {}, r.label),
         arms.map((a) => h("td", {}, h("span", { class: "dots" }, r.trials.filter((t) => t.arm === a).map((t) => h("button", {
-          type: "button", class: `${t.status} ${t === sel ? "on" : ""}`, dataset: { key: trialKey(t) },
+          type: "button", class: `st ${t.status} ${t === sel ? "on" : ""}`, dataset: { key: trialKey(t) },
           "aria-label": `${trialLabel(t, true)}: ${t.status}`, title: `${trialLabel(t, true)}: ${t.status} (${armInfo(t.arm).tag})`, "aria-pressed": String(t === sel),
           onclick: () => select(t),
         }))))),
@@ -2200,11 +2350,11 @@ function renderRuns(view) {
     renderArmGuide(arms),
     h("div", { class: "tablewrap" }, table),
     h("div", { class: "legend" },
-      h("span", {}, h("i", { class: "pass" }), "pass"),
-      h("span", {}, h("i", { class: "fail" }), "fail"),
-      h("span", {}, h("i", { class: "running" }), "running"),
-      h("span", {}, h("i", {}), "queued"),
-      h("span", {}, h("i", { class: "error" }), "error"),
+      h("span", {}, h("i", { class: "st pass" }), "pass"),
+      h("span", {}, h("i", { class: "st fail" }), "fail"),
+      h("span", {}, h("i", { class: "st running" }), "running"),
+      h("span", {}, h("i", { class: "st queued" }), "queued"),
+      h("span", {}, h("i", { class: "st error" }), "error"),
       h("span", { class: "faint" }, "grade = task's hidden verifier test suite")),
     h("div", { class: "stats" }, armPasses.join(" · ")));
 
@@ -2295,8 +2445,7 @@ function renderAttempt(t) {
         onclick: toggleRightSide,
       }, "⇥")),
   ];
-  const tl = tokenLine(t);
-  if (tl) kids.push(h("div", { class: "stats" }, tl));
+  kids.push(h("div", { class: "stats" }, tokenLine(t)));
   if (t.error) kids.push(errorView(t));
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
@@ -2342,7 +2491,15 @@ function renderAttempt(t) {
 
 const KIND = { shell: "Shell", read: "Read", search: "Grep", edit: "Edit", mcp: "Tool", error: "Error" };
 
+// renderSteps marks what it returns, list or placeholder, so patchSteps can
+// replace a placeholder alone.
 function renderSteps(t, job) {
+  const el = stepsBody(t, job);
+  el.dataset.steps = `${t.job}/${t.id}`;
+  return el;
+}
+
+function stepsBody(t, job) {
   const key = `${t.job}/${t.id}`;
   const box = h("div", { class: "steps", dataset: { key }, "aria-live": "polite" });
   if (t.status === "queued") return h("div", { class: "dim" }, "Queued: it starts when a slot frees up.");
@@ -2768,13 +2925,7 @@ function attemptCard(t, job, multi = false) {
   const gl = gradeLine(t);
   if (gl) lines.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
   if (t.error) lines.push(errorView(t));
-  const meta = [
-    t.seconds != null ? fmtDur(t.seconds) : t.started && t.status === "running" ? elapsed(t.started, fmtDur) : null,
-    t.steps ? `${t.steps} step${t.steps === 1 ? "" : "s"}` : null,
-    fresh(t.tokens) ? `${fmtTok(fresh(t.tokens))} tokens` : null,
-    t.cost != null ? fmtCost(t.cost) : null,
-  ].filter(Boolean);
-  if (meta.length) lines.push(h("div", { class: "dim" }, meta.flatMap((m, i) => i ? [" · ", m] : [m])));
+  lines.push(cardMeta(t));
   const oc = openInOpenCode(t, job);
   const links = h("div", { class: "links" },
     oc.tagName === "SPAN" ? null : oc,
@@ -2784,11 +2935,21 @@ function attemptCard(t, job, multi = false) {
   for (const b of links.querySelectorAll(":scope > .btn, :scope > details > summary.btn")) {
     b.classList.remove("btn", "blue");
   }
-  return h("div", { class: `kcard arm-${t.arm || "kavach"} ${t.status}` },
+  return h("div", { class: `kcard arm-${t.arm || "kavach"} ${t.status}`, dataset: { key: trialKey(t) } },
     renderArmHintBar(t),
     h("div", { class: "title" }, pill(t), h("b", { title: t.id }, trialLabel(t, multi))),
     lines,
     links);
+}
+
+function cardMeta(t) {
+  const meta = [
+    t.seconds != null ? fmtDur(t.seconds) : t.started && t.status === "running" ? elapsed(t.started, fmtDur) : null,
+    t.steps ? `${t.steps} step${t.steps === 1 ? "" : "s"}` : null,
+    fresh(t.tokens) ? `${fmtTok(fresh(t.tokens))} tokens` : null,
+    t.cost != null ? fmtCost(t.cost) : null,
+  ].filter(Boolean);
+  return h("div", { class: "dim card-meta" }, meta.flatMap((m, i) => i ? [" · ", m] : [m]));
 }
 
 function exportCSV() {
@@ -2858,11 +3019,13 @@ document.addEventListener("click", (e) => {
 });
 window.addEventListener("hashchange", onRoute);
 
-renderAll();
 loadStatus();
 loadSettings();
 loadTasks();
 loadJobs();
 connectEvents();
 setInterval(loadStatus, 15000);
-if (current.job) refreshJob();
+enterView(() => {
+  renderAll();
+  if (current.job) return refreshJob();
+});

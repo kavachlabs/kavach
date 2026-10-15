@@ -210,7 +210,50 @@ function newHost(step) {
 }
 const shq = (s) => /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 
-function rerender() { renderView(); }
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// rerender draws the view again for a change that reshapes it (another
+// invariant, round or page), crossfading so it doesn't snap.
+function rerender() {
+  if (!document.startViewTransition || calm() || document.hidden) return renderView();
+  // A transition is skipped, and these reject, when another one starts.
+  const vt = document.startViewTransition(renderView);
+  vt.ready.catch(() => {});
+  vt.finished.catch(() => {});
+}
+
+const SLIDE = { duration: 180, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" };
+
+// slide grows el from nothing to its height, or shrinks it away and then
+// calls done, so what sits below it moves instead of jumping.
+function slide(el, open, done) {
+  if (calm()) return done && done();
+  const full = `${el.offsetHeight}px`;
+  el.style.overflow = "hidden";
+  const a = el.animate(open
+    ? [{ height: "0px", opacity: 0 }, { height: full, opacity: 1 }]
+    : [{ height: full, opacity: 1 }, { height: "0px", opacity: 0 }], SLIDE);
+  a.onfinish = () => {
+    el.style.overflow = "";
+    if (done) done();
+  };
+}
+
+// expand shows or hides the part of box that makeBody draws, in place: the
+// rest of the view, its editors and its scroll stay as they are.
+function expand(box, sel, open, makeBody) {
+  for (const b of box.querySelectorAll(`:scope > ${sel}.shutting`)) b.remove();
+  const cur = box.querySelector(`:scope > ${sel}`);
+  if (open && !cur) {
+    const b = makeBody();
+    if (!b) return;
+    box.append(b);
+    slide(b, true);
+  } else if (!open && cur) {
+    cur.classList.add("shutting");
+    slide(cur, false, () => cur.remove());
+  }
+}
 
 // put appends the views that have something to show.
 const put = (box, ...kids) => box.append(...kids.filter(Boolean));
@@ -348,16 +391,28 @@ function renderVariants(m, kindF, sel, rv) {
   const grid = h("div", { class: "vgrid", role: "group", "aria-label": "Variants of this check" }, cells.map((x) => {
     const dim = kindF && x.k !== kindF;
     if (x.f) {
-      const on = sel && sel.id === x.f.id;
       const saved = savedHere(rv, x.f);
-      return h("button", {
-        type: "button", class: `vcell trip ${on ? "on" : ""} ${dim ? "dim" : ""}`,
-        title: `variant ${x.f.id}: ${x.f.mutation}${on && saved ? " (click again to replay it)" : ""}`, "aria-label": `Variant ${x.f.id}, ${VK[x.k].short}: ${x.f.verdict}${on && saved ? ". Press again to replay it" : ""}`, "aria-pressed": String(!!on),
+      const cell = h("button", {
+        type: "button", class: `vcell trip ${dim ? "dim" : ""}`, dataset: { v: x.f.id },
         onclick: () => {
+          const on = iv.variant === x.f.id;
           if (on && saved) return openReplay(rv.t, rv.round, x.f.id);
-          iv.variant = on ? null : x.f.id; if (x.f.inv) iv.inv = x.f.inv; rerender();
+          if (x.f.inv && x.f.inv !== iv.inv) {
+            iv.variant = x.f.id;
+            iv.inv = x.f.inv;
+            return rerender();
+          }
+          showVariant(on ? null : x.f.id);
         },
       });
+      cell.mark = (on) => {
+        cell.classList.toggle("on", on);
+        cell.title = `variant ${x.f.id}: ${x.f.mutation}${on && saved ? " (click again to replay it)" : ""}`;
+        cell.setAttribute("aria-label", `Variant ${x.f.id}, ${VK[x.k].short}: ${x.f.verdict}${on && saved ? ". Press again to replay it" : ""}`);
+        cell.setAttribute("aria-pressed", String(on));
+      };
+      cell.mark(!!sel && sel.id === x.f.id);
+      return cell;
     }
     return h("span", { class: `vcell ${x.pre ? "pre" : "held"} ${dim ? "dim" : ""}`, title: x.pre ? "fails on the old build too, so it says nothing about the change" : "held" });
   }));
@@ -391,25 +446,43 @@ function renderDetail(c, m, name, sel, defs, rv) {
   if (st === "broke" && c.detail) kids.push(h("code", { class: "inv-detail bad" }, c.detail));
   if (mine.length) {
     kids.push(h("div", { class: "vlist" }, mine.map((f) => {
-      const on = sel && sel.id === f.id;
+      const on = !!sel && sel.id === f.id;
       const host = newHost(c.step);
-      return h("div", { class: `vitem ${on ? "on" : ""}` },
-        h("button", { type: "button", class: "vitem-head", "aria-expanded": String(!!on), onclick: () => { iv.variant = on ? null : f.id; rerender(); } },
-          h("span", { class: "m b" }, `variant ${f.id}`),
-          h("span", { class: "vkind" }, VK[f.kind] ? VK[f.kind].short : f.kind),
-          h("span", { class: "m faint" }, f.verdict)),
+      const more = () => f.detail || f.file ? h("div", { class: "vitem-more" },
+        f.detail ? h("code", { class: "inv-detail bad" }, f.detail) : null,
+        f.file ? h("div", { class: "vcmd" },
+          h("span", { class: "faint" }, "Replay it in the task's container until the next check replaces it:"),
+          h("code", { class: "m" }, `kavach replay ${shq(f.file)} --bin ${host ? shq(host) : "<new build>"}`)) : null) : null;
+      const head = h("button", { type: "button", class: "vitem-head", "aria-expanded": String(on), onclick: () => showVariant(iv.variant === f.id ? null : f.id) },
+        h("span", { class: "m b" }, `variant ${f.id}`),
+        h("span", { class: "vkind" }, VK[f.kind] ? VK[f.kind].short : f.kind),
+        h("span", { class: "m faint" }, f.verdict));
+      const item = h("div", { class: `vitem ${on ? "on" : ""}`, dataset: { v: f.id } },
+        head,
         h("div", { class: "vitem-row" },
           h("span", { class: "m vmut" }, f.mutation),
           replayBtn(rv, f)),
-        on && f.detail ? h("code", { class: "inv-detail bad" }, f.detail) : null,
-        on && f.file ? h("div", { class: "vcmd" },
-          h("span", { class: "faint" }, "Replay it in the task's container until the next check replaces it:"),
-          h("code", { class: "m" }, `kavach replay ${shq(f.file)} --bin ${host ? shq(host) : "<new build>"}`)) : null);
+        on ? more() : null);
+      item.mark = (on) => {
+        item.classList.toggle("on", on);
+        head.setAttribute("aria-expanded", String(on));
+        expand(item, ".vitem-more", on, more);
+      };
+      return item;
     })));
   } else if (st === "held") {
     kids.push(h("span", { class: "dim" }, `Every variant held it${m.kinds ? `, across ${VKINDS.filter((k) => m.tot[k]).length} kinds` : ""}.`));
   }
   return h("section", { class: "inv-sec-box inv-d" }, kids);
+}
+
+// showVariant selects variant id (or none) of the invariant on screen: its
+// cell in the grid and its item in the detail, which opens in place.
+function showVariant(id) {
+  state.iv.variant = id;
+  for (const el of document.querySelectorAll(".vcell.trip[data-v], .vitem[data-v]")) {
+    if (el.mark) el.mark(el.dataset.v === String(id));
+  }
 }
 
 // replayBtn opens a saved variant in the replay scene. A variant missing
@@ -542,9 +615,9 @@ const fileName = (p) => p.split("/").pop();
 const sourceName = (p) => /\/artifacts\/logs\/artifacts\/patch\.diff$/.test(p) ? "the agent's patch" : fileName(p);
 
 // rerenderFocus renders again and gives focus back to the control id names,
-// which the render replaced.
+// which the render replaced. A crossfade would draw it too late to focus.
 function rerenderFocus(id) {
-  rerender();
+  renderView();
   const el = document.getElementById(id);
   if (el) el.focus({ preventScroll: true });
 }
@@ -701,7 +774,8 @@ function openIn(key, file, line) {
 function codeBlock(ctx, d, sn, i, defaultOpen) {
   const key = `${ctx.trial}|${d.name}|${sn.role}|${i}`;
   const id = domId(key);
-  const open = codeOpen.has(key) ? codeOpen.get(key) : defaultOpen;
+  const isOpen = () => codeOpen.has(key) ? codeOpen.get(key) : defaultOpen;
+  const open = isOpen();
   const lines = sn.text.split("\n");
   const hits = lines.flatMap((l, k) => l.includes(d.name) ? [k] : []);
   const src = sn.file ? ctx.defs.sources.indexOf(sn.file) : -1;
@@ -709,22 +783,33 @@ function codeBlock(ctx, d, sn, i, defaultOpen) {
   const real = !!sn.src_file;
   const showPatch = src >= 0 && fileHit > 0 && patchOn.has(key);
   const role = ROLE[sn.role] || sn.role;
-  const body = open ? h("div", { class: "inv-code-body", id: `${id}-body` },
+  const makeBody = () => h("div", { class: "inv-code-body", id: `${id}-body` },
     real ? realFile(ctx, key, sn)
     : ctx.mon === "ready"
       ? snippetEditor(key, ctx.trial, { text: sn.text, language: languageOf(sn.path), firstLine: sn.line, hits, label: `${role} ${d.name}: ${sn.path} from line ${sn.line}` })
       : preBlock(sn, d.name),
-    showPatch ? wholePatch(ctx, key, sn, src, fileHit) : null) : null;
-  return h("div", { class: `inv-code ${open ? "open" : ""}` },
+    showPatch ? wholePatch(ctx, key, sn, src, fileHit) : null);
+  const chev = h("span", { class: "inv-code-chev", "aria-hidden": "true" }, open ? "▾" : "▸");
+  const toggle = h("button", {
+    type: "button", class: "inv-code-toggle", id: `${id}-t`, "aria-expanded": String(open), "aria-controls": open ? `${id}-body` : null,
+    onclick: () => {
+      const now = !isOpen();
+      codeOpen.set(key, now);
+      block.classList.toggle("open", now);
+      chev.textContent = now ? "▾" : "▸";
+      toggle.setAttribute("aria-expanded", String(now));
+      if (now) toggle.setAttribute("aria-controls", `${id}-body`);
+      else toggle.removeAttribute("aria-controls");
+      expand(block, ".inv-code-body", now, makeBody);
+    },
+  },
+    chev,
+    h("span", {}, role),
+    h("span", { class: "m faint inv-code-path" }, `${sn.path}:${real ? sn.src_hit : sn.line + (hits[0] || 0)}`),
+    sn.agent ? h("span", { class: "agent-tag" }, "agent") : null);
+  const block = h("div", { class: `inv-code ${open ? "open" : ""}` },
     h("div", { class: "inv-code-head" },
-      h("button", {
-        type: "button", class: "inv-code-toggle", id: `${id}-t`, "aria-expanded": String(open), "aria-controls": open ? `${id}-body` : null,
-        onclick: () => { codeOpen.set(key, !open); rerenderFocus(`${id}-t`); },
-      },
-        h("span", { class: "inv-code-chev", "aria-hidden": "true" }, open ? "▾" : "▸"),
-        h("span", {}, role),
-        h("span", { class: "m faint inv-code-path" }, `${sn.path}:${real ? sn.src_hit : sn.line + (hits[0] || 0)}`),
-        sn.agent ? h("span", { class: "agent-tag" }, "agent") : null),
+      toggle,
       real || (sn.file && fileHit > 0) ? h("span", { class: "inv-code-acts" },
         src >= 0 ? h("button", {
           type: "button", class: `link-btn ${showPatch ? "on" : ""}`, id: `${id}-p`, "aria-pressed": String(showPatch),
@@ -736,7 +821,8 @@ function codeBlock(ctx, d, sn, i, defaultOpen) {
           },
         }, "Whole patch") : null,
         real ? openIn(key, sn.src_file, sn.src_hit) : openIn(key, sn.file, fileHit)) : null),
-    body);
+    open ? makeBody() : null);
+  return block;
 }
 
 // renderDefinitions lists every invariant the service declares: what its
