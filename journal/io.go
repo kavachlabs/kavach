@@ -57,6 +57,9 @@ type Variant struct {
 	// Failure is the recorded failure: "panic: <message>", "error: <message>",
 	// "invariant: <name>" or "crash".
 	Failure string `json:"failure"`
+	// Kind is the class of mutation, one of replay's Kind* constants. It is
+	// set when variants are generated and is not stored in the journal.
+	Kind string `json:"-"`
 }
 
 func (m Meta) validate() error {

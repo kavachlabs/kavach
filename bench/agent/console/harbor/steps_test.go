@@ -155,3 +155,42 @@ func TestClip(t *testing.T) {
 		t.Fatalf("clipped to %d bytes", len(c))
 	}
 }
+
+func TestContractCheckSteps(t *testing.T) {
+	const report = `{"dir":"contract","passed":false,"verdict":"variant_failed(31)@433","wall_ms":5120,
+"report":{"verdict":"variant_failed(31)@433","passed":false,"detail":"variant 31 (every clock read shifted): invariant_violated(message-ttl)@433",
+"lock":{"state":"approved"},"feature_steps":[244,247,433],"new":"ok",
+"changed":[{"seq":244,"recorded":[],"replay":[]},{"seq":433,"recorded":[],"replay":[]}],"unreached":[247],
+"invariants":["message-ttl"],"declared":["queue-max-length","message-ttl"],
+"variant_candidates":3,"variants_passed":1,"variants_preexisting":1,
+"variant_kinds":{"clock":{"candidates":2,"passed":0,"preexisting":1},"field":{"candidates":1,"passed":1,"preexisting":0}},
+"variant_failures":[{"id":31,"kind":"clock","mutation":"every clock read shifted","feature_seq":433,"verdict":"invariant_violated(message-ttl)@433","seq":433,"detail":"late"}],
+"round":6,"streak":2}}`
+	check := func(name string, s Step) {
+		c := s.Contract
+		if c == nil {
+			t.Fatalf("%s: no contract report", name)
+		}
+		if c.Round != 6 || c.Streak != 2 || c.Verdict != "variant_failed(31)@433" || c.Passed {
+			t.Errorf("%s: round %d streak %d verdict %s passed %v", name, c.Round, c.Streak, c.Verdict, c.Passed)
+		}
+		if len(c.Changed) != 2 || c.Changed[1] != 433 || len(c.Unreached) != 1 || len(c.Declared) != 2 {
+			t.Errorf("%s: changed %v unreached %v declared %v", name, c.Changed, c.Unreached, c.Declared)
+		}
+		if c.VariantKinds["clock"].Candidates != 2 || len(c.VariantFailures) != 1 || c.VariantFailures[0].Kind != "clock" || *c.VariantFailures[0].Seq != 433 {
+			t.Errorf("%s: kinds %v failures %+v", name, c.VariantKinds, c.VariantFailures)
+		}
+		if s.Verdict != c.Verdict || s.Passed == nil || *s.Passed {
+			t.Errorf("%s: step verdict %q passed %v", name, s.Verdict, s.Passed)
+		}
+	}
+	check("mcp", toolStep("kavach_kavach_contract_check", map[string]any{"new": "/tmp/new"}, report, nil))
+	check("shell", toolStep("bash", map[string]any{"command": "kavach contract check --new /tmp/new --json"}, "building…\n"+report, nil))
+
+	if s := toolStep("kavach_kavach_replay", map[string]any{}, `{"verdict":"fixed","passed":true}`, nil); s.Contract != nil {
+		t.Errorf("replay step has a contract report: %+v", s.Contract)
+	}
+	if s := toolStep("bash", map[string]any{"command": "kavach contract check --new x"}, "KAVACH CONTRACT CHECK\nverdict pass", nil); s.Contract != nil {
+		t.Errorf("text output parsed as a report: %+v", s.Contract)
+	}
+}

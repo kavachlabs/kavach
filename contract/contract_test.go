@@ -2,9 +2,11 @@ package contract_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -203,6 +205,23 @@ func TestCheckVerdicts(t *testing.T) {
 	if !argVariant {
 		t.Errorf("sloppy build: no failing variant moves INCR to the string key: %+v", r.VariantFailures)
 	}
+	failed := map[string]int{}
+	for _, f := range r.VariantFailures {
+		if f.Kind == "" {
+			t.Errorf("sloppy build: variant %d (%s) has no kind", f.ID, f.Mutation)
+		}
+		failed[f.Kind]++
+	}
+	total := 0
+	for k, c := range r.VariantKinds {
+		total += c.Candidates
+		if c.Candidates != c.Passed+c.Preexisting+failed[k] {
+			t.Errorf("sloppy build: kind %s counts %+v, %d failed", k, *c, failed[k])
+		}
+	}
+	if total != r.VariantCandidates {
+		t.Errorf("sloppy build: kinds count %d variants, report %d", total, r.VariantCandidates)
+	}
 
 	r = check(t, d, good)
 	if r.Verdict != "unapproved" || len(r.Changed) != 3 {
@@ -241,6 +260,63 @@ func TestStreakCountsRepeatedOutcomes(t *testing.T) {
 	}
 }
 
+func TestCheckSavesEveryRoundsFailingVariants(t *testing.T) {
+	d := newContract(t)
+	// A stale round 2 from an earlier contract in the same directory.
+	stale := filepath.Join(d.Path, contract.DirRounds, "2", "variant-99.kavach")
+	os.MkdirAll(filepath.Dir(stale), 0o755)
+	os.WriteFile(stale, []byte("stale"), 0o644)
+
+	r1 := check(t, d, sloppy)
+	r2 := check(t, d, sloppy)
+	if r1.Round != 1 || r2.Round != 2 || r2.Streak != 2 {
+		t.Fatalf("got rounds %d, %d and streak %d, want 1, 2 and 2", r1.Round, r2.Round, r2.Streak)
+	}
+	for _, r := range []*contract.Report{r1, r2} {
+		if len(r.VariantFailures) == 0 {
+			t.Fatalf("round %d: no failing variants", r.Round)
+		}
+		rdir := filepath.Join(d.Path, contract.DirRounds, strconv.Itoa(r.Round))
+		for _, f := range r.VariantFailures {
+			want := filepath.Join(rdir, fmt.Sprintf("variant-%02d.kavach", f.ID))
+			if f.Saved != want {
+				t.Errorf("round %d, variant %d: saved %q, want %q", r.Round, f.ID, f.Saved, want)
+			}
+			j, err := journal.ReadFile(f.Saved)
+			if err != nil {
+				t.Fatalf("round %d, variant %d: %v", r.Round, f.ID, err)
+			}
+			if v := j.Header.Meta.Variant; v == nil || v.ID != f.ID || v.Mutation != f.Mutation {
+				t.Errorf("round %d, variant %d: saved journal's variant is %+v", r.Round, f.ID, v)
+			}
+			b, err := os.ReadFile(strings.TrimSuffix(f.Saved, ".kavach") + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var res replay.Result
+			if err := json.Unmarshal(b, &res); err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Steps) == 0 || res.String() != f.Verdict {
+				t.Errorf("round %d, variant %d: saved result %s with %d steps, want %s with steps", r.Round, f.ID, res.String(), len(res.Steps), f.Verdict)
+			}
+		}
+		entries, _ := os.ReadDir(rdir)
+		if len(entries) != 2*len(r.VariantFailures) {
+			t.Errorf("round %d: %d files in %s, want %d", r.Round, len(entries), rdir, 2*len(r.VariantFailures))
+		}
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("round 2 kept a stale file from an earlier contract: %v", err)
+	}
+	if r := check(t, d, good); len(r.VariantFailures) != 0 {
+		t.Fatalf("good build: failing variants %+v", r.VariantFailures)
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, contract.DirRounds, "3")); !os.IsNotExist(err) {
+		t.Errorf("a round with no failing variants wrote rounds/3: %v", err)
+	}
+}
+
 func TestMissingInvariant(t *testing.T) {
 	traffic := record(t)
 	work := t.TempDir()
@@ -253,8 +329,12 @@ func TestMissingInvariant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := check(t, d, good); r.Verdict != "missing_invariant(never-declared)" {
+	r := check(t, d, good)
+	if r.Verdict != "missing_invariant(never-declared)" {
 		t.Errorf("got %s", r.Verdict)
+	}
+	if len(r.Invariants) != 2 || !slices.Contains(r.Declared, "counter-holds-integer") || slices.Contains(r.Declared, "never-declared") {
+		t.Errorf("invariants %v, declared %v", r.Invariants, r.Declared)
 	}
 }
 

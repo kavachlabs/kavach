@@ -86,7 +86,10 @@ the same on both tasks.
    `kavach mcp` as a stdio MCP server.
 2. When the agent stops, a collect hook writes its change, everything since
    the commit it started from (including any commits it made), to
-   `/logs/artifacts/patch.diff`. Then the agent's container is stopped.
+   `/logs/artifacts/patch.diff`. In the arms with a contract, a second hook
+   copies its `contract.json`, `rounds.jsonl`, `rounds/`, `lock.json` and
+   `traffic.kavach` to `/logs/artifacts/contract/`. Then the agent's container
+   is stopped.
 3. The verifier runs in a new container from the grader image and gets only
    that patch. `test.sh` runs `grade.sh`: it applies the patch without changes
    to the hidden test files to the tree the agent started from, builds it,

@@ -203,6 +203,7 @@ One line of an attempt, in order:
 | `tokens`, `cost` | on `usage` steps only: that model call's tokens (same shape as the trial's, with `fresh`) and USD cost |
 | `kavach` | true for Kavach's MCP tools (names starting `kavach_`). Their title is `kavach <verb> <binary>`, e.g. `kavach diff ./src/redis-server` |
 | `verdict`, `passed`, `variants` | on Kavach steps whose output is JSON: the verdict (`fixed`, `invariant_violated(…)@73`, …), whether it passed, and for `diff`, `"49 of 64 variants reproduce on the old build · 49 of those pass"` |
+| `contract` | on contract checks (`kavach_contract_check`, or `kavach contract check --json` in a shell): the report's `round`, `streak`, `verdict`, `passed`, `detail`; `feature_steps`, the seqs of the `changed` ones and the `unreached` ones; the `invariants` the contract requires, those the build `declared` (in check order) and `missing_invariants`; `variant_candidates`, `variants_passed`, `variants_preexisting`; `variant_kinds`, by class of mutation (`field`, `pair`, `move`, `drop`, `duplicate`, `clock`), each `{candidates, passed, preexisting}`; and `variant_failures`, each `{id, kind, mutation, feature_seq, verdict, seq, detail}` with the mutation and detail cut to 600 bytes. Parsed from the whole output, before `detail` is cut |
 
 Title and detail are cut to 4000 bytes, ending in `…`. `mcp` covers MCP
 tools and any tool not listed above, such as `todowrite`.
@@ -402,6 +403,114 @@ verifier does not write one).
 - `tests` is `[]` when neither file lists any test; then `passed` and
   `failed` are 0. "1 of 8 XTRIM tests failed" is
   `failed` of `passed + failed`.
+
+### GET /api/trials/{job}/{trial}/invariants?names=a,b
+
+What the trial's service declares as invariants. Kavach knows an invariant
+only by its name, so this reads the source that declares them: the task's
+Kavach integration patch (the `*kavach*.patch` next to the Dockerfile its
+compose file builds) and the agent's patch on top. `names`, optional, are
+invariants the trial's contract checks named; they are looked for along with
+any the source declares.
+
+```json
+{"task": "httpx-deterministic-cookie-store-kavach-implement",
+ "sources": ["/…/tasks/httpx-deterministic-cookie-store/httpx-kavach.patch", "the agent's patch"],
+ "invariants": [
+   {"name": "cookie-limits",
+    "doc": "the store never holds more than max_cookies cookies.",
+    "doc_at": {"role": "doc", "path": "kavach_driver.py", "line": 173, "text": ""},
+    "code": [
+      {"role": "declaration", "path": "kavach_driver.py", "line": 427, "text": "…"},
+      {"role": "check", "path": "kavach_driver.py", "line": 437, "text": "def _limits(self) -> None:\n…"}]}]}
+```
+
+- `doc`: best effort, the docstring or comment that defines the name: a
+  definition list entry (`cookie-scope   every cookie…`, or the name alone
+  with its definition indented below) or a comment that starts with it
+  (`// alert-cooldown: …`). Absent when the source has none.
+- `code`: the `declaration`, the `check` function the declaration passes
+  (up to 40 lines), and up to four lines where it `fails`; `line` is the
+  first line of `text` in the patched file.
+- `agent`: on an invariant or a snippet, the agent's patch adds or changes
+  lines that name or describe it.
+- `note`: why `invariants` is empty, when it is.
+
+### GET /api/trials/{job}/{trial}/variants
+
+The rounds of the trial's contract checks and the failing variants they
+saved, read from the contract its collect hook copied out of the container
+(`artifacts/logs/artifacts/contract/`): `rounds.jsonl`, and
+`rounds/<round>/variant-NN.kavach` with the new build's replay of it in
+`variant-NN.json`.
+
+```json
+{"rounds": [
+   {"round": 3, "at": "2026-10-12T15:17:05Z", "build": "python -m kavach_driver", "verdict": "variant_failed(12)@103", "changed": 59}],
+ "variants": [
+   {"round": 4, "id": 12, "has_result": true, "verdict": "invariant_violated(cookie-limits)@103", "service": "httpx-cookies",
+    "variant": {"id": 12, "mutation": "input seq 148 delivered twice", "incident": 103, "failure": "invariant: cookie-limits"}}]}
+```
+
+- `rounds`: one per line of `rounds.jsonl`, in file order; lines that are
+  not JSON are skipped. `build` is cut to 600 bytes.
+- `variants`: by `round`, then `id`. `variant` is the journal header's
+  (SPEC.md §3.2): `mutation` names seqs of the contract's traffic,
+  `incident` is the seq of the varied feature input in the variant itself.
+  `has_result` is set when `variant-NN.json` exists, and `verdict` is its
+  verdict. `error` says why the journal or result could not be read.
+- A trial without a collected contract answers 200 with `[]` for both and a
+  `note`; so does one whose checks saved no variants.
+
+### GET /api/trials/{job}/{trial}/variants/{round}/{id}
+
+One saved variant, decoded into steps for stepping through it, next to what
+the new build did with it. `round` and `id` are integers (400 otherwise);
+404 when the variant is not there.
+
+```json
+{"round": 4, "id": 12, "service": "httpx-cookies", "start": "genesis",
+ "variant": {"id": 12, "mutation": "input seq 148 delivered twice", "incident": 103, "failure": "invariant: cookie-limits"},
+ "records": 105,
+ "steps": [
+   {"seq": 101, "source": "traffic", "position": "61",
+    "input": "{\"client\": \"shop\", …}", "input_base64": false,
+    "clock": [1791815821349495553], "random": 0,
+    "gateways": [{"gateway": "db", "request": "…", "response": "…", "error": ""}],
+    "config": [{"key": "MAX_COOKIES", "value": "50", "present": true, "source": "env"}],
+    "recorded": [],
+    "traffic": [{"sink": "client:shop", "data": "{\"error\":\"no client shop\"}"}], "traffic_seq": 148}],
+ "new": {"verdict": "invariant_violated(cookie-limits)@103", "status": "invariant_violated", "seq": 103,
+         "invariant": "cookie-limits", "detail": "client shop: holds 51 cookies, max_cookies=50",
+         "steps": [{"seq": 101, "outputs": [{"sink": "client:shop", "data": "{…}"}], "panic": "", "error": ""}]}}
+```
+
+- `steps`: one per input record, in journal order. The clock, random,
+  gateway, config, output and failure-marker records after an input belong
+  to its step. `clock` is each clock read's Unix nanoseconds; `random` counts
+  the random reads.
+- `recorded`: the step's output records. Kavach writes a variant without
+  outputs (it never happened), so this is normally `[]`. `traffic` and
+  `traffic_seq` are the outputs and seq of the same input (same source and
+  position) in the contract's `traffic.kavach`, when that was collected:
+  what the old build did with it in the recorded traffic, not in the
+  variant. `input_changed` is set when the variant's input data differs from
+  the traffic's (a field mutation). An input whose source and position
+  repeat in the traffic gets neither.
+- `marker`: `{kind, message}`, on the step whose record holds a failure
+  marker (`panic`, `error`, `invariant`, `crash`); absent otherwise.
+- `new`: the new build's replay (`variant-NN.json`), `null` when it was not
+  saved; `new_error` says why it could not be read. `verdict` is Kavach's
+  verdict string. Steps may also carry `crash`, `timeout` and
+  `synthesized_reads`.
+- Text: bytes that are valid UTF-8 are a string cut to 4000 bytes (with
+  `…`); others are the first 3000 bytes in base64 with a `_base64` flag set
+  (`input_base64`, `data_base64`, `request_base64`, `response_base64`,
+  `value_base64`). Output and gateway objects carry `local: true` for
+  local scope.
+- At most 2000 steps of the variant and of `new`; `truncated` is set when
+  there were more. `journal_truncated` is set when the file ends inside a
+  block (only its complete blocks are shown).
 
 ### POST /api/jobs
 

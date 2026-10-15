@@ -1,6 +1,9 @@
 // The web console of kavach bench: a client of the API in ../API.md, served
 // by the same server.
 
+import { checksOf, renderInvariantBand, renderInvariants } from "./invariants.js";
+import { closeReplay, renderReplay, replayKey } from "./replay.js";
+
 // The wordmark, as [kavach, bench] pairs, one per text line.
 const LOGO = [
   ["█  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █   ", "█    ▄▀▀▀ █▀▀▄ █▀▀▀ █   "],
@@ -97,7 +100,7 @@ function saveUIPrefs() {
 
 const initialPrefs = loadUIPrefs();
 
-const state = {
+export const state = {
   status: null, statusErr: "",
   tasks: null, tasksErr: "",
   jobs: null, jobsErr: "",
@@ -119,6 +122,13 @@ const state = {
   // tab: "general" | "keys" | "environment" | "shortcuts"
   settings: { open: false, tab: "general", data: null, loading: false, saving: false, err: "", msg: "", drafts: {}, reveal: {} },
   confirm: "", actionErr: "", note: "", noteErr: false, starting: false,
+  // The attempt inspector: its tab, and what the Invariants tab shows (round
+  // is an index into the attempt's checks, null for the latest).
+  inspTab: "steps", // "steps" | "invariants"
+  iv: { page: "results", inv: "", view: "radar", kind: null, variant: null, round: null },
+  // The replay scene (replay.js) in the left pane, while a saved variant is
+  // open: { job, trial, round, id, i } with i the step shown.
+  replay: null,
 };
 
 function applySidebarWidths() {
@@ -167,7 +177,7 @@ function svgPanelIcon(side = "right") {
   return svg;
 }
 
-function h(tag, attrs, ...kids) {
+export function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
@@ -183,7 +193,7 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
-async function api(path, opts) {
+export async function api(path, opts) {
   const resp = await fetch("/api" + path, opts);
   const text = await resp.text();
   let body = null;
@@ -311,6 +321,7 @@ async function onRoute() {
     state.sel = "";
     state.steps = null;
     state.stepsFor = "";
+    state.replay = null;
   }
   if (window.matchMedia("(max-width: 900px)").matches) state.side = false;
   renderAll();
@@ -732,9 +743,9 @@ function renderSide() {
   if (hadFocus) side.querySelector(".side-settings-btn").focus({ preventScroll: true });
 }
 
-// Settings modal: a rail of tabs on the left and one panel on the right, like
-// Antigravity's settings window and t3code's settings layout. Every way into
-// settings (the sidebar button, /settings, the missing-key banner) opens it.
+// Settings modal: a rail of tabs on the left and one panel on the right.
+// Every way into settings (the sidebar button, /settings, the missing-key
+// banner) opens it.
 const SETTINGS_TABS = [
   { id: "general", label: "General", desc: "Defaults for new benchmark runs. Changes apply to the run form right away." },
   { id: "keys", label: "API keys", desc: "Provider keys the agents use to call models." },
@@ -982,7 +993,7 @@ function settingsKeysTab() {
   return [
     settingsGroup(null, rows, ["Saved to ", h("code", {}, file), " with permissions 0600. Harbor passes them to the agent; they are never copied into task containers."]),
     h("form", { class: "settings-actions", onsubmit: saveSettingsKeys },
-      h("span", { class: state.settings.err ? "bad" : "ok", role: "status" }, state.settings.err || state.settings.msg || ""),
+      h("span", { class: state.settings.err ? "bad" : "ok", role: "status" }, state.settings.err || state.settings.msg),
       h("button", { type: "submit", id: "settings-save", class: "btn peach", disabled: state.settings.saving || !dirty },
         state.settings.saving ? "Saving…" : "Save keys")),
   ];
@@ -1061,7 +1072,7 @@ function renderSettingsModal() {
   }
 
   // Re-rendering replaces the DOM: keep the panel's scroll and the focused control.
-  const tab = SETTINGS_TABS.find((t) => t.id === state.settings.tab) || SETTINGS_TABS[0];
+  const tab = SETTINGS_TABS.find((t) => t.id === state.settings.tab);
   const prevPane = backdrop.querySelector(".settings-pane");
   const scroll = prevPane && backdrop.dataset.tab === tab.id ? prevPane.scrollTop : 0;
   const active = document.activeElement;
@@ -1217,7 +1228,7 @@ function renderAll() {
   renderView();
 }
 
-function renderView() {
+export function renderView() {
   const view = document.getElementById("view");
   if (current.view === "new") return renderNew(view);
   if (state.jobErr) {
@@ -2024,6 +2035,10 @@ function selected() {
 }
 
 async function select(t) {
+  if (state.sel !== trialKey(t)) {
+    state.iv = { ...state.iv, inv: "", kind: null, variant: null, round: null };
+    state.replay = null;
+  }
   state.sel = trialKey(t);
   state.steps = null;
   state.stepsFor = "";
@@ -2128,7 +2143,8 @@ function renderRuns(view) {
     return graded ? `${a || "all"} ${ts.filter((t) => t.status === "pass").length} of ${graded} passed` : `${a || "all"} none graded yet`;
   });
 
-  const left = h("div", { class: "pane" },
+  if (state.replay && !(sel && sel.id === state.replay.trial && sel.job === state.replay.job)) state.replay = null;
+  const left = state.replay ? renderReplay(sel) : h("div", { class: "pane" },
     kids,
     renderArmGuide(arms),
     h("div", { class: "tablewrap" }, table),
@@ -2148,9 +2164,13 @@ function renderRuns(view) {
     key: steps.dataset.key,
     open: [...steps.querySelectorAll("details[open]")].map((d) => d.dataset.i),
   };
+  const invs = document.querySelector(".invs");
+  const invKeep = invs && { key: invs.dataset.key, top: invs.scrollTop };
   view.replaceChildren(h("div", { class: `body ${state.rightSide ? "" : "noright"}` },
     left,
     sel ? renderAttempt(sel) : h("div", { class: "pane right-pane" }, makeResizeSash("right"))));
+  const invNow = document.querySelector(".invs");
+  if (invNow && invKeep && invKeep.key === invNow.dataset.key) invNow.scrollTop = invKeep.top;
   const now = document.querySelector(".steps");
   if (now) {
     if (keep && keep.key === now.dataset.key) {
@@ -2230,15 +2250,40 @@ function renderAttempt(t) {
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
 
+  const key = `${t.job}/${t.id}`;
+  const checks = state.stepsFor === key ? checksOf(state.steps) : [];
+  // Kavach's arms declare invariants even before, or without, a contract check.
+  const hasInv = checks.length > 0 || t.arm === "kavach" || t.arm === "kavach-implement";
+  // The Invariants tab shows the check itself, so the card and the band
+  // above it give their room to it.
+  const invTab = hasInv && state.inspTab === "invariants";
   const cmd = t.kavach ? (isContractTrial(t, t.kavach.verdict) ? "kavach contract check " : "kavach diff ") : "";
   const meta = t.kavach ? [t.kavach.features, t.kavach.variants].filter(Boolean).join(" · ") : "";
-  kids.push(h("div", { class: `kcard arm-${t.arm || "kavach"}` },
+  if (!invTab) kids.push(h("div", { class: `kcard arm-${t.arm || "kavach"}` },
     renderArmHintBar(t),
     t.kavach ? h("span", {}, h("span", { class: "peach m" }, cmd), h("b", { class: "m" }, t.kavach.verdict)) : h("span", { class: "dim" }, info.short),
     meta ? h("span", { class: "dim" }, meta) : null,
     t.kavach && t.kavach.old ? h("span", { class: "faint m" }, `old build: ${t.kavach.old}`) : null));
 
-  kids.push(renderSteps(t, job));
+  const openInv = () => { state.inspTab = "invariants"; renderView(); };
+  if (hasInv && Array.isArray(state.steps) && state.stepsFor === key) {
+    if (!invTab && checks.length) kids.push(renderInvariantBand(checks, openInv));
+    const tab = state.inspTab;
+    const last = checks[checks.length - 1];
+    const trips = last ? (last.variant_failures || []).length : 0;
+    const tabs = [
+      { id: "steps", label: "Steps", badge: state.steps.filter((s) => s.kind !== "usage").length },
+      { id: "invariants", label: "Invariants", badge: !last ? null : last.passed ? "pass" : trips ? `${trips} trip` : last.verdict.replace(/[(@].*$/, ""), tone: last && (last.passed ? "ok" : "bad") },
+    ];
+    kids.push(h("div", { class: "aux-tabs insp-tabs", role: "tablist", "aria-label": "Attempt" },
+      tabs.map((x) => h("button", {
+        type: "button", role: "tab", class: `aux-tab ${tab === x.id ? "on" : ""}`, "aria-selected": String(tab === x.id),
+        onclick: () => { state.inspTab = x.id; renderView(); },
+      }, h("span", {}, x.label), x.badge != null ? h("span", { class: `aux-tab-badge ${x.tone || ""}` }, x.badge) : null))));
+    kids.push(tab === "invariants" ? renderInvariants(t, checks) : renderSteps(t, job));
+  } else {
+    kids.push(renderSteps(t, job));
+  }
   if (finished(t)) kids.push(patchView(t));
   kids.push(h("div", { class: "actions" }, openInOpenCode(t, job), runControl(job)));
   return h("div", { class: "pane right-pane", "aria-hidden": String(!state.rightSide) }, kids);
@@ -2408,9 +2453,20 @@ function renderStep(s, i, isLastText) {
   if (s.kavach) label = "Kavach";
   const cls = `step ${s.kind}${s.kavach ? " kavach" : ""}`;
   const head = [h("span", { class: "k" }, label), h("span", { class: "t" }, title), ts];
-  const verdict = s.kavach && (s.verdict || s.variants) ? h("div", { class: "verdict" },
-    s.verdict ? h("span", { class: `pill ${s.passed ? "pass" : s.passed === false ? "fail" : "queued"}` }, s.verdict) : null,
-    s.variants ? h("span", { class: "dim" }, s.variants) : null) : null;
+  const verdict = (s.kavach || s.contract) && (s.verdict || s.variants || s.contract) ? h("div", { class: "verdict" },
+    s.verdict || s.contract ? h("span", { class: `pill ${(s.contract ? s.contract.passed : s.passed) ? "pass" : (s.contract || s.passed === false) ? "fail" : "queued"}` }, s.verdict || s.contract.verdict) : null,
+    s.variants ? h("span", { class: "dim" }, s.variants) : null,
+    s.contract ? h("button", {
+      type: "button", class: "link-btn",
+      onclick: () => {
+        const n = checksOf(state.steps).findIndex((c) => c.step === s);
+        state.inspTab = "invariants";
+        state.iv.page = "results";
+        state.iv.round = n < 0 || n === checksOf(state.steps).length - 1 ? null : n;
+        state.iv.variant = null;
+        renderView();
+      },
+    }, "See invariants") : null) : null;
   if (!s.detail) return h("div", { class: cls }, h("div", { class: "line" }, head), verdict);
   const detailText = s.kavach ? compactKavachJSON(s.detail) : s.detail;
   const body = s.kind === "edit" ? diffView(detailText) : h("pre", {}, detailText);
@@ -2675,6 +2731,7 @@ document.getElementById("menu").addEventListener("click", () => {
 });
 document.getElementById("title").addEventListener("click", toggleNav);
 document.addEventListener("keydown", (e) => {
+  if (!state.settings.open && current.view === "runs" && replayKey(e)) return;
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
     const k = e.key.toLowerCase();
     if (k === "b") {
@@ -2701,6 +2758,8 @@ document.addEventListener("keydown", (e) => {
     } else if (!document.getElementById("nav").hidden) {
       closeNav();
       document.getElementById("title").focus();
+    } else if (state.replay && current.view === "runs") {
+      closeReplay();
     } else if (state.side && window.matchMedia("(max-width: 900px)").matches) {
       state.side = false;
       renderSide();
