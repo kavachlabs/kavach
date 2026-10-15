@@ -30,6 +30,19 @@ type candidate struct {
 	steps    []vstep
 }
 
+// The classes of mutation a variant belongs to, in Meta.Variant.Kind.
+const (
+	KindField     = "field"     // one field or array element of the input changed, removed or added
+	KindPair      = "pair"      // two fields or elements changed together
+	KindMove      = "move"      // the input moved earlier
+	KindDrop      = "drop"      // earlier inputs dropped
+	KindDuplicate = "duplicate" // an earlier input delivered twice
+	KindClock     = "clock"     // every clock read shifted
+)
+
+// kinds names the classes candidates returns, in its order.
+var kinds = []string{KindField, KindPair, KindMove, KindDrop, KindDuplicate, KindClock}
+
 // Variants derives perturbed versions of the incident recorded in j: the
 // failing input with its JSON fields changed, removed or added; the failing
 // input moved earlier; earlier inputs dropped or delivered twice; and the clock
@@ -115,9 +128,9 @@ func interleave(meta journal.Meta, snap, env *journal.Record, targets [][][]cand
 	for i := 0; len(out) < MaxCandidates; i++ {
 		added := false
 		for _, classes := range targets {
-			for _, c := range classes {
+			for ci, c := range classes {
 				if i < len(c) && len(out) < MaxCandidates {
-					info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure}
+					info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure, Kind: kinds[ci]}
 					out = append(out, buildVariant(meta, snap, env, c[i].steps, info))
 					added = true
 				}

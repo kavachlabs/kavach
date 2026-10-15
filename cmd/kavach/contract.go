@@ -40,7 +40,9 @@ pass, regression@N, still_failing@N, invariant_violated(X)@N,
 nondeterministic@N, variant_failed(K)@N, unreached@N, missing_invariant(X),
 baseline_mismatch(V), unapproved, stale_lock. Exit status 0 only for pass.
 Each check is a round in DIR/rounds.jsonl; "streak" counts rounds in a row
-with the same outcome.
+with the same outcome. The round's failing variants are saved to DIR/variants/
+(replaced by each check) and kept in DIR/rounds/N/: variant-K.kavach and
+variant-K.json, the new build's replay of it.
 `
 
 func cmdContract(u ui, args []string, stdin io.Reader, stdout, stderr io.Writer) int {

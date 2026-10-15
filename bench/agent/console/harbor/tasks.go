@@ -22,8 +22,8 @@ type Task struct {
 
 // TaskArm is one Harbor task: one arm of a benchmark task.
 type TaskArm struct {
-	Arm         string `json:"arm"`                   // control, workflow, kavach, kavach-implement or ""
-	Task        string `json:"task"`                  // the Harbor task's name: redis-10068-kavach
+	Arm         string `json:"arm"`  // control, workflow, kavach, kavach-implement or ""
+	Task        string `json:"task"` // the Harbor task's name: redis-10068-kavach
 	Path        string `json:"path"`
 	Description string `json:"description,omitempty"` // arm description from task.toml
 }

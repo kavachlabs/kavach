@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
+	"github.com/kavachlabs/kavach/journal"
 )
 
 const testdata = "../harbor/testdata"
@@ -421,3 +422,49 @@ func TestSettings(t *testing.T) {
 	}
 }
 
+func TestVariantEndpoints(t *testing.T) {
+	jobs := copyJobs(t)
+	trial := "/api/trials/opencode-glm/redis-10068-kavach__Pass001"
+	rdir := filepath.Join(jobs, "opencode-glm", "redis-10068-kavach__Pass001", "artifacts", "logs", "artifacts", "contract", "rounds", "4")
+	if err := os.MkdirAll(rdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(rdir, "..", "..", "rounds.jsonl"), []byte(`{"round":4,"at":"2026-10-12T15:00:00Z","verdict":"variant_failed(12)@3","changed":1}`+"\n"), 0o644)
+	meta := journal.Meta{Service: "httpx-cookies", Start: journal.StartGenesis, Variant: &journal.Variant{ID: 12, Mutation: "input seq 1 delivered twice", Incident: 3, Failure: "invariant: cookie-limits"}}
+	recs := []journal.Record{
+		{Type: journal.TypeEnvironment, Flags: journal.FlagCritical, Seq: 0},
+		{Type: journal.TypeInput, Seq: 1, Source: "traffic", Position: "1", Data: []byte(`{"client":"c2"}`)},
+		{Type: journal.TypeClock, Seq: 2, UnixNanos: 1700000000000000000},
+		{Type: journal.TypeInput, Seq: 3, Source: "traffic", Position: "1", Data: []byte(`{"client":"c2"}`)},
+	}
+	if err := journal.WriteFile(filepath.Join(rdir, "variant-12.kavach"), meta, recs); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(rdir, "variant-12.json"), []byte(`{"status":"invariant_violated","seq":3,"invariant":"cookie-limits","detail":"too many","steps":[{"seq":1,"outputs":[]},{"seq":3,"outputs":[]}]}`), 0o644)
+	_, ts := newServer(t, Config{JobsDir: jobs})
+
+	var list harbor.VariantList
+	if code := get(t, ts.URL+trial+"/variants", &list); code != 200 || len(list.Rounds) != 1 || len(list.Variants) != 1 ||
+		list.Variants[0].Round != 4 || list.Variants[0].ID != 12 || !list.Variants[0].HasResult || list.Variants[0].Variant.Mutation != "input seq 1 delivered twice" {
+		t.Fatalf("%d %+v", code, list)
+	}
+	var none harbor.VariantList
+	if code := get(t, ts.URL+"/api/trials/opencode-glm/redis-10068-control__Run0001/variants", &none); code != 200 || len(none.Variants) != 0 || none.Note == "" {
+		t.Fatalf("%d %+v", code, none)
+	}
+	var v harbor.VariantReplay
+	if code := get(t, ts.URL+trial+"/variants/4/12", &v); code != 200 || len(v.Steps) != 2 || v.Steps[0].Clock[0] != 1700000000000000000 ||
+		v.New == nil || v.New.Verdict != "invariant_violated(cookie-limits)@3" {
+		t.Fatalf("%d %+v", code, v)
+	}
+	for path, want := range map[string]int{
+		trial + "/variants/4/3": 404, trial + "/variants/5/12": 404, "/api/trials/opencode-glm/nope/variants": 404,
+		"/api/trials/opencode-glm/nope/variants/4/12": 404, "/api/trials/..%2Fopencode-glm/x/variants": 404,
+		trial + "/variants/x/12": 400, trial + "/variants/4/1.5": 400, trial + "/variants/-1/12": 400,
+	} {
+		var e map[string]string
+		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {
+			t.Errorf("%s: %d %v", path, code, e)
+		}
+	}
+}

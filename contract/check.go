@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -37,12 +38,24 @@ type CheckOptions struct {
 // VariantFailure is a variant of a feature step that the new build failed.
 type VariantFailure struct {
 	ID       int     `json:"id"`
+	Kind     string  `json:"kind"` // the class of mutation: replay.KindField, ...
 	Mutation string  `json:"mutation"`
 	Feature  uint64  `json:"feature_seq"` // the feature input varied, as a seq of the variant
 	Verdict  string  `json:"verdict"`
 	Seq      *uint64 `json:"seq,omitempty"`
 	Detail   string  `json:"detail,omitempty"`
 	File     string  `json:"file,omitempty"`
+	// Saved is the round's own copy of the variant, under rounds/<round>/,
+	// next to the new build's replay of it (variant-NN.json).
+	Saved string `json:"saved,omitempty"`
+}
+
+// KindCount counts the variants of one class of mutation. Candidates =
+// Passed + Preexisting + the variant failures of that kind.
+type KindCount struct {
+	Candidates  int `json:"candidates"`
+	Passed      int `json:"passed"`
+	Preexisting int `json:"preexisting"`
 }
 
 // Report is the outcome of checking a build against a contract.
@@ -65,6 +78,10 @@ type Report struct {
 	Changed           []replay.Change `json:"changed"`
 	Unreached         []uint64        `json:"unreached"`
 	MissingInvariants []string        `json:"missing_invariants,omitempty"`
+	// Invariants are the invariants the contract requires; Declared, those
+	// the new build declares, in the order it checks them.
+	Invariants []string `json:"invariants,omitempty"`
+	Declared   []string `json:"declared,omitempty"`
 
 	VariantCandidates int `json:"variant_candidates"`
 	VariantsPassed    int `json:"variants_passed"`
@@ -72,6 +89,8 @@ type Report struct {
 	// feature input, and are not counted against the new build.
 	VariantsPreexisting int              `json:"variants_preexisting"`
 	VariantFailures     []VariantFailure `json:"variant_failures"`
+	// VariantKinds counts the variants of each class of mutation.
+	VariantKinds map[string]*KindCount `json:"variant_kinds,omitempty"`
 
 	// Round is this check's number in rounds.jsonl. Streak is how many
 	// rounds in a row, ending with this one, had the same outcome.
@@ -81,9 +100,10 @@ type Report struct {
 
 // Check replays the contract's traffic on the new build, sorts its steps
 // (SPEC.md §6.4) and checks variants of the feature steps. It records the
-// round in rounds.jsonl and saves failing variants under variants/.
+// round in rounds.jsonl and saves failing variants under variants/, and with
+// the new build's replay of each under rounds/<round>/.
 func (d *Dir) Check(o CheckOptions) (*Report, error) {
-	r := &Report{Lock: d.Lock(), Features: d.FeatureSeqs(), Changed: []replay.Change{}, Unreached: []uint64{}, VariantFailures: []VariantFailure{}}
+	r := &Report{Lock: d.Lock(), Features: d.FeatureSeqs(), Changed: []replay.Change{}, Unreached: []uint64{}, VariantFailures: []VariantFailure{}, Invariants: d.Contract.Invariants}
 	opts := replay.Options{Features: d.Features}
 	if o.Old != nil {
 		base, err := o.Old(d.Traffic, opts)
@@ -106,6 +126,7 @@ func (d *Dir) Check(o CheckOptions) (*Report, error) {
 		r.New = res.String()
 		r.Changed = append(r.Changed, res.Changed...)
 		r.Unreached = append(r.Unreached, res.Unreached...)
+		r.Declared = res.Invariants
 		for _, name := range d.Contract.Invariants {
 			if !contains(res.Invariants, name) {
 				r.MissingInvariants = append(r.MissingInvariants, name)
@@ -120,8 +141,10 @@ func (d *Dir) Check(o CheckOptions) (*Report, error) {
 			r.fail(res.String(), res.Detail)
 		}
 	}
+	var failed []failedVariant
 	if r.Verdict == "" && !o.NoVariants {
-		if err := d.checkVariants(r, o); err != nil {
+		var err error
+		if failed, err = d.checkVariants(r, o); err != nil {
 			return nil, err
 		}
 	}
@@ -139,6 +162,10 @@ func (d *Dir) Check(o CheckOptions) (*Report, error) {
 	if err := d.addRound(r, o); err != nil {
 		return nil, err
 	}
+	// After addRound: the round is known, and Saved stays out of the signature.
+	if err := d.saveRound(r, failed); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -148,12 +175,27 @@ func (r *Report) fail(verdict, detail string) {
 	}
 }
 
-func (d *Dir) checkVariants(r *Report, o CheckOptions) error {
+// failedVariant is a variant in Report.VariantFailures, with the new
+// build's replay of it.
+type failedVariant struct {
+	j   *journal.Journal
+	res *replay.Result
+}
+
+func (d *Dir) checkVariants(r *Report, o CheckOptions) ([]failedVariant, error) {
 	vs, err := replay.FeatureVariants(d.Traffic, d.Features)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r.VariantCandidates = len(vs)
+	r.VariantKinds = map[string]*KindCount{}
+	for _, v := range vs {
+		k := v.Header.Meta.Variant.Kind
+		if r.VariantKinds[k] == nil {
+			r.VariantKinds[k] = &KindCount{}
+		}
+		r.VariantKinds[k].Candidates++
+	}
 	results := make([]*replay.Result, len(vs))
 	errs := make([]error, len(vs))
 	sem := make(chan struct{}, max(o.Parallel, 1))
@@ -169,36 +211,40 @@ func (d *Dir) checkVariants(r *Report, o CheckOptions) error {
 	wg.Wait()
 	vdir := filepath.Join(d.Path, DirVariants)
 	os.RemoveAll(vdir)
+	var failed []failedVariant
 	for i, res := range results {
 		if errs[i] != nil {
-			return fmt.Errorf("new build, variant %d: %w", i+1, errs[i])
-		}
-		if res.Passed() {
-			r.VariantsPassed++
-			continue
+			return nil, fmt.Errorf("new build, variant %d: %w", i+1, errs[i])
 		}
 		info := vs[i].Header.Meta.Variant
+		if res.Passed() {
+			r.VariantsPassed++
+			r.VariantKinds[info.Kind].Passed++
+			continue
+		}
 		// A failure the base build has too, before the feature input, is not
 		// the new build's doing: the variant broke behaviour that predates it.
 		if o.Old != nil && res.Seq != nil && *res.Seq < info.Incident {
 			old, err := o.Old(vs[i], replay.Options{})
 			if err != nil {
-				return fmt.Errorf("old build, variant %d: %w", info.ID, err)
+				return nil, fmt.Errorf("old build, variant %d: %w", info.ID, err)
 			}
 			if old.String() == res.String() {
 				r.VariantsPreexisting++
+				r.VariantKinds[info.Kind].Preexisting++
 				continue
 			}
 		}
-		f := VariantFailure{ID: info.ID, Mutation: info.Mutation, Feature: info.Incident, Verdict: res.String(), Seq: res.Seq, Detail: res.Detail}
+		f := VariantFailure{ID: info.ID, Kind: info.Kind, Mutation: info.Mutation, Feature: info.Incident, Verdict: res.String(), Seq: res.Seq, Detail: res.Detail}
 		if err := os.MkdirAll(vdir, 0o755); err != nil {
-			return err
+			return nil, err
 		}
 		f.File = filepath.Join(vdir, fmt.Sprintf("variant-%02d.kavach", info.ID))
 		if err := journal.WriteFile(f.File, vs[i].Header.Meta, vs[i].Records); err != nil {
-			return err
+			return nil, err
 		}
 		r.VariantFailures = append(r.VariantFailures, f)
+		failed = append(failed, failedVariant{vs[i], res})
 	}
 	if len(r.VariantFailures) > 0 {
 		f := r.VariantFailures[0]
@@ -207,6 +253,33 @@ func (d *Dir) checkVariants(r *Report, o CheckOptions) error {
 			v += fmt.Sprintf("@%d", *f.Seq)
 		}
 		r.fail(v, fmt.Sprintf("variant %d (%s): %s", f.ID, f.Mutation, f.Verdict))
+	}
+	return failed, nil
+}
+
+// saveRound writes each failing variant and the new build's replay of it to
+// rounds/<round>/, replacing whatever an earlier contract left there.
+func (d *Dir) saveRound(r *Report, failed []failedVariant) error {
+	rdir := filepath.Join(d.Path, DirRounds, strconv.Itoa(r.Round))
+	if err := os.RemoveAll(rdir); err != nil {
+		return err
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(rdir, 0o755); err != nil {
+		return err
+	}
+	for i, fv := range failed {
+		f := &r.VariantFailures[i]
+		base := filepath.Join(rdir, fmt.Sprintf("variant-%02d", f.ID))
+		if err := journal.WriteFile(base+".kavach", fv.j.Header.Meta, fv.j.Records); err != nil {
+			return err
+		}
+		if err := writeJSON(base+".json", fv.res); err != nil {
+			return err
+		}
+		f.Saved = base + ".kavach"
 	}
 	return nil
 }
