@@ -17,6 +17,10 @@ type Grade struct {
 	Passed int             `json:"passed"`
 	Failed int             `json:"failed"`
 	Tests  []TestResult    `json:"tests"`
+	// AgentDiff is the verdict of the last kavach diff the agent ran itself,
+	// in its container. When it differs from the verifier's, one of the two
+	// builds is not the code the other checked.
+	AgentDiff string `json:"agent_diff,omitempty"`
 }
 
 // TestResult is one test the verifier ran.
@@ -74,6 +78,13 @@ func (r *Reader) Grade(job, id string) (Grade, error) {
 			g.Passed++
 		} else {
 			g.Failed++
+		}
+	}
+	if steps, err := readSteps(dir); err == nil {
+		for _, s := range steps {
+			if isDiff(s) && s.Verdict != "" {
+				g.AgentDiff = s.Verdict
+			}
 		}
 	}
 	return g, nil

@@ -2427,6 +2427,18 @@ function kavachLine(t) {
   return `${cmd} ${verdict}${t.arm === "control" || t.arm === "workflow" ? " · checked after the run" : ""}`;
 }
 
+// disagreement says when the agent's own last kavach diff, run in its
+// container, gave a different verdict from the verifier's.
+function disagreement(t) {
+  const g = state.grades.get(`${t.job}/${t.id}`);
+  if (!g || !g.agent_diff || !t.kavach || !t.kavach.verdict || isContractTrial(t, t.kavach.verdict)) return null;
+  const status = (v) => v.replace(/[(@].*/, "");
+  if (status(g.agent_diff) === status(t.kavach.verdict)) return null;
+  return h("div", { class: "warn-line" },
+    "The agent's last kavach diff said ", h("b", { class: "m" }, g.agent_diff), "; the verifier's said ", h("b", { class: "m" }, t.kavach.verdict),
+    ". Either the code changed after that diff, or the two builds differ.");
+}
+
 function renderAttempt(t) {
   const job = state.job;
   const multi = isMultiTaskJob(job);
@@ -2449,6 +2461,8 @@ function renderAttempt(t) {
   if (t.error) kids.push(errorView(t));
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
+  const dis = disagreement(t);
+  if (dis) kids.push(dis);
 
   const key = `${t.job}/${t.id}`;
   const checks = state.stepsFor === key ? checksOf(state.steps) : [];
@@ -2924,6 +2938,8 @@ function attemptCard(t, job, multi = false) {
   if (kl) lines.push(h("div", { class: "dim m" }, kl + (t.kavach && t.kavach.variants ? ` · ${t.kavach.variants}` : "")));
   const gl = gradeLine(t);
   if (gl) lines.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
+  const dis = disagreement(t);
+  if (dis) lines.push(dis);
   if (t.error) lines.push(errorView(t));
   lines.push(cardMeta(t));
   const oc = openInOpenCode(t, job);

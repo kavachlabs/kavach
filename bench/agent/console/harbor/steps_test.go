@@ -194,3 +194,38 @@ func TestContractCheckSteps(t *testing.T) {
 		t.Errorf("text output parsed as a report: %+v", s.Contract)
 	}
 }
+
+func TestKavachCLISteps(t *testing.T) {
+	const report = "\x1b[1mKAVACH DIFF\x1b[0m\n" +
+		"fixture   /task/incident.kavach\n" +
+		"variants  43 of 64 reproduce the incident on the old build · 43 of those pass on the new build\n" +
+		"verdict   \x1b[1;32mfixed\x1b[0m\n" +
+		"wall      812.0 ms for 113 replays\n"
+	cases := []struct {
+		cmd, out, verdict string
+		passed, diff      bool
+	}{
+		{"kavach diff /task/incident.kavach --old /opt/old --new ./src/redis-server", report, "fixed", true, true},
+		{"cd /work && /usr/local/bin/kavach replay x.kavach --bin ./a 2>&1 | tail -5", "result    still_failing@12\n", "still_failing@12", false, false},
+		{"kavach replay x.kavach --bin ./a --json", `{"verdict":"invariant_violated(balance)@69","passed":false}`, "invariant_violated(balance)@69", false, false},
+		{"kavach replay x.kavach --bin ./a --json | jq .verdict", `"fixed"`, "", false, false},
+		{"kavach inspect x.kavach --full | head", "seq 1 input …", "", false, false},
+	}
+	for _, c := range cases {
+		s := toolStep("bash", map[string]any{"command": c.cmd}, c.out, nil)
+		if !s.Kavach || s.Verdict != c.verdict || (c.verdict != "" && (s.Passed == nil || *s.Passed != c.passed)) || isDiff(s) != c.diff {
+			t.Errorf("%s: kavach %v verdict %q passed %v diff %v", c.cmd, s.Kavach, s.Verdict, s.Passed, isDiff(s))
+		}
+		if c.verdict == "" && s.Passed != nil {
+			t.Errorf("%s: passed %v without a verdict", c.cmd, *s.Passed)
+		}
+	}
+	if s := toolStep("bash", map[string]any{"command": "kavach diff x --old a --new b"}, report, nil); !strings.HasPrefix(s.Variants, "43 of 64") {
+		t.Errorf("variants %q", s.Variants)
+	}
+	for _, cmd := range []string{"grep -rn kavach src/", "ls ~/kavach-old", "# then run the kavach replay\nmake -j4"} {
+		if s := toolStep("bash", map[string]any{"command": cmd}, "", nil); s.Kavach {
+			t.Errorf("%q marked as a Kavach step", cmd)
+		}
+	}
+}

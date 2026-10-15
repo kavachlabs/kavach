@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,8 +38,10 @@ type Step struct {
 	Tokens *Tokens  `json:"tokens,omitempty"`
 	Cost   *float64 `json:"cost,omitempty"`
 
-	// For Kavach's MCP tools (named kavach_*). Verdict and Passed are set when
-	// the tool's output is JSON with a status or verdict.
+	// For Kavach's MCP tools (named kavach_*) and the kavach CLI run in a
+	// shell. Verdict and Passed are set when the output carries a verdict:
+	// JSON with a status or verdict, or the report of the CLI's replay or
+	// diff.
 	Kavach   bool   `json:"kavach,omitempty"`
 	Verdict  string `json:"verdict,omitempty"`
 	Passed   *bool  `json:"passed,omitempty"`
@@ -342,10 +345,16 @@ func toolStep(name string, in map[string]any, out string, meta map[string]any) S
 			c := int(code)
 			s.Exit = &c
 		}
-		if strings.Contains(s.Title, "kavach contract check") {
-			if c := contractCheck(s.Detail); c != nil {
-				s.Contract, s.Verdict = c, c.Verdict
-				s.Passed = &c.Passed
+		if m := kavachCommand(s.Title); m != nil {
+			s.Kavach = true
+			switch {
+			case strings.Contains(s.Title, "kavach contract check"):
+				if c := contractCheck(s.Detail); c != nil {
+					s.Contract, s.Verdict = c, c.Verdict
+					s.Passed = &c.Passed
+				}
+			case m[1] == "replay" || m[1] == "diff":
+				cliVerdict(&s)
 			}
 		}
 	case "read":
@@ -409,6 +418,17 @@ func kavachStep(s *Step, in map[string]any, out string) {
 	if arg := str(in["new"]) + str(in["bin"]); arg != "" {
 		s.Title += " " + arg
 	}
+	if !kavachJSON(s, out) {
+		return
+	}
+	if strings.HasSuffix(s.Tool, "contract_check") {
+		s.Contract = contractCheck(out)
+	}
+}
+
+// kavachJSON reads the verdict from a JSON report of a replay or diff, and
+// says whether out was one.
+func kavachJSON(s *Step, out string) bool {
 	var r struct {
 		Status   string `json:"status"`
 		Verdict  string `json:"verdict"`
@@ -420,10 +440,7 @@ func kavachStep(s *Step, in map[string]any, out string) {
 		} `json:"variants"`
 	}
 	if json.Unmarshal([]byte(out), &r) != nil {
-		return
-	}
-	if strings.HasSuffix(s.Tool, "contract_check") {
-		s.Contract = contractCheck(out)
+		return false
 	}
 	s.Verdict = r.Status
 	if s.Verdict == "" {
@@ -433,6 +450,64 @@ func kavachStep(s *Step, in map[string]any, out string) {
 	if v := r.Variants; v != nil && v.Candidates > 0 {
 		s.Variants = fmt.Sprintf("%d of %d variants reproduce on the old build · %d of those pass", v.Reproducing, v.Candidates, v.Passing)
 	}
+	return true
+}
+
+var (
+	// kavachCLI matches a shell command that runs the kavach CLI, with or
+	// without a path and global flags; the group is its subcommand.
+	kavachCLI = regexp.MustCompile(`(?:^|[\s;&|(])(?:[\w./-]*/)?kavach(?:\s+--[\w-]+)*\s+(inspect|replay|diff|list|contract)\b`)
+	// cliLine is a line of the CLI's report that names the verdict (replay
+	// prints it as result) or the variants.
+	cliLine = regexp.MustCompile(`^(verdict|result|variants)\s+(.+?)\s*$`)
+	ansiEsc = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+)
+
+// cliVerdict reads the verdict of the CLI's replay or diff from its output:
+// the --json report, or the report it prints. Output piped elsewhere leaves
+// none.
+func cliVerdict(s *Step) {
+	out := strings.TrimSpace(ansiEsc.ReplaceAllString(s.Detail, ""))
+	if kavachJSON(s, out) {
+		return
+	}
+	for _, l := range strings.Split(out, "\n") {
+		m := cliLine.FindStringSubmatch(l)
+		switch {
+		case m == nil:
+		case m[1] == "variants":
+			s.Variants = m[2]
+		default:
+			s.Verdict = m[2]
+		}
+	}
+	if s.Verdict != "" {
+		p := s.Verdict == "fixed" || s.Verdict == "ok"
+		s.Passed = &p
+	}
+}
+
+// kavachCommand matches kavachCLI against the lines of a shell command that
+// are not comments: agents mention the CLI in comments too.
+func kavachCommand(cmd string) []string {
+	for _, l := range strings.Split(cmd, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+			continue
+		}
+		if m := kavachCLI.FindStringSubmatch(l); m != nil {
+			return m
+		}
+	}
+	return nil
+}
+
+// isDiff says whether s is a `kavach diff`, as a tool or on the command line.
+func isDiff(s Step) bool {
+	if s.Kind == KindShell {
+		m := kavachCommand(s.Title)
+		return m != nil && m[1] == "diff"
+	}
+	return s.Kavach && strings.HasSuffix(s.Tool, "kavach_diff")
 }
 
 func str(v any) string {

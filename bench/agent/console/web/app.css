@@ -18,6 +18,8 @@
   --bad-bg: rgba(240, 82, 82, 0.13);
   --peach: #f5a97f;
   --peach-bg: rgba(245, 169, 127, 0.12);
+  --warn: #e8b84a;
+  --warn-bg: rgba(232, 184, 74, 0.11);
   --blue: #68a0f6;
   --blue-bg: rgba(104, 160, 246, 0.12);
   --teal: #34c3ac;
@@ -1793,6 +1795,15 @@ table.mx {
   border-radius: 6px;
   padding: 6px 10px;
 }
+.warn-line {
+  color: var(--warn);
+  font-size: 12.5px;
+  background: var(--warn-bg);
+  border: 1px solid rgba(232, 184, 74, 0.28);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.warn-line b { color: var(--text); font-weight: 500; }
 details.err-more > summary { cursor: pointer; }
 details.err-more > pre {
   margin: 6px 0 0;
