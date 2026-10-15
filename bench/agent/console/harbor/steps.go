@@ -504,6 +504,18 @@ func kavachCommand(cmd string) []string {
 	return nil
 }
 
+// agentDiff is the verdict of the last kavach diff among steps that printed
+// one.
+func agentDiff(steps []Step) string {
+	v := ""
+	for _, s := range steps {
+		if isDiff(s) && s.Verdict != "" {
+			v = s.Verdict
+		}
+	}
+	return v
+}
+
 // isDiff says whether s is a `kavach diff`, as a tool or on the command line.
 func isDiff(s Step) bool {
 	if s.Kind == KindShell {

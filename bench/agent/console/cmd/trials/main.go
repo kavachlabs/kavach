@@ -5,12 +5,14 @@
 //	trials -jobs ../results/harbor -fixtures /tmp/trials 2026-10-15__15-47-13
 //
 // feeds the finished attempts of the named jobs (all of them if none is
-// named) to the reader, in the order they finished, through the flight
+// named) to the reader (with -steps, harbor.StepsReader, which reads their
+// steps), in the order they finished, through the flight
 // recorder (kavach-recorder, found through $KAVACH_RECORDER or PATH). An
 // attempt the reader gets wrong stops it, and the recorder writes a fixture.
 // With "kavach-host" as its last argument it serves the kavach CLI instead:
 //
-//	kavach replay testdata/provider-error.kavach --bin ./trials
+//	kavach replay harbor/testdata/kavach/provider-error.kavach --bin ./trials
+//	kavach replay harbor/testdata/kavach/steps/cli-steps.kavach --bin "./trials -steps"
 package main
 
 import (
@@ -29,22 +31,29 @@ import (
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
-// logEvents is how many of OpenCode's last events an input keeps.
+// logEvents is how many of OpenCode's last events an input keeps, besides
+// its Kavach tool calls.
 const logEvents = 8
 
 func main() {
-	kavach.MaybeReplay(func() kavach.Handler { return &harbor.TrialReader{} })
-
 	jobs := flag.String("jobs", "../results/harbor", "Harbor's jobs directory")
 	dir := flag.String("fixtures", "", "directory for the journal; fixtures go in its fixtures/ subdirectory (default kavach)")
+	steps := flag.Bool("steps", false, "run the steps reader (harbor.StepsReader) instead of the trial reader")
 	flag.Parse()
+	reader := func() kavach.Handler { return &harbor.TrialReader{} }
+	service := "trials"
+	if *steps {
+		reader = func() kavach.Handler { return &harbor.StepsReader{} }
+		service = "steps"
+	}
+	kavach.MaybeReplay(reader)
 
 	attempts, err := finished(*jobs, flag.Args())
 	if err != nil {
 		log.Fatal(err)
 	}
-	rec := kavach.NewRecorder(&harbor.TrialReader{}, kavach.Options{
-		Service:   "trials",
+	rec := kavach.NewRecorder(reader(), kavach.Options{
+		Service:   service,
 		Dir:       *dir,
 		OnFixture: func(file, failure string) { fmt.Printf("fixture %s\n  %s\n", file, failure) },
 	})
@@ -109,7 +118,7 @@ func finished(root string, names []string) ([]attempt, error) {
 			if b, err := os.ReadFile(filepath.Join(d, "verifier", "kavach.json")); err == nil {
 				a.Kavach = compact(b)
 			}
-			a.Log = lastEvents(filepath.Join(d, "agent", "opencode.txt"), logEvents)
+			a.Log = events(filepath.Join(d, "agent", "opencode.txt"), logEvents)
 			out = append(out, a)
 		}
 	}
@@ -134,23 +143,67 @@ func compact(b []byte) json.RawMessage {
 	return bytes.ReplaceAll(c.Bytes(), []byte(home), []byte("~"))
 }
 
-// lastEvents returns the last n events of an OpenCode log that are JSON.
-func lastEvents(path string, n int) []json.RawMessage {
+// events returns, in order, the events of an OpenCode log that call a tool
+// with "kavach" in them, and its last n events.
+func events(path string, n int) []json.RawMessage {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	var evs []json.RawMessage
+	var all []json.RawMessage
+	var keep []bool
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
-		if c := compact(sc.Bytes()); c != nil {
-			evs = append(evs, c)
-			if len(evs) > n {
-				evs = evs[1:]
-			}
+		c := compact(sc.Bytes())
+		if c == nil {
+			continue
+		}
+		var ev struct {
+			Type string `json:"type"`
+		}
+		json.Unmarshal(c, &ev)
+		kavach := ev.Type == "tool_use" && bytes.Contains(c, []byte("kavach"))
+		if kavach {
+			c = trimTool(c)
+		}
+		all = append(all, c)
+		keep = append(keep, kavach)
+	}
+	var out []json.RawMessage
+	for i, c := range all {
+		if keep[i] || i >= len(all)-n {
+			out = append(out, c)
 		}
 	}
-	return evs
+	return out
+}
+
+// trimTool drops what the reader never reads from a tool event: the
+// model's reasoning metadata, and the copy of the output OpenCode keeps in
+// state.metadata. The reader prefers that copy, so it goes only when it is
+// the same as state.output.
+func trimTool(c json.RawMessage) json.RawMessage {
+	var ev map[string]json.RawMessage
+	var part map[string]json.RawMessage
+	if json.Unmarshal(c, &ev) != nil || json.Unmarshal(ev["part"], &part) != nil {
+		return c
+	}
+	delete(part, "metadata")
+	var state map[string]json.RawMessage
+	if json.Unmarshal(part["state"], &state) == nil {
+		var meta map[string]json.RawMessage
+		if json.Unmarshal(state["metadata"], &meta) == nil && bytes.Equal(meta["output"], state["output"]) {
+			delete(meta, "output")
+			state["metadata"], _ = json.Marshal(meta)
+			part["state"], _ = json.Marshal(state)
+		}
+	}
+	ev["part"], _ = json.Marshal(part)
+	out, err := json.Marshal(ev)
+	if err != nil {
+		return c
+	}
+	return out
 }
