@@ -506,7 +506,17 @@ function replayBtn(rv, f, round = rv.round) {
 function renderSaved(m, rv) {
   const here = (v) => v.round === rv.round;
   const list = [...rv.sv.list.filter(here), ...rv.sv.list.filter((v) => !here(v)).sort((a, b) => b.round - a.round || a.id - b.id)];
-  if (!list.length) return null;
+  // Kavach saves a variant only when the new build fails it, so a build
+  // that held every variant leaves nothing to replay; say so, rather than
+  // leave the replay scene with no way in.
+  if (!list.length) {
+    if (rv.sv.loading) return null;
+    return h("section", { class: "inv-sec-box" },
+      h("div", { class: "inv-sec-head" }, h("span", { class: "inv-sec" }, "Replay")),
+      h("span", { class: "dim" }, rv.sv.error
+        ? `The saved variants could not be read: ${rv.sv.error}`
+        : "No variant failed in any round, so none was saved to step through. A variant the new build fails is saved and can be replayed here."));
+  }
   const byId = new Map(m.failures.map((f) => [f.id, f]));
   const n = list.filter(here).length;
   return h("section", { class: "inv-sec-box" },
