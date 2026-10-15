@@ -17,3 +17,16 @@ import (
 func TestKavachFixtures(t *testing.T) {
 	kavachtest.Run(t, "testdata/kavach/*.kavach", func() kavach.Handler { return &TrialReader{} })
 }
+
+// Fixtures of the steps reader, recorded the same way with
+// cmd/trials -steps, from the same job.
+//
+// steps/cli-steps.kavach: read with only kavach contract check marked
+// among shell steps. Attempt t88x7wA ran kavach replay and diff in the
+// shell, and its steps were not marked as Kavach's.
+//
+// steps/agent-diff.kavach: read with agentDiff returning "". The grade
+// reported no verdict of the agent's own for t88x7wA, which ran kavach diff.
+func TestKavachStepsFixtures(t *testing.T) {
+	kavachtest.Run(t, "testdata/kavach/steps/*.kavach", func() kavach.Handler { return &StepsReader{} })
+}

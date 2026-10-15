@@ -81,11 +81,7 @@ func (r *Reader) Grade(job, id string) (Grade, error) {
 		}
 	}
 	if steps, err := readSteps(dir); err == nil {
-		for _, s := range steps {
-			if isDiff(s) && s.Verdict != "" {
-				g.AgentDiff = s.Verdict
-			}
-		}
+		g.AgentDiff = agentDiff(steps)
 	}
 	return g, nil
 }

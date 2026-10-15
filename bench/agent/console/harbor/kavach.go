@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing/fstest"
 
 	kavach "github.com/kavachlabs/kavach/sdk/go"
@@ -16,8 +18,9 @@ import (
 // (cmd/trials records them).
 
 // AttemptInput is an attempt's files, as one Kavach input. Each field holds a
-// file Harbor writes, and Log the last events of OpenCode's log: the reader
-// needs no more of it to classify the attempt, and whole logs run to MBs.
+// file Harbor writes, and Log the events of OpenCode's log that the reader
+// is checked on: the agent's Kavach tool calls, and the last few events,
+// which say how the run ended. Whole logs run to MBs.
 type AttemptInput struct {
 	Job    string            `json:"job"`
 	ID     string            `json:"id"`
@@ -57,6 +60,92 @@ type seenTrial struct {
 	trial Trial
 	// What the invariants read from the input itself, not from the trial.
 	exception, logEndsOnError bool
+}
+
+// StepsReader reads attempts' steps as the console's steps view and grade
+// do. It is a service of its own so that its outputs and fixtures do not
+// change TrialReader's.
+type StepsReader struct {
+	seen []seenSteps
+}
+
+type seenSteps struct {
+	id        string
+	steps     []Step
+	agentDiff string
+}
+
+// Handle reads one attempt's steps and emits its Kavach steps on "steps".
+func (r *StepsReader) Handle(env kavach.Env, in kavach.Input) error {
+	var a AttemptInput
+	if err := json.Unmarshal(in.Data, &a); err != nil {
+		return fmt.Errorf("attempt: %w", err)
+	}
+	steps, err := stepsFrom(a.files())
+	if err != nil {
+		return err
+	}
+	ks := KavachSteps{Steps: []KavachStep{}, AgentDiff: agentDiff(steps)}
+	for _, st := range steps {
+		if st.Kavach {
+			ks.Steps = append(ks.Steps, KavachStep{Title: clipTo(st.Title, 120), Verdict: st.Verdict})
+		}
+	}
+	b, err := json.Marshal(ks)
+	if err != nil {
+		return err
+	}
+	env.Emit("steps", b)
+	r.seen = append(r.seen, seenSteps{id: a.ID, steps: steps, agentDiff: ks.AgentDiff})
+	return nil
+}
+
+// Invariants are the console's rules for Kavach steps.
+func (r *StepsReader) Invariants() []kavach.Invariant {
+	return []kavach.Invariant{
+		{Name: "kavach-report-shown", Check: func() error {
+			// Read from the output, not the command: whatever ran it, a
+			// report of the CLI's replay or diff is a Kavach step.
+			for _, s := range r.seen {
+				for _, st := range s.steps {
+					if st.Kind != KindShell {
+						continue
+					}
+					if v := reportVerdict(st.Detail); v != "" && (!st.Kavach || st.Verdict != v) {
+						return fmt.Errorf("%s: %q printed Kavach's verdict %s; the step shows kavach %v, verdict %q", s.id, clipTo(st.Title, 80), v, st.Kavach, st.Verdict)
+					}
+				}
+			}
+			return nil
+		}},
+		{Name: "agent-diff-is-last-diff", Check: func() error {
+			for _, s := range r.seen {
+				want := ""
+				for _, st := range s.steps {
+					if st.Kavach && st.Verdict != "" && (st.Kind == KindShell && strings.Contains(st.Title, "kavach diff") || strings.HasSuffix(st.Tool, "kavach_diff")) {
+						want = st.Verdict
+					}
+				}
+				if s.agentDiff != want {
+					return fmt.Errorf("%s: the agent's last kavach diff said %q; the grade reports %q", s.id, want, s.agentDiff)
+				}
+			}
+			return nil
+		}},
+	}
+}
+
+// KavachSteps is what the console makes of an attempt's Kavach steps: the
+// steps it marks, and the verdict the grade reports as the agent's own.
+type KavachSteps struct {
+	Steps     []KavachStep `json:"steps"`
+	AgentDiff string       `json:"agent_diff,omitempty"`
+}
+
+// KavachStep is one step marked as Kavach's.
+type KavachStep struct {
+	Title   string `json:"title"`
+	Verdict string `json:"verdict,omitempty"`
 }
 
 // Handle reads one attempt and emits its trial on the "trial" sink.
@@ -120,6 +209,25 @@ func (r *TrialReader) Invariants() []kavach.Invariant {
 			return nil
 		}},
 	}
+}
+
+// reportLine is a line of the kavach CLI's report: its fixture, or its
+// verdict (replay prints it as result).
+var reportLine = regexp.MustCompile(`(?m)^(fixture|verdict|result)\s+(\S+)\s*$`)
+
+// reportVerdict is the verdict in the report of the CLI's replay or diff
+// that out holds, or "" when out holds none.
+func reportVerdict(out string) string {
+	fixture, v := false, ""
+	for _, m := range reportLine.FindAllStringSubmatch(ansiEsc.ReplaceAllString(out, ""), -1) {
+		switch {
+		case m[1] == "fixture":
+			fixture = strings.HasSuffix(m[2], ".kavach")
+		case fixture:
+			v = m[2]
+		}
+	}
+	return v
 }
 
 func rewardText(r *float64) string {
