@@ -12,6 +12,10 @@ const (
 	// StatusVariantFailed: the fix passes the recorded incident, but the new
 	// build fails a variant of it that the old build failed in the same way.
 	StatusVariantFailed Status = "variant_failed"
+	// StatusRegressed: the fix passes the recorded incident and its variants,
+	// but the new build handles a variant of an earlier, similar input
+	// differently from the old build, which handled it without failing.
+	StatusRegressed Status = "regressed"
 	// StatusUnverified: the fix passes the recorded incident, but too few
 	// variants reproduce the incident on the old build to check it further.
 	StatusUnverified Status = "unverified"
@@ -19,6 +23,9 @@ const (
 
 // DefaultMinVariants is the number of variants a fix must pass.
 const DefaultMinVariants = 10
+
+// DefaultRegressions is the number of regression variants generated.
+const DefaultRegressions = MaxRegressionCandidates
 
 // VerifyOptions configure Verify.
 type VerifyOptions struct {
@@ -29,6 +36,9 @@ type VerifyOptions struct {
 	// Parallel is how many variants are checked at once. Values below 1 mean
 	// one. The result does not depend on it.
 	Parallel int
+	// Regressions is how many regression variants (see RegressionVariants) are
+	// generated. Zero means DefaultRegressions; a negative value skips them.
+	Regressions int
 }
 
 // ReplayFunc replays a journal against one build of a handler.
@@ -51,6 +61,24 @@ type VariantCheck struct {
 	Journal *journal.Journal `json:"-"`
 }
 
+// RegressionCheck is how one variant of an earlier input that resembles the
+// failing one fared.
+type RegressionCheck struct {
+	ID       int    `json:"id"`
+	Mutation string `json:"mutation"`
+	Input    uint64 `json:"input_seq"` // the perturbed earlier input, in the variant
+	// Counted is true when the old build replays the variant as ok. Only those
+	// variants say anything about the fix.
+	Counted bool    `json:"counted"`
+	Old     string  `json:"old"`
+	New     string  `json:"new,omitempty"`
+	Passed  bool    `json:"passed"`
+	Seq     *uint64 `json:"seq,omitempty"` // where the new build's outputs first differ
+	Detail  string  `json:"detail,omitempty"`
+	// Journal is the variant itself.
+	Journal *journal.Journal `json:"-"`
+}
+
 // Verification is the outcome of checking a candidate fix against an incident.
 type Verification struct {
 	Status  Status  `json:"status"`
@@ -67,6 +95,15 @@ type Verification struct {
 	Reproducing int            `json:"reproducing"`
 	Passing     int            `json:"passing"`
 	Variants    []VariantCheck `json:"variants"`
+
+	// Regression is the first regression variant the new build changed.
+	Regression int `json:"regression,omitempty"`
+	// Neighbours is the number of earlier inputs that resemble the failing one.
+	Neighbours           int               `json:"neighbours"`
+	RegressionCandidates int               `json:"regression_candidates"`
+	RegressionCounted    int               `json:"regression_counted"`
+	RegressionPassing    int               `json:"regression_passing"`
+	Regressions          []RegressionCheck `json:"regressions"`
 }
 
 // String returns the verdict, e.g. "fixed", "still_failing@31" or
@@ -94,7 +131,10 @@ func Verify(j *journal.Journal, oldHandler, newHandler func() kavach.Handler, op
 //     exactly as it failed in production; and
 //  3. the new build passes every such variant: no step fails, invariants
 //     hold, and steps before the failing input produce the old build's
-//     outputs.
+//     outputs; and
+//  4. the new build replays every regression variant (see RegressionVariants)
+//     that the old build replays as ok as ok too, with the old build's
+//     outputs at every step.
 //
 // Variants on which the old build does not reproduce the incident say
 // nothing about the fix and are ignored.
@@ -111,7 +151,7 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	if err != nil {
 		return nil, fmt.Errorf("new build: %w", err)
 	}
-	v := &Verification{Old: oldRes, New: newRes, MinVariants: max(min, 0), Variants: []VariantCheck{}}
+	v := &Verification{Old: oldRes, New: newRes, MinVariants: max(min, 0), Variants: []VariantCheck{}, Regressions: []RegressionCheck{}}
 	if !newRes.Passed() || newRes.Status == StatusOK || min < 0 {
 		v.Status, v.Verdict, v.Seq, v.Detail = newRes.Status, newRes.String(), newRes.Seq, newRes.Detail
 		return v, nil
@@ -123,22 +163,11 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	}
 	v.Candidates = len(variants)
 	checks := make([]VariantCheck, len(variants))
-	errs := make([]error, len(variants))
-	sem := make(chan struct{}, max(opts.Parallel, 1))
-	var wg sync.WaitGroup
-	for i, vj := range variants {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			checks[i], errs[i] = checkVariant(vj, replayOld, replayNew)
-		}()
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
+	if err := parallel(len(variants), opts.Parallel, func(i int) (err error) {
+		checks[i], err = checkVariant(variants[i], replayOld, replayNew)
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	for _, c := range checks {
 		if c.Reproduces {
@@ -152,6 +181,34 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	}
 	v.Variants = checks
 
+	var regs []*journal.Journal
+	var neighbours int
+	if opts.Regressions >= 0 {
+		if regs, neighbours, err = regressionVariants(j, opts.Regressions); err != nil {
+			return nil, err
+		}
+	}
+	v.RegressionCandidates = len(regs)
+	rchecks := make([]RegressionCheck, len(regs))
+	if err := parallel(len(regs), opts.Parallel, func(i int) (err error) {
+		rchecks[i], err = checkRegression(regs[i], replayOld, replayNew)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	for _, c := range rchecks {
+		if c.Counted {
+			v.RegressionCounted++
+		}
+		if c.Passed {
+			v.RegressionPassing++
+		} else if c.Counted && v.Regression == 0 {
+			v.Regression = c.ID
+		}
+	}
+	v.Regressions = rchecks
+	v.Neighbours = neighbours
+
 	switch {
 	case v.Variant != 0:
 		c := v.Variants[indexOf(v.Variants, v.Variant)]
@@ -161,6 +218,15 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 			v.Verdict += fmt.Sprintf("@%d", *c.Seq)
 		}
 		v.Detail = fmt.Sprintf("variant %d (%s): %s", c.ID, c.Mutation, c.Detail)
+	case v.Regression != 0:
+		c := v.Regressions[regressionIndex(v.Regressions, v.Regression)]
+		v.Status = StatusRegressed
+		v.Verdict = fmt.Sprintf("%s(%d)", StatusRegressed, c.ID)
+		if c.Seq != nil {
+			v.Seq = c.Seq
+			v.Verdict += fmt.Sprintf("@%d", *c.Seq)
+		}
+		v.Detail = fmt.Sprintf("regression variant %d (%s): %s", c.ID, c.Mutation, c.Detail)
 	case v.Reproducing < min:
 		v.Status, v.Verdict = StatusUnverified, string(StatusUnverified)
 		v.Detail = fmt.Sprintf("the recorded incident is fixed, but only %d of %d variants reproduce it on the old build; %d are required", v.Reproducing, v.Candidates, min)
@@ -207,13 +273,19 @@ func judge(c *VariantCheck, old, new *Result) {
 		if i >= len(new.Steps) {
 			break // cannot happen: the new build ran every step
 		}
-		if d := diffOutputs(o.Outputs, new.Steps[i].Outputs); d != "" {
+		if d := diffBuilds(o.Outputs, new.Steps[i].Outputs); d != "" {
 			seq := o.Seq
 			c.Seq, c.Detail = &seq, "before the failing input, the new build's outputs differ from the old build's: "+d
 			return
 		}
 	}
 	c.Passed = true
+}
+
+// diffBuilds is diffOutputs for two replays of a variant, which records no
+// outputs: it names the builds rather than a recording.
+func diffBuilds(old, new []kavach.Output) string {
+	return diffNamed(old, new, "old build", "new build")
 }
 
 // failureOf describes how a replay failed, in the form of journal.Variant.Failure.
@@ -238,6 +310,76 @@ func failureOf(r *Result) string {
 }
 
 func indexOf(cs []VariantCheck, id int) int {
+	for i, c := range cs {
+		if c.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// parallel runs fn(0..n-1), at most par at once, and returns the first error
+// by index.
+func parallel(n, par int, fn func(i int) error) error {
+	errs := make([]error, n)
+	sem := make(chan struct{}, max(par, 1))
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			errs[i] = fn(i)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkRegression(vj *journal.Journal, replayOld, replayNew ReplayFunc) (RegressionCheck, error) {
+	info := vj.Header.Meta.Variant
+	c := RegressionCheck{ID: info.ID, Mutation: info.Mutation, Input: info.Incident, Journal: vj}
+	o, err := replayOld(vj)
+	if err != nil {
+		return c, fmt.Errorf("old build, regression variant %d: %w", info.ID, err)
+	}
+	c.Old = o.String()
+	if o.Status != StatusOK {
+		return c, nil
+	}
+	c.Counted = true
+	n, err := replayNew(vj)
+	if err != nil {
+		return c, fmt.Errorf("new build, regression variant %d: %w", info.ID, err)
+	}
+	c.New = n.String()
+	if n.Status != StatusOK {
+		c.Seq, c.Detail = n.Seq, n.String()
+		if n.Detail != "" {
+			c.Detail += ": " + n.Detail
+		}
+		return c, nil
+	}
+	for i, ost := range o.Steps {
+		if i >= len(n.Steps) {
+			break // cannot happen: the new build ran every step
+		}
+		if d := diffBuilds(ost.Outputs, n.Steps[i].Outputs); d != "" {
+			seq := ost.Seq
+			c.Seq, c.Detail = &seq, "the new build's outputs differ from the old build's, which replays the variant as ok: "+d
+			return c, nil
+		}
+	}
+	c.Passed = true
+	return c, nil
+}
+
+func regressionIndex(cs []RegressionCheck, id int) int {
 	for i, c := range cs {
 		if c.ID == id {
 			return i

@@ -37,10 +37,20 @@ the protocols directly.
    with fields changed or removed, moved earlier, earlier inputs dropped or
    redelivered, the clock shifted) that make the old build fail the same way.
    A fix that only handles the exact recorded input fails one of them.
+   `diff` also replays up to 48 **regression variants**: the same mutations
+   applied to earlier inputs that resemble the failing one (they share, for
+   example, the command name) and that the old build handled without failing.
+   The new build must produce the old build's outputs on them.
    If the verdict is `variant_failed(K)@N`, the variant is saved (its path is
    under `variants.checks[].file` in the JSON); reproduce it with
    `kavach replay <variant> --bin /tmp/new` and generalize the fix. Never
-   special-case the variant.
+   special-case the variant. If it is `regressed(K)@N`, the saved variant
+   (under `regressions.checks[].file`) is an input the old build handled
+   without failing. A variant records no outputs, so plain `replay` prints `ok`
+   on both builds: run `kavach replay <variant> --bin <build> --json` on each
+   and compare `steps[].outputs`. If the specification calls for the old
+   build's output, narrow your change; if it calls for yours, the old build was
+   wrong there too, so report that instead of changing code.
 5. **Keep it as a regression test.** Copy the fixture into the service's
    `testdata/` and have its test suite run
    `kavach replay <fixture> --bin <host command>`, which exits 0 on `fixed`.
@@ -92,6 +102,7 @@ walks through this loop.
 | --- | --- | --- |
 | `fixed` | The recorded failure is gone, invariants hold, earlier steps match production, and every variant passes. | Done. |
 | `variant_failed(K)@N` | The recorded incident passes, but variant `K` still fails at its input `N`. | Your fix is too narrow. Replay the saved variant. |
+| `regressed(K)@N` | The recorded incident and its variants pass, but on regression variant `K` the new build's outputs at input `N` differ from the old build's (or it failed). | Your fix changed behaviour on an input like the failing one that the old build handled without failing. Replay the saved variant (`regressions.checks[].file`) on both builds with `--json`, and check which output the specification calls for before changing code. |
 | `unverified` | The recorded incident passes, but fewer than 10 variants reproduce it on the old build. | Report it; do not claim the fix is verified. |
 | `still_failing@N` | The step of input `N` panicked or returned an error. | Keep working. |
 | `invariant_violated(X)@N` | Declared invariant `X` broke after input `N`. | Your fix corrupted state. |
@@ -131,7 +142,7 @@ claude mcp add kavach -- kavach mcp
 | --- | --- | --- |
 | `kavach_list_incidents` | `dir` (default: working directory) | every `*.kavach` under it, with the recorded failure's kind, seq and message |
 | `kavach_replay` | `fixture`, `bin` (default `$KAVACH_BIN`), `include_steps` | `verdict`, `passed`, `detail`, `recorded_failure` |
-| `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants |
+| `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `regressions` (default 48, 0 skips), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants, and `regressions` with the same for regression variants |
 | `kavach_contract_show` | `dir` (default `./contract`) | the contract, every input with the feature steps marked, and the lock |
 | `kavach_contract_check` | `dir`, `new`, `old`, `no_variants` | `verdict`, `passed`, and `report`: changed and unreached steps, variant failures, `round` and `streak` |
 

@@ -346,14 +346,18 @@ func isFailure(kind string) bool {
 }
 
 func diffOutputs(want, got []kavach.Output) string {
+	return diffNamed(want, got, "recorded", "replay produced")
+}
+
+func diffNamed(want, got []kavach.Output, wantName, gotName string) string {
 	for i := 0; i < len(want) || i < len(got); i++ {
 		switch {
 		case i >= len(got):
-			return fmt.Sprintf("output %d missing: recorded %s", i, describe(want[i]))
+			return fmt.Sprintf("output %d missing: %s %s", i, wantName, describe(want[i]))
 		case i >= len(want):
-			return fmt.Sprintf("output %d unexpected: replay produced %s", i, describe(got[i]))
+			return fmt.Sprintf("output %d unexpected: %s %s", i, gotName, describe(got[i]))
 		case want[i].Sink != got[i].Sink || !bytes.Equal(want[i].Data, got[i].Data):
-			return fmt.Sprintf("output %d differs: recorded %s, replay produced %s", i, describe(want[i]), describe(got[i]))
+			return fmt.Sprintf("output %d differs: %s %s, %s %s", i, wantName, describe(want[i]), gotName, describe(got[i]))
 		}
 	}
 	return ""

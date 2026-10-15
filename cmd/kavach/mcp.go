@@ -201,6 +201,7 @@ var mcpTools = []map[string]any{
 		"title": "Verify a fix",
 		"description": "Verify a candidate fix: replay the fixture with the old (failing) and new binaries, then check the new binary against variants of the incident on which the old one fails the same way. " +
 			"The fix counts only when verdict is \"fixed\". variant_failed(K)@N: the fix is too narrow; the failing variant is saved (variants.checks[].file) and can be replayed with kavach_replay. " +
+			"regressed(K)@N: the fix changed the outputs for a variant of an earlier input that resembles the failing one and that the old build handled without failing; regressions.checks[].file is the saved variant, to replay on both builds with include_steps and compare the outputs. " +
 			"unverified: too few variants reproduce the incident to check the fix. Any other verdict is the new binary's replay of the fixture itself.",
 		"inputSchema": obj(map[string]any{
 			"fixture": str("path to the .kavach fixture"),
@@ -208,6 +209,8 @@ var mcpTools = []map[string]any{
 			"new":     str("host command for the candidate fix"),
 			"variants": map[string]any{"type": "integer", "minimum": 0,
 				"description": fmt.Sprintf("variants that must reproduce the incident and pass; default %d, 0 checks only the fixture", replay.DefaultMinVariants)},
+			"regressions": map[string]any{"type": "integer", "minimum": 0,
+				"description": fmt.Sprintf("regression variants of earlier inputs that resemble the failing one; default %d, 0 skips them", replay.DefaultRegressions)},
 			"keep": str("directory to save failing variants in; defaults to a new temporary directory"),
 		}, "fixture", "old", "new"),
 	},
@@ -315,11 +318,12 @@ func mcpReplay(raw json.RawMessage) (map[string]any, error) {
 
 func mcpDiff(raw json.RawMessage) (map[string]any, error) {
 	var a struct {
-		Fixture  string `json:"fixture"`
-		Old      string `json:"old"`
-		New      string `json:"new"`
-		Variants *int   `json:"variants"`
-		Keep     string `json:"keep"`
+		Fixture     string `json:"fixture"`
+		Old         string `json:"old"`
+		New         string `json:"new"`
+		Variants    *int   `json:"variants"`
+		Regressions *int   `json:"regressions"`
+		Keep        string `json:"keep"`
 	}
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
@@ -334,7 +338,14 @@ func mcpDiff(raw json.RawMessage) (map[string]any, error) {
 		}
 		min = *a.Variants
 	}
-	o, err := verifyFix(a.Fixture, a.Old, a.New, min, a.Keep)
+	regs := replay.DefaultRegressions
+	if a.Regressions != nil {
+		if *a.Regressions < 0 {
+			return nil, errors.New("regressions must not be negative")
+		}
+		regs = *a.Regressions
+	}
+	o, err := verifyFix(a.Fixture, a.Old, a.New, min, regs, a.Keep)
 	if err != nil {
 		return nil, err
 	}

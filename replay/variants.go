@@ -38,6 +38,10 @@ const (
 	KindDrop      = "drop"      // earlier inputs dropped
 	KindDuplicate = "duplicate" // an earlier input delivered twice
 	KindClock     = "clock"     // every clock read shifted
+
+	// KindRegression marks a variant of an earlier input that resembles the
+	// failing one, rather than of the failing input (RegressionVariants).
+	KindRegression = "regression"
 )
 
 // kinds names the classes candidates returns, in its order.
@@ -65,7 +69,7 @@ func Variants(j *journal.Journal) ([]*journal.Journal, error) {
 	if k < 0 {
 		return nil, nil
 	}
-	return interleave(j.Header.Meta, snap, env, [][][]candidate{candidates(steps, k)}, markerFailure(*steps[k].marker)), nil
+	return interleave(j.Header.Meta, snap, env, [][][]candidate{candidates(steps, k)}, markerFailure(*steps[k].marker), kinds, MaxCandidates), nil
 }
 
 // FeatureVariants derives variants of a journal's feature steps (SPEC.md
@@ -84,7 +88,7 @@ func FeatureVariants(j *journal.Journal, features map[uint64]bool) ([]*journal.J
 			each = append(each, candidates(steps, k))
 		}
 	}
-	return interleave(j.Header.Meta, snap, env, each, ""), nil
+	return interleave(j.Header.Meta, snap, env, each, "", kinds, MaxCandidates), nil
 }
 
 // variantSource splits j into what variants are built from.
@@ -120,17 +124,17 @@ func candidates(steps []*step, k int) [][]candidate {
 	}
 }
 
-// interleave builds up to MaxCandidates variants, taking the i-th candidate of
-// every class of every target before any (i+1)-th, so that every target and
-// class is varied early.
-func interleave(meta journal.Meta, snap, env *journal.Record, targets [][][]candidate, failure string) []*journal.Journal {
+// interleave builds up to limit variants, taking the i-th candidate of every
+// class of every target before any (i+1)-th, so that every target and class is
+// varied early. classKinds names the classes, in order, for Variant.Kind.
+func interleave(meta journal.Meta, snap, env *journal.Record, targets [][][]candidate, failure string, classKinds []string, limit int) []*journal.Journal {
 	var out []*journal.Journal
-	for i := 0; len(out) < MaxCandidates; i++ {
+	for i := 0; len(out) < limit; i++ {
 		added := false
 		for _, classes := range targets {
 			for ci, c := range classes {
-				if i < len(c) && len(out) < MaxCandidates {
-					info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure, Kind: kinds[ci]}
+				if i < len(c) && len(out) < limit {
+					info := journal.Variant{ID: len(out) + 1, Mutation: c[i].mutation, Failure: failure, Kind: classKinds[ci]}
 					out = append(out, buildVariant(meta, snap, env, c[i].steps, info))
 					added = true
 				}

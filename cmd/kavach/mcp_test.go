@@ -95,6 +95,7 @@ func TestMCPTools(t *testing.T) {
 		call(4, "kavach_diff", `{"fixture":"`+fixture+`","old":"x"}`),
 		call(5, "kavach_diff", `{"fixture":"`+fixture+`","old":"x","new":"y","variants":-1}`),
 		call(6, "kavach_list_incidents", `{"dir":"/does/not/exist"}`),
+		call(7, "kavach_diff", `{"fixture":"`+fixture+`","old":"x","new":"y","regressions":-1}`),
 	)
 	sc, text, isErr := toolOutput(t, resps[0])
 	incs := sc["incidents"].([]any)
@@ -106,7 +107,7 @@ func TestMCPTools(t *testing.T) {
 	}
 	for i, want := range map[int]string{
 		1: "no host command", 2: `unknown field "colour"`, 3: "fixture, old and new are required",
-		4: "variants must not be negative", 5: "no such file",
+		4: "variants must not be negative", 5: "no such file", 6: "regressions must not be negative",
 	} {
 		_, text, isErr := toolOutput(t, resps[i])
 		if !isErr || !strings.Contains(text, want) {
