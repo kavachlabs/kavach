@@ -16,9 +16,17 @@ import (
 // invariant only by its name; what it means is in the code that checks it.
 type Invariants struct {
 	Task       string         `json:"task"`           // the Harbor task
-	Sources    []string       `json:"sources"`        // the patches read, task's first
+	Sources    []string       `json:"sources"`        // absolute paths of the patches read, task's first
 	Invariants []InvariantDef `json:"invariants"`     // in declaration order
 	Note       string         `json:"note,omitempty"` // why nothing was found
+
+	// Source says where Snippet.SrcFile come from: "container", "image" or
+	// "patch" when there are no real files. SourceNote says why not, or warns
+	// that the files may differ from the trial's. Files are the repo-relative
+	// paths of the real files fetched.
+	Source     string   `json:"source"`
+	SourceNote string   `json:"source_note,omitempty"`
+	Files      []string `json:"files"`
 }
 
 // InvariantDef is one invariant: what the source says about it, where it is
@@ -43,6 +51,23 @@ type Snippet struct {
 	Line  int    `json:"line"` // of Text's first line, in the patched file
 	Text  string `json:"text"`
 	Agent bool   `json:"agent,omitempty"` // from the agent's patch
+	// File is the absolute path of the patch the snippet was read from, one
+	// of Invariants.Sources. FileLine is the line of that patch that shows
+	// Text's first line, and FileHit the line that shows the first of
+	// Text's lines naming the invariant (FileLine when none does). Removed
+	// lines can sit between a snippet's lines in the patch.
+	File     string `json:"file,omitempty"`
+	FileLine int    `json:"file_line,omitempty"`
+	FileHit  int    `json:"file_hit,omitempty"`
+
+	// SrcFile is the absolute path of the real file the snippet is in, cached
+	// on the host, with SrcLine the line of it that Text starts at and SrcHit
+	// the line naming the invariant. Set when Invariants.Source is not "patch".
+	SrcFile string `json:"src_file,omitempty"`
+	SrcLine int    `json:"src_line,omitempty"`
+	SrcHit  int    `json:"src_hit,omitempty"`
+
+	plines []int // the patch line of each line of Text
 }
 
 // srcLine is a line of a patched file as a patch shows it: added or context.
@@ -52,6 +77,7 @@ type srcLine struct {
 	text  string
 	added bool
 	agent bool
+	pline int // the line of the patch file that shows it
 }
 
 // hunkFile is the lines of one file in one patch, in order, with gaps where
@@ -59,16 +85,19 @@ type srcLine struct {
 type hunkFile struct {
 	path  string
 	agent bool
+	file  string // the patch it is read from
 	lines []srcLine
 }
 
-// parsePatch reads a unified diff into the new side of each file.
-func parsePatch(b []byte, agent bool) []*hunkFile {
+// parsePatch reads a unified diff, the file at path, into the new side of
+// each file it changes.
+func parsePatch(b []byte, path string, agent bool) []*hunkFile {
 	var files []*hunkFile
 	var cur *hunkFile
 	n := 0
 	hunk := regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
-	for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+	for i, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		pl := i + 1
 		switch {
 		case strings.HasPrefix(l, "diff --git "):
 			cur = nil
@@ -78,7 +107,7 @@ func parsePatch(b []byte, agent bool) []*hunkFile {
 				cur = nil
 				continue
 			}
-			cur = &hunkFile{path: strings.TrimPrefix(p, "b/"), agent: agent}
+			cur = &hunkFile{path: strings.TrimPrefix(p, "b/"), agent: agent, file: path}
 			files = append(files, cur)
 		case cur == nil:
 		case strings.HasPrefix(l, "@@"):
@@ -86,10 +115,10 @@ func parsePatch(b []byte, agent bool) []*hunkFile {
 				n = atoi(m[1])
 			}
 		case strings.HasPrefix(l, "+"):
-			cur.lines = append(cur.lines, srcLine{cur.path, n, l[1:], true, agent})
+			cur.lines = append(cur.lines, srcLine{cur.path, n, l[1:], true, agent, pl})
 			n++
 		case strings.HasPrefix(l, " ") || l == "":
-			cur.lines = append(cur.lines, srcLine{cur.path, n, strings.TrimPrefix(l, " "), false, agent})
+			cur.lines = append(cur.lines, srcLine{cur.path, n, strings.TrimPrefix(l, " "), false, agent, pl})
 			n++
 		}
 	}
@@ -119,9 +148,41 @@ var (
 // invariants known from its contract checks; the source is searched for them
 // and for any others it declares.
 func (r *Reader) TrialInvariants(tasksDir, job, id string, names []string) (*Invariants, error) {
-	dir, err := r.trialDir(job, id)
+	task, srcs, err := r.invariantSources(tasksDir, job, id)
 	if err != nil {
 		return nil, err
+	}
+	out := &Invariants{Task: task, Sources: []string{}, Invariants: []InvariantDef{}}
+	var files []*hunkFile
+	for _, s := range srcs {
+		files = append(files, parsePatch(s.text, s.path, s.agent)...)
+		out.Sources = append(out.Sources, s.path)
+	}
+	if defs := findInvariants(files, names); defs != nil {
+		out.Invariants = defs
+	}
+	if len(out.Sources) == 0 {
+		out.Note = "Neither the task's Kavach integration patch nor the agent's patch was found."
+	} else if len(out.Invariants) == 0 {
+		out.Note = "The source read declares no invariants."
+	}
+	return out, nil
+}
+
+// patchSource is a patch TrialInvariants reads.
+type patchSource struct {
+	path  string // absolute
+	text  []byte
+	agent bool
+}
+
+// invariantSources reads the patches a trial's invariants are read from:
+// the task's Kavach integration patch, then the agent's patch, each when it
+// exists and is not empty.
+func (r *Reader) invariantSources(tasksDir, job, id string) (task string, srcs []patchSource, err error) {
+	dir, err := r.trialDir(job, id)
+	if err != nil {
+		return "", nil, err
 	}
 	var cfg struct {
 		Task struct {
@@ -131,28 +192,37 @@ func (r *Reader) TrialInvariants(tasksDir, job, id string, names []string) (*Inv
 	if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err == nil {
 		json.Unmarshal(b, &cfg)
 	}
-	task := filepath.Base(cfg.Task.Path)
-	out := &Invariants{Task: task, Sources: []string{}, Invariants: []InvariantDef{}}
-	var files []*hunkFile
 	if patch := integrationPatch(tasksDir, cfg.Task.Path); patch != "" {
 		if b, err := os.ReadFile(patch); err == nil {
-			files = append(files, parsePatch(b, false)...)
-			out.Sources = append(out.Sources, patch)
+			if abs, err := filepath.Abs(patch); err == nil {
+				srcs = append(srcs, patchSource{abs, b, false})
+			}
 		}
 	}
 	if b, err := r.Patch(job, id); err == nil && len(b) > 0 {
-		files = append(files, parsePatch(b, true)...)
-		out.Sources = append(out.Sources, "the agent's patch")
+		abs, err := filepath.Abs(filepath.Join(dir, "artifacts", "logs", "artifacts", "patch.diff"))
+		if err != nil {
+			return "", nil, err
+		}
+		srcs = append(srcs, patchSource{abs, b, true})
 	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return "", nil, err
+	}
+	return filepath.Base(cfg.Task.Path), srcs, nil
+}
+
+// InvariantSource returns the text of the i'th of the patches
+// TrialInvariants lists as a trial's sources. Nothing else can be read
+// through it.
+func (r *Reader) InvariantSource(tasksDir, job, id string, i int) ([]byte, error) {
+	_, srcs, err := r.invariantSources(tasksDir, job, id)
+	if err != nil {
 		return nil, err
 	}
-	out.Invariants = findInvariants(files, names)
-	if len(out.Sources) == 0 {
-		out.Note = "Neither the task's Kavach integration patch nor the agent's patch was found."
-	} else if len(out.Invariants) == 0 {
-		out.Note = "The source read declares no invariants."
+	if i < 0 || i >= len(srcs) {
+		return nil, ErrNotFound
 	}
-	return out, nil
+	return srcs[i].text, nil
 }
 
 // integrationPatch finds the patch that adds Kavach to a task's service: the
@@ -219,7 +289,7 @@ func findInvariants(files []*hunkFile, known []string) []InvariantDef {
 					if d.Doc == "" && strings.Contains(l.text, name) {
 						if doc := docAt(f, i, name); doc != "" {
 							d.Doc = doc
-							d.DocAt = &Snippet{Role: "doc", Path: l.path, Line: l.n, Agent: l.agent && l.added}
+							d.DocAt = &Snippet{Role: "doc", Path: l.path, Line: l.n, Agent: l.agent && l.added, File: f.file, FileLine: l.pline, FileHit: l.pline}
 							d.Agent = d.Agent || l.agent && l.added
 						}
 					}
@@ -250,6 +320,15 @@ func findInvariants(files []*hunkFile, known []string) []InvariantDef {
 			}
 		}
 		d.Code = append(d.Code, fails...)
+		for i := range d.Code {
+			d.Code[i].FileHit = d.Code[i].FileLine
+			for k, l := range strings.Split(d.Code[i].Text, "\n") {
+				if strings.Contains(l, name) && k < len(d.Code[i].plines) {
+					d.Code[i].FileHit = d.Code[i].plines[k]
+					break
+				}
+			}
+		}
 		defs = append(defs, d)
 	}
 	return defs
@@ -338,14 +417,17 @@ func around(f *hunkFile, i, before, after int, role string) Snippet {
 func snippet(f *hunkFile, lo, hi int, role string) Snippet {
 	var b strings.Builder
 	agent := false
+	var plines []int
 	for k := lo; k <= hi; k++ {
 		b.WriteString(f.lines[k].text)
 		if k < hi {
 			b.WriteByte('\n')
 		}
 		agent = agent || f.lines[k].agent && f.lines[k].added
+		plines = append(plines, f.lines[k].pline)
 	}
-	return Snippet{Role: role, Path: f.path, Line: f.lines[lo].n, Text: b.String(), Agent: agent}
+	return Snippet{Role: role, Path: f.path, Line: f.lines[lo].n, Text: b.String(), Agent: agent,
+		File: f.file, FileLine: f.lines[lo].pline, plines: plines}
 }
 
 // maxCheckLines bounds a check function's snippet.

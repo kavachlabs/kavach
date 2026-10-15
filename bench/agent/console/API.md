@@ -415,14 +415,17 @@ any the source declares.
 
 ```json
 {"task": "httpx-deterministic-cookie-store-kavach-implement",
- "sources": ["/…/tasks/httpx-deterministic-cookie-store/httpx-kavach.patch", "the agent's patch"],
+ "sources": ["/…/tasks/httpx-deterministic-cookie-store/httpx-kavach.patch", "/…/jobs/…/artifacts/logs/artifacts/patch.diff"],
  "invariants": [
    {"name": "cookie-limits",
     "doc": "the store never holds more than max_cookies cookies.",
-    "doc_at": {"role": "doc", "path": "kavach_driver.py", "line": 173, "text": ""},
+    "doc_at": {"role": "doc", "path": "kavach_driver.py", "line": 173, "text": "",
+               "file": "/…/httpx-kavach.patch", "file_line": 190, "file_hit": 190},
     "code": [
-      {"role": "declaration", "path": "kavach_driver.py", "line": 427, "text": "…"},
-      {"role": "check", "path": "kavach_driver.py", "line": 437, "text": "def _limits(self) -> None:\n…"}]}]}
+      {"role": "declaration", "path": "kavach_driver.py", "line": 427, "text": "…",
+       "file": "/…/httpx-kavach.patch", "file_line": 444, "file_hit": 445},
+      {"role": "check", "path": "kavach_driver.py", "line": 437, "text": "def _limits(self) -> None:\n…",
+       "file": "/…/httpx-kavach.patch", "file_line": 454, "file_hit": 454}]}]}
 ```
 
 - `doc`: best effort, the docstring or comment that defines the name: a
@@ -432,9 +435,50 @@ any the source declares.
 - `code`: the `declaration`, the `check` function the declaration passes
   (up to 40 lines), and up to four lines where it `fails`; `line` is the
   first line of `text` in the patched file.
+- `sources`: the absolute paths of the patches read, the task's first. Both
+  are on the host; the patched source tree exists only in the task's image.
+- `file`, `file_line`, `file_hit`: on a snippet, the patch it was read from
+  (one of `sources`), the line of that patch that shows `text`'s first line,
+  and the line that shows the first of `text`'s lines naming the invariant
+  (`file_line` when none does). Lines the patch removes can sit between a
+  snippet's lines, so `file_hit` is not always `file_line` plus an offset.
 - `agent`: on an invariant or a snippet, the agent's patch adds or changes
   lines that name or describe it.
 - `note`: why `invariants` is empty, when it is.
+- `source`: where the real source files come from: `container` (the trial's
+  own container, `<trial>__env-main-1`, while it runs), `image` (a throwaway
+  container, with no network, from `kavach-bench/<task>:<arm>` with the
+  trial's `patch.diff` applied on `/work`) or `patch` (neither; the snippets
+  are only the patches' lines). `source_note` says why it is `patch`, or warns
+  that the image was built after the trial started and its files may differ.
+  When the image is missing the note has the `docker build` command that
+  makes it. The first request for a trial does the work, one at a time per
+  trial; the files are cached under `~/.cache/kavach-bench/src/<job>/<trial>/`
+  (`image/…`, or `container/…` re-read every time). The patch is applied on
+  the image's `HEAD`, as the collect hook diffs against the Kavach
+  integration commit in the Kavach arms, and on the first commit otherwise.
+- `files`: the repo-relative paths of the real files the snippets are in.
+- `src_file`, `src_line`, `src_hit`: on a snippet when `source` is not
+  `patch`, the absolute path of its cached real file, the line `text` starts
+  at in it and the line naming the invariant (`src_line` when none does). The
+  patch's line is moved by the agent's hunks and checked against the file,
+  searching 200 lines either way; a snippet that isn't found has no
+  `src_file` and keeps to the patch.
+
+### GET /api/trials/{job}/{trial}/invariants/source?i=N
+
+The text of `sources[N]` from the invariants response, as `text/plain`. Only
+those patches can be read: `i` is an index, never a path. 400 when `i` is not
+a non-negative integer; 404 when the trial is unknown or has fewer than
+`N+1` sources.
+
+### GET /api/trials/{job}/{trial}/invariants/file?path=P
+
+The text of a real source file, `P` one of the repo-relative `files` of the
+invariants response (fetch that first), as `text/plain`. Only files a patch of
+the trial touches and the response fetched can be read. 400 when `path` is
+missing; 404 for an unknown trial, a path no patch touches or that wasn't
+fetched, and any path with `..` or a leading `/`.
 
 ### GET /api/trials/{job}/{trial}/variants
 

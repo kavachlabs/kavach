@@ -1743,6 +1743,17 @@ table.mx {
   border-radius: 6px;
   padding: 6px 10px;
 }
+details.err-more > summary { cursor: pointer; }
+details.err-more > pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--dim);
+}
+
 
 .kcard {
   border: 1px solid var(--edge);
@@ -2296,6 +2307,7 @@ details.patch[open] > summary::before { content: "▾ "; }
   line-height: 1.45;
 }
 .settings-row-control { flex-shrink: 0; }
+.settings-editor .seg { flex-wrap: wrap; max-width: 100%; }
 .settings-env {
   font-family: var(--font-code);
   font-size: 11.5px;
@@ -2587,6 +2599,8 @@ details.patch[open] > summary::before { content: "▾ "; }
 .inv-sec { color: var(--dim); font-size: 12px; font-weight: 500; }
 .inv-sec-head .seg button { padding: 2px 9px; font-size: 11.5px; }
 .inv-hint { margin: 0; font-size: 11px; color: var(--faint); max-width: 64ch; }
+.inv-hint .inv-src-note { color: var(--faint); }
+.inv-hint .inv-src-note.warn { color: var(--peach); }
 
 .radars { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px; }
 .radar {
@@ -2769,25 +2783,81 @@ details.patch[open] > summary::before { content: "▾ "; }
   color: var(--blue);
   border: 1px solid rgba(104, 160, 246, 0.3);
 }
-.inv-code { border: 1px solid var(--edge); border-radius: 7px; background: var(--app); }
-.inv-code summary {
+.inv-code { border: 1px solid var(--edge); border-radius: 7px; background: var(--app); min-width: 0; }
+.inv-code-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 2px 6px 2px 2px;
+}
+.inv-code-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 9px;
-  font-size: 11.5px;
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
   color: var(--dim);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
   cursor: pointer;
-  list-style: none;
 }
-.inv-code summary::-webkit-details-marker { display: none; }
-.inv-code summary::before { content: "▸"; color: var(--faint); font-size: 10px; }
-.inv-code[open] summary::before { content: "▾"; }
-.inv-code summary .m { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-code-toggle:hover { color: var(--text); }
+.inv-code-chev { color: var(--faint); font-size: 10px; width: 1ch; }
+.inv-code-path { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-code-acts { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 11.5px; }
+.inv-code-acts .link-btn { font-size: 11.5px; padding: 2px 6px; }
+.inv-code-acts .link-btn:hover { color: var(--text); }
+.inv-code-acts .link-btn.on { color: var(--violet); background: rgba(169, 155, 255, 0.1); }
+.inv-code-body { border-top: 1px solid var(--edge); }
+.open-in { align-items: stretch; border: 1px solid var(--edge); border-radius: 6px; }
+.open-in-link, .open-in-pick {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font: inherit;
+  font-size: 11.5px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.open-in-link { border-radius: 5px 0 0 5px; }
+.open-in-pick { border-left: 1px solid var(--edge); border-radius: 0 5px 5px 0; color: var(--dim); padding: 2px 6px; font-size: 10px; }
+.open-in-link:hover, .open-in-pick:hover { background: var(--hover); color: var(--text); }
+.open-in.open { border-color: var(--peach); }
+.open-in .cselect-menu { left: auto; right: 0; min-width: 160px; }
+.inv-code-toggle:focus-visible,
+.open-in-link:focus-visible,
+.open-in-pick:focus-visible,
+.inv-patch-pre:focus-visible,
+.inv-code-acts .link-btn:focus-visible {
+  outline: 2px solid var(--peach);
+  outline-offset: -2px;
+}
+.mon-host { width: 100%; min-width: 0; overflow: hidden; border-radius: 0 0 7px 7px; }
+.mon-host .monaco-editor .mon-hit { background: rgba(169, 155, 255, 0.13); }
+.mon-host .monaco-editor .mon-range { background: rgba(169, 155, 255, 0.05); }
+.mon-host .monaco-editor .mon-hit-gutter { background: var(--violet); width: 3px !important; margin-left: 4px; border-radius: 1px; }
+.mon-host .monaco-editor.focused { outline: 2px solid var(--peach); outline-offset: -2px; }
+.inv-patch { border-top: 1px solid var(--edge); }
+.inv-patch-head { display: flex; align-items: baseline; gap: 8px; padding: 5px 10px; font-size: 11.5px; color: var(--dim); }
+.inv-patch-head .m { font-size: 11px; }
+.inv-patch-msg { padding: 4px 10px 10px; font-size: 12px; }
+.mon-patch { height: min(60vh, 460px); border-radius: 0 0 7px 7px; }
+.inv-code .inv-patch-pre { max-height: min(60vh, 460px); overflow: auto; position: relative; }
+.inv-code .ln.near { background: rgba(169, 155, 255, 0.05); }
+.inv-patch-pre .ln.hit { background: rgba(169, 155, 255, 0.13); box-shadow: inset 2px 0 0 var(--violet); }
 .inv-code pre {
   margin: 0;
   padding: 6px 0 8px;
-  border-top: 1px solid var(--edge);
   font-size: 11.5px;
   line-height: 1.5;
   overflow-x: auto;

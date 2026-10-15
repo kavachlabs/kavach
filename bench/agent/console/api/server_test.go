@@ -3,11 +3,14 @@ package api
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -465,6 +468,222 @@ func TestVariantEndpoints(t *testing.T) {
 		var e map[string]string
 		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {
 			t.Errorf("%s: %d %v", path, code, e)
+		}
+	}
+}
+
+func TestInvariantSource(t *testing.T) {
+	tasks := t.TempDir()
+	task := filepath.Join(tasks, "redis-10068-kavach")
+	integration := "diff --git a/src/kavach.c b/src/kavach.c\n--- /dev/null\n+++ b/src/kavach.c\n@@ -0,0 +1,3 @@\n+static const kavach_invariant invariants[] = {\n+    {\"stream-trim-contract\", trimInvariant, NULL},\n+};\n"
+	for name, text := range map[string]string{
+		"task.toml":                          "",
+		"environment/docker-compose.yaml":    "services:\n  main:\n    build: ../docker\n",
+		"docker/Dockerfile":                  "FROM scratch\n",
+		"docker/redis-kavach.patch":          integration,
+		"docker/not-a-source.txt":            "secret\n",
+		"../redis-10068-control/task.toml":   "",
+		"../redis-10068-control/secret.diff": "secret\n",
+	} {
+		p := filepath.Join(task, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := copyJobs(t)
+	_, ts := newServer(t, Config{JobsDir: jobs, TasksDir: tasks})
+	trial := "/api/trials/redis-oracle/redis-10068-kavach__Dw5kmkd"
+
+	var inv harbor.Invariants
+	if code := get(t, ts.URL+trial+"/invariants", &inv); code != 200 || len(inv.Sources) != 2 {
+		t.Fatalf("%d %+v", code, inv)
+	}
+	agentPatch := filepath.Join(jobs, "redis-oracle", "redis-10068-kavach__Dw5kmkd", "artifacts", "logs", "artifacts", "patch.diff")
+	if want := filepath.Join(task, "docker", "redis-kavach.patch"); inv.Sources[0] != want || inv.Sources[1] != agentPatch {
+		t.Fatalf("sources %q, want %q and %q", inv.Sources, want, agentPatch)
+	}
+	if len(inv.Invariants) == 0 || len(inv.Invariants[0].Code) == 0 {
+		t.Fatalf("invariants %+v", inv.Invariants)
+	}
+	if c := inv.Invariants[0].Code[0]; c.File != inv.Sources[0] || c.FileLine != 5 || c.FileHit != 6 {
+		t.Errorf("snippet %+v", c)
+	}
+
+	for i, want := range []string{integration, ""} {
+		resp, err := http.Get(ts.URL + trial + "/invariants/source?i=" + string(rune('0'+i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if want == "" {
+			want, _ := os.ReadFile(agentPatch)
+			if string(b) != string(want) {
+				t.Errorf("source 1 is not the agent's patch: %.80q", b)
+			}
+		} else if string(b) != want {
+			t.Errorf("source %d: %q", i, b)
+		}
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" {
+			t.Errorf("source %d: %d %s", i, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+
+	for path, want := range map[string]int{
+		trial + "/invariants/source?i=2":                                                                     404,
+		trial + "/invariants/source?i=99":                                                                    404,
+		"/api/trials/oracle-both/hello-world-control__zRmJZqb/invariants/source?i=0":                         404,
+		"/api/trials/redis-oracle/nope/invariants/source?i=0":                                                404,
+		"/api/trials/..%2Fredis-oracle/x/invariants/source?i=0":                                              404,
+		trial + "/invariants/source":                                                                         400,
+		trial + "/invariants/source?i=-1":                                                                    400,
+		trial + "/invariants/source?i=x":                                                                     400,
+		trial + "/invariants/source?i=1.5":                                                                   400,
+		trial + "/invariants/source?i=../../docker/not-a-source.txt":                                         400,
+		trial + "/invariants/source?i=" + url.QueryEscape(filepath.Join(task, "docker", "not-a-source.txt")): 400,
+	} {
+		var e map[string]string
+		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {
+			t.Errorf("%s: %d %v", path, code, e)
+		}
+	}
+}
+
+// fakeDocker is a Docker whose /work holds files, and records what ran.
+type fakeDocker struct {
+	running   bool
+	created   time.Time
+	files     map[string]string
+	started   int
+	removed   int
+	applied   []string
+	failApply bool
+}
+
+func (f *fakeDocker) Running(string) bool { return f.running }
+func (f *fakeDocker) ImageCreated(image string) (time.Time, error) {
+	if f.created.IsZero() {
+		return time.Time{}, errors.New("no such image: " + image)
+	}
+	return f.created, nil
+}
+func (f *fakeDocker) Start(string) (string, error) { f.started++; return "c1", nil }
+func (f *fakeDocker) Remove(string)                { f.removed++ }
+func (f *fakeDocker) Exec(_ string, stdin []byte, args ...string) ([]byte, error) {
+	if args[0] == "cat" {
+		if s, ok := f.files[strings.TrimPrefix(args[len(args)-1], "/work/")]; ok {
+			return []byte(s), nil
+		}
+		return nil, errors.New("no such file")
+	}
+	if slices.Contains(args, "apply") {
+		f.applied = append(f.applied, string(stdin))
+		if f.failApply {
+			return nil, errors.New("patch does not apply")
+		}
+	}
+	return nil, nil
+}
+
+func TestInvariantRealSource(t *testing.T) {
+	tasks := t.TempDir()
+	task := filepath.Join(tasks, "redis-10068-kavach")
+	integration := "diff --git a/src/kavach.c b/src/kavach.c\n--- /dev/null\n+++ b/src/kavach.c\n@@ -0,0 +1,3 @@\n+static const kavach_invariant invariants[] = {\n+    {\"stream-trim-contract\", trimInvariant, NULL},\n+};\n"
+	for name, text := range map[string]string{
+		"task.toml":                                        "",
+		"environment/docker-compose.yaml":                  "services:\n  main:\n    build:\n      context: .\n      dockerfile: tasks/redis-10068/Dockerfile\n      target: kavach\n",
+		"environment/tasks/redis-10068/Dockerfile":         "FROM scratch\n",
+		"environment/tasks/redis-10068/redis-kavach.patch": integration,
+	} {
+		p := filepath.Join(task, name)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := "static const kavach_invariant invariants[] = {\n    {\"stream-trim-contract\", trimInvariant, NULL},\n};\n"
+	fd := &fakeDocker{created: time.Now().Add(24 * time.Hour), files: map[string]string{"src/kavach.c": file}}
+	cache := t.TempDir()
+	_, ts := newServer(t, Config{JobsDir: copyJobs(t), TasksDir: tasks, Docker: fd, CacheDir: cache})
+	trial := "/api/trials/redis-oracle/redis-10068-kavach__Dw5kmkd"
+
+	var inv harbor.Invariants
+	if code := get(t, ts.URL+trial+"/invariants", &inv); code != 200 {
+		t.Fatalf("%d", code)
+	}
+	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "kavach-bench/redis-10068:kavach was built") || !slices.Equal(inv.Files, []string{"src/kavach.c"}) {
+		t.Fatalf("source %q note %q files %q", inv.Source, inv.SourceNote, inv.Files)
+	}
+	c := inv.Invariants[0].Code[0]
+	if c.SrcFile != filepath.Join(cache, "redis-oracle", "redis-10068-kavach__Dw5kmkd", "image", "src", "kavach.c") || c.SrcLine != 1 || c.SrcHit != 2 {
+		t.Errorf("snippet %+v", c)
+	}
+	if b, err := os.ReadFile(c.SrcFile); err != nil || string(b) != file {
+		t.Errorf("cached file %q %v", b, err)
+	}
+	if len(fd.applied) != 1 || !strings.Contains(fd.applied[0], "t_stream.c") || fd.started != 1 || fd.removed != 1 {
+		t.Errorf("docker: applied %d started %d removed %d", len(fd.applied), fd.started, fd.removed)
+	}
+
+	// A second request is served from the cache, with the same note.
+	var again harbor.Invariants
+	get(t, ts.URL+trial+"/invariants", &again)
+	if fd.started != 1 || again.Source != "image" || again.SourceNote != inv.SourceNote {
+		t.Errorf("second request: started %d %q %q", fd.started, again.Source, again.SourceNote)
+	}
+
+	resp, err := http.Get(ts.URL + trial + "/invariants/file?path=src/kavach.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(b) != file {
+		t.Errorf("file: %d %q", resp.StatusCode, b)
+	}
+	for path, want := range map[string]int{
+		trial + "/invariants/file":                                   400,
+		trial + "/invariants/file?path=":                             400,
+		trial + "/invariants/file?path=src/t_stream.c":               404, // in a patch, not fetched
+		trial + "/invariants/file?path=src/other.c":                  404,
+		trial + "/invariants/file?path=../kavach.c":                  404,
+		trial + "/invariants/file?path=src/../src/kavach.c":          404,
+		trial + "/invariants/file?path=/etc/passwd":                  404,
+		trial + "/invariants/file?path=" + url.QueryEscape(cache):    404,
+		"/api/trials/redis-oracle/nope/invariants/file?path=a":       404,
+		"/api/trials/..%2Fredis-oracle/x/invariants/file?path=src/a": 404,
+	} {
+		var e map[string]string
+		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {
+			t.Errorf("%s: %d %v", path, code, e)
+		}
+	}
+
+	// A running container is read instead, and nothing is started. The agent
+	// has added a line above the code since the patch was written; the
+	// snippet is found where it moved to.
+	fd.running = true
+	fd.files["src/kavach.c"] = "// live\n" + file
+	var live harbor.Invariants
+	get(t, ts.URL+trial+"/invariants", &live)
+	if lc := live.Invariants[0].Code[0]; live.Source != "container" || fd.started != 1 || lc.SrcLine != 2 || lc.SrcHit != 3 {
+		t.Errorf("live: %q started %d %+v", live.Source, fd.started, lc)
+	}
+	fd.running = false
+
+	// Falling back: no image, an image that rejects the patch, no Docker.
+	for name, mod := range map[string]func(){
+		"missing": func() { fd.created = time.Time{}; os.RemoveAll(cache) },
+		"apply":   func() { fd.created = time.Now(); fd.failApply = true; os.RemoveAll(cache) },
+	} {
+		mod()
+		var fb harbor.Invariants
+		get(t, ts.URL+trial+"/invariants", &fb)
+		if fb.Source != "patch" || fb.Invariants[0].Code[0].SrcFile != "" || !strings.Contains(fb.SourceNote, "docker build -f") {
+			t.Errorf("%s: %q %q", name, fb.Source, fb.SourceNote)
 		}
 	}
 }

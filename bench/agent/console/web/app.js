@@ -100,6 +100,40 @@ function saveUIPrefs() {
 
 const initialPrefs = loadUIPrefs();
 
+// The editors code links can open, by their URL schemes. The source tree is
+// only in a task's image, so links open the patch that has the code.
+export const CODE_EDITORS = [
+  { id: "vscode", label: "VS Code" },
+  { id: "cursor", label: "Cursor" },
+  { id: "antigravity", label: "Antigravity" },
+  { id: "windsurf", label: "Windsurf" },
+  { id: "zed", label: "Zed" },
+];
+const CODE_EDITOR_KEY = "kavach-bench.code-editor";
+
+function loadCodeEditor() {
+  try {
+    const v = localStorage.getItem(CODE_EDITOR_KEY);
+    if (CODE_EDITORS.some((e) => e.id === v)) return v;
+  } catch {}
+  return "vscode";
+}
+
+// setCodeEditor picks the editor code links open in.
+export function setCodeEditor(id) {
+  if (!CODE_EDITORS.some((e) => e.id === id)) return;
+  state.codeEditor = id;
+  try { localStorage.setItem(CODE_EDITOR_KEY, id); } catch {}
+  renderView();
+  if (state.settings.open) renderSettingsModal();
+}
+
+// editorURL opens path (absolute) at line in the chosen editor.
+export function editorURL(path, line, editor = state.codeEditor) {
+  const p = encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F");
+  return `${editor}://file${p.startsWith("/") ? "" : "/"}${p}:${line}:1`;
+}
+
 export const state = {
   status: null, statusErr: "",
   tasks: null, tasksErr: "",
@@ -112,6 +146,7 @@ export const state = {
   auxTab: "task", // "task" | "arms" | "models"
   leftW: initialPrefs.leftW || 256,
   rightW: initialPrefs.rightW || 400,
+  codeEditor: loadCodeEditor(), // CODE_EDITORS id
   live: false,
   form: loadForm(),
   picker: { open: false, q: "", list: null, err: "", previewId: "" },
@@ -747,7 +782,7 @@ function renderSide() {
 // Every way into settings (the sidebar button, /settings, the missing-key
 // banner) opens it.
 const SETTINGS_TABS = [
-  { id: "general", label: "General", desc: "Defaults for new benchmark runs. Changes apply to the run form right away." },
+  { id: "general", label: "General", desc: "Defaults for new benchmark runs, and where code opens. Changes apply right away." },
   { id: "keys", label: "API keys", desc: "Provider keys the agents use to call models." },
   { id: "environment", label: "Environment", desc: "The tools and folders this console found on your machine." },
   { id: "shortcuts", label: "Shortcuts", desc: "Keyboard shortcuts, and the commands you can type in the run composer.", foot: true },
@@ -940,6 +975,22 @@ function settingsGeneralTab() {
           options: timeouts.map((m) => ({ value: m, label: m ? `${m}m` : "Task's", title: m ? `${m} minutes` : "Use each task's own timeout" })),
           onChange: (v) => updateRunDefaults({ timeout: +v }),
         }),
+      }),
+    ]),
+    settingsGroup("Code", [
+      settingsRow({
+        label: "Open code in",
+        labelId: "set-editor-lbl",
+        hint: "Invariant definitions link to the patch that declares them, at the line, in this editor. The patched source is only in the task's image, so the link opens the patch.",
+        below: h("div", { class: "settings-editor" }, segmented({
+          id: "set-editor", labelledBy: "set-editor-lbl", value: state.codeEditor,
+          options: CODE_EDITORS.map((e) => ({ value: e.id, label: e.label, title: `Open code in ${e.label}` })),
+          onChange: (v) => {
+            setCodeEditor(v);
+            const el = document.getElementById(`set-editor-${v}`);
+            if (el) el.focus();
+          },
+        })),
       }),
     ]),
   ];
@@ -2246,7 +2297,7 @@ function renderAttempt(t) {
   ];
   const tl = tokenLine(t);
   if (tl) kids.push(h("div", { class: "stats" }, tl));
-  if (t.error) kids.push(h("div", { class: "err-line" }, t.error));
+  if (t.error) kids.push(errorView(t));
   const gl = gradeLine(t);
   if (gl) kids.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
 
@@ -2489,6 +2540,33 @@ function diffView(text) {
   return el;
 }
 
+const SIGNALS = { 1: "SIGHUP", 2: "SIGINT", 6: "SIGABRT", 9: "SIGKILL", 15: "SIGTERM" };
+
+// errorSummary shortens Harbor's exception text, which for an agent command
+// carries the whole command line (the task's prompt) and its output.
+function errorSummary(text) {
+  const m = /^(\w+): Command failed \(exit (\d+)\)/.exec(text);
+  if (m) {
+    const code = +m[2];
+    const sig = code > 128 && SIGNALS[code - 128];
+    return `${m[1]}: the agent's command exited with ${code}${sig ? ` (killed by ${sig})` : ""}`;
+  }
+  const first = text.split("\n", 1)[0];
+  return first.length > 200 ? first.slice(0, 200) + "…" : first;
+}
+
+const openErrors = new Set();
+
+function errorView(t) {
+  const summary = errorSummary(t.error);
+  if (summary === t.error) return h("div", { class: "err-line" }, t.error);
+  const key = `${t.job}/${t.id}`;
+  const d = h("details", { class: "err-line err-more" }, h("summary", {}, summary), h("pre", {}, t.error));
+  d.open = openErrors.has(key);
+  d.addEventListener("toggle", () => { d.open ? openErrors.add(key) : openErrors.delete(key); });
+  return d;
+}
+
 function patchView(t) {
   const d = h("details", { class: "patch" }, h("summary", {}, "Patch"));
   d.addEventListener("toggle", async () => {
@@ -2689,7 +2767,7 @@ function attemptCard(t, job, multi = false) {
   if (kl) lines.push(h("div", { class: "dim m" }, kl + (t.kavach && t.kavach.variants ? ` · ${t.kavach.variants}` : "")));
   const gl = gradeLine(t);
   if (gl) lines.push(h("div", { class: t.status === "fail" ? "bad" : "dim" }, gl));
-  if (t.error) lines.push(h("div", { class: "err-line" }, t.error));
+  if (t.error) lines.push(errorView(t));
   const meta = [
     t.seconds != null ? fmtDur(t.seconds) : t.started && t.status === "running" ? elapsed(t.started, fmtDur) : null,
     t.steps ? `${t.steps} step${t.steps === 1 ? "" : "s"}` : null,

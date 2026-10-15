@@ -172,6 +172,11 @@ type Reader struct {
 	Dir  string
 	Runs *Runner // the runs this process started; may be nil
 
+	// Docker and CacheDir, when set, let RealSource fetch the real files a
+	// trial's invariants live in.
+	Docker   Docker
+	CacheDir string
+
 	mu    sync.Mutex
 	cache map[string]cachedTrial // by trial directory
 }
