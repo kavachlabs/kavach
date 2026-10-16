@@ -1,0 +1,161 @@
+name: bench-images
+
+# Builds the benchmark task images (bench/agent/harbor/README.md, "Images")
+# that the Harbor tasks pull, because Daytona, Modal and Vercel have no
+# repository to build them from. An image is named by a hash of its inputs
+# (bench/agent/harbor/image-tag.py), so a push builds only what changed.
+# Each architecture builds on a native runner (these images compile Rust, Go
+# and C, which QEMU would make slow) and the two are merged into one manifest.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'bench/agent/**'
+      - '.github/workflows/bench-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: task.toml image references are current
+        run: python3 bench/agent/harbor/sync-tasks.py --check
+      - run: python3 bench/agent/harbor/test_image_tag.py
+
+  plan:
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      builds: ${{ steps.plan.outputs.builds }}
+      tasks: ${{ steps.plan.outputs.tasks }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Images not yet in GHCR
+        id: plan
+        run: |
+          python3 bench/agent/harbor/image-tag.py list > all.json
+          : > missing.jsonl
+          jq -c '.[]' all.json | while read -r row; do
+            ref=$(jq -r .ref <<<"$row")
+            if docker manifest inspect "$ref" >/dev/null 2>&1; then
+              echo "have $ref"
+            else
+              echo "need $ref"
+              echo "$row" >> missing.jsonl
+            fi
+          done
+          # One job per task and architecture builds all of the task's missing
+          # targets, so they share layers; one merge job per task follows.
+          tasks=$(jq -sc 'group_by(.task) | map({task: .[0].task, platforms: .[0].platforms, targets: map(.target) | join(" ")})' missing.jsonl)
+          builds=$(jq -c '[.[] | . as $t | ($t.platforms | split(",")[]) as $p
+            | $t + {platform: $p, arch: ($p | split("/")[1]),
+                    runner: (if $p == "linux/arm64" then "ubuntu-24.04-arm" else "ubuntu-latest" end)}]' <<<"$tasks")
+          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
+          echo "builds=$builds" >> "$GITHUB_OUTPUT"
+
+  build:
+    if: needs.plan.outputs.builds != '[]'
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ matrix.task }} (${{ matrix.arch }})
+        env:
+          TASK: ${{ matrix.task }}
+          TARGETS: ${{ matrix.targets }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          for target in $TARGETS; do
+            ref=$(python3 bench/agent/harbor/image-tag.py ref "$TASK" "$target")
+            docker buildx build \
+              --file "bench/agent/tasks/$TASK/Dockerfile" \
+              --target "$target" \
+              --platform "$PLATFORM" \
+              --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --cache-from "type=registry,ref=ghcr.io/kavachlabs/bench-cache:$TASK-$ARCH" \
+              --cache-to "type=registry,ref=ghcr.io/kavachlabs/bench-cache:$TASK-$ARCH,mode=max" \
+              --tag "$ref-$ARCH" \
+              --push .
+          done
+
+  merge:
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.tasks != '[]' }}
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge ${{ matrix.task }} into manifest lists
+        env:
+          TASK: ${{ matrix.task }}
+          TARGETS: ${{ matrix.targets }}
+          PLATFORMS: ${{ matrix.platforms }}
+        run: |
+          # A target whose architecture build failed is skipped, so one failure
+          # does not block the other tasks; the job still fails so it shows.
+          missing=0
+          for target in $TARGETS; do
+            ref=$(python3 bench/agent/harbor/image-tag.py ref "$TASK" "$target")
+            parts=()
+            ok=1
+            for p in ${PLATFORMS//,/ }; do
+              part="$ref-${p#linux/}"
+              if ! docker buildx imagetools inspect "$part" >/dev/null 2>&1; then
+                echo "::error::$TASK: $part was not built; $ref is not published"
+                missing=1
+                ok=0
+              fi
+              parts+=("$part")
+            done
+            [ "$ok" = 1 ] || continue
+            docker buildx imagetools create --tag "$ref" "${parts[@]}"
+            docker buildx imagetools inspect "$ref"
+          done
+          exit "$missing"

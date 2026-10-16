@@ -56,6 +56,42 @@ type RunRequest struct {
 	// Name is the job's name and folder; default three random words
 	// (brisk-cobalt-heron).
 	Name string `json:"name"`
+	// Environment is where the trials execute: docker (default, local),
+	// daytona, modal or vercel. The last three need their keys in the env
+	// file or the process environment.
+	Environment string `json:"environment"`
+}
+
+// ReadEnv parses a dotenv file; ok is false when it cannot be read.
+func ReadEnv(path string) (vals map[string]string, ok bool) {
+	vals = map[string]string{}
+	if path == "" {
+		return vals, false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return vals, false
+	}
+	for _, raw := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+			v = v[1 : len(v)-1]
+		}
+		if k != "" {
+			vals[k] = v
+		}
+	}
+	return vals, true
 }
 
 // Runner starts Harbor runs and tracks them.
@@ -70,7 +106,10 @@ type Runner struct {
 	Harbor   string // the harbor command
 	JobsDir  string // absolute: Harbor mounts trial folders into containers
 	TasksDir string
-	EnvFile  string // given to Harbor as --env-file if it exists; never read here
+	EnvFile  string // given to Harbor as --env-file if it exists; read only to tell which provider keys are set, never returned
+	// Extra reports whether the Harbor install can run a provider; nil
+	// asks Harbor's own Python (see Installed).
+	Extra func(Provider) error
 	// Root is the kavach repository. When set, Harbor runs there with it on
 	// PYTHONPATH, and the opencode agent is LiveAgent rather than Harbor's
 	// own: the model key stays out of the task container and each attempt
@@ -79,6 +118,9 @@ type Runner struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+
+	extraMu sync.Mutex
+	extras  map[string]extraResult
 }
 
 // LiveAgent is the import path of the repository's OpenCode agent for Harbor.
@@ -208,6 +250,20 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 	if !namePattern.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: job name %q", ErrInvalid, req.Name)
 	}
+	var provider *Provider
+	for i, p := range Providers {
+		if p.Name == req.Environment {
+			provider = &Providers[i]
+		}
+	}
+	if provider == nil && req.Environment != "" && req.Environment != "docker" {
+		return nil, fmt.Errorf("%w: environment %q is not docker, daytona, modal or vercel", ErrInvalid, req.Environment)
+	}
+	if provider != nil {
+		if problem := r.Problem(*provider); problem != "" {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
+		}
+	}
 	models := req.Models
 	if len(models) == 0 {
 		models = []string{""}
@@ -230,7 +286,7 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		}
 		agents = append(agents, a)
 	}
-	return map[string]any{
+	cfg := map[string]any{
 		"job_name":            req.Name,
 		"jobs_dir":            r.JobsDir,
 		"n_attempts":          req.Attempts,
@@ -239,7 +295,19 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		"retry":               map[string]any{"max_retries": req.Retries},
 		"agents":              agents,
 		"tasks":               tasks,
-	}, nil
+	}
+	if provider != nil {
+		env := map[string]any{"type": provider.Name}
+		if provider.Name == "modal" {
+			// Modal's default runtime puts every Compose service on the
+			// host network, which breaks tasks with their own networks;
+			// the VM runtime runs a real Docker daemon. The factory passes
+			// kwargs to ModalEnvironment's constructor.
+			env["kwargs"] = map[string]any{"modal_vm_runtime": true}
+		}
+		cfg["environment"] = env
+	}
+	return cfg, nil
 }
 
 // Stop interrupts a run bench started, by this console or an earlier one.

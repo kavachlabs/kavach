@@ -70,6 +70,8 @@ The console never reads it.
 ```
 
 - `agent`: a Harbor agent name, or a custom agent's import path.
+- `environment`: where the attempts run (`daytona`, `modal`, `vercel`), from
+  the job's config. Absent for local Docker runs.
 - `trials_done`: trials that passed, failed, or errored.
 - `trials_total`: every trial the job will run.
 - `cost`: the USD cost of all trials so far. It is 0 when the agent reports
@@ -236,7 +238,12 @@ Cached for 10 seconds.
   "tasks_dir": "/Users/me/kavach/bench/agent/harbor/tasks",
   "tasks": 1,
   "env_file": true,
-  "root": "/Users/me/kavach"
+  "root": "/Users/me/kavach",
+  "environments": [
+    {"name": "daytona", "ready": false, "keys": [{"name": "DAYTONA_API_KEY", "set": false}]},
+    {"name": "modal", "ready": true, "keys": [{"name": "MODAL_TOKEN_ID", "set": true}, {"name": "MODAL_TOKEN_SECRET", "set": true}]},
+    {"name": "vercel", "ready": false, "keys": [{"name": "VERCEL_TOKEN", "set": false}]}
+  ]
 }
 ```
 
@@ -244,10 +251,24 @@ Cached for 10 seconds.
 - `tasks`: the number of benchmark tasks (base names).
 - `env_file`: whether `bench/agent/.env` exists.
 - `root`: the kavach repository.
+- `environments`: for each cloud provider a run can use, whether a run on it
+  can start: `ready` is true when it has credentials and the Harbor install
+  has its extra (`harbor[daytona]`, `harbor[modal]`, `harbor[vercel]`, checked
+  by importing the SDK with Harbor's own Python, and cached for 30 seconds
+  after a failure). `need` describes the credentials accepted: Daytona
+  `DAYTONA_API_KEY` or `DAYTONA_JWT_TOKEN` and `DAYTONA_ORGANIZATION_ID`;
+  Modal `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` or a `~/.modal.toml`
+  (`via` says when that file is what authenticates); Vercel `VERCEL_TOKEN`
+  (Harbor's `vercel link` fallback is not honoured). `problem` says why
+  `ready` is false, including the `uv tool install --with 'harbor[…]' harbor`
+  command when the extra is missing. `keys` are names and booleans only, never
+  a value; a key left empty in `.env` is unset even if the server's
+  environment has it, as Harbor loads `.env` over it. Unlike the rest, it is
+  read on every request: saving a key in `/api/settings` shows at once.
 - `jobs_warning`: present when attempts in `jobs_dir` can't be graded. On a
   Mac, Colima shares only the home folder with Docker, so a jobs folder
   outside it reaches the verifier empty. The consoles show the warning and
-  start no runs.
+  start no local Docker runs; runs on a cloud provider are not affected.
 
 ### GET /api/tasks
 
@@ -272,11 +293,14 @@ instruction, without its `#` marks or a leading `Task:` label.
 
 What one Harbor task (`redis-10068-kavach`, not the base name) runs in, for
 reading before a run. `files` holds, in order: the agent's compose file
-(`role: "agent"`), the verifier's (`"verifier"`), each Dockerfile they build
-(`"dockerfile"`, listed once even when both build it) and `task.toml`
-(`"task"`). A compose file's `dockerfile` is the absolute path it builds, with
-`${VAR:-default}` in its context expanded from the server's environment as a
-run would, and `target` its build target. A file that does not exist has
+(`role: "agent"`), the verifier's (`"verifier"`), each Dockerfile their images
+are built from (`"dockerfile"`, listed once even when both use it) and
+`task.toml` (`"task"`). The compose files build nothing: a compose file's
+`image` is the prebuilt image `task.toml` names for it (`[environment]` or
+`[verifier.environment]` `docker_image`,
+`ghcr.io/kavachlabs/bench-<task>:<target>-<key>`), `target` the Dockerfile
+stage in that ref, and `dockerfile` the absolute path of
+`bench/agent/tasks/<task>/Dockerfile`, found from the tasks directory. A file that does not exist has
 `missing: true`; one over 256 KiB is cut short with `truncated: true`. The
 other fields come from `task.toml`. 404 when there is no such task.
 
@@ -290,8 +314,10 @@ other fields come from `task.toml`. 404 when there is no such task.
   "mcp_servers": ["kavach"],
   "files": [
     {"role": "agent", "path": "environment/docker-compose.yaml", "content": "…",
+     "image": "ghcr.io/kavachlabs/bench-axum-1934:kavach-145a3830e64f",
      "dockerfile": "/…/bench/agent/tasks/axum-1934/Dockerfile", "target": "kavach"},
     {"role": "verifier", "path": "tests/docker-compose.yaml", "content": "…",
+     "image": "ghcr.io/kavachlabs/bench-axum-1934:grader-145a3830e64f",
      "dockerfile": "/…/bench/agent/tasks/axum-1934/Dockerfile", "target": "grader"},
     {"role": "dockerfile", "path": "/…/bench/agent/tasks/axum-1934/Dockerfile", "content": "…"},
     {"role": "task", "path": "task.toml", "content": "…"}
@@ -413,7 +439,7 @@ verifier does not write one).
 What the trial's service declares as invariants. Kavach knows an invariant
 only by its name, so this reads the source that declares them: the task's
 Kavach integration patch (the `*kavach*.patch` next to the Dockerfile its
-compose file builds) and the agent's patch on top. `names`, optional, are
+image is built from) and the agent's patch on top. `names`, optional, are
 invariants the trial's contract checks named; they are looked for along with
 any the source declares.
 
@@ -449,14 +475,26 @@ any the source declares.
 - `agent`: on an invariant or a snippet, the agent's patch adds or changes
   lines that name or describe it.
 - `note`: why `invariants` is empty, when it is.
-- `source`: where the real source files come from: `container` (the trial's
+- `source`: where the real source files come from: `artifacts` (tried first:
+  the whole files the task's second collect hook copied to
+  `/logs/artifacts/source/<repo-relative path>`, so under the trial's
+  `artifacts/logs/artifacts/source/`; every regular file changed since the
+  commit the arm's `patch.diff` starts from, which in the Kavach arms is the
+  parent of the integration commit, so its files are included; not deleted,
+  not binary, not a symlink, up to 1 MB each; read in place, refusing
+  symlinks, with no Docker and no cache, so it works for a trial that ran on
+  another machine; trials that ran before the hook have none. If some of the
+  snippets' files are missing from it and Docker is configured, the
+  container/image path is tried; without Docker, or if that fails, the partial
+  set is used and the other snippets keep to the patches), `container` (the trial's
   own container, `<trial>__env-main-1`, while it runs), `image` (a throwaway
-  container, with no network, from `kavach-bench/<task>:<arm>` with the
+  container, with no network, from the task's prebuilt image (`docker_image` in its
+  `task.toml`) with the
   trial's `patch.diff` applied on `/work`) or `patch` (neither; the snippets
   are only the patches' lines). `source_note` says why it is `patch`, or warns
   that the image was built after the trial started and its files may differ.
-  When the image is missing the note has the `docker build` command that
-  makes it. The first request for a trial does the work, one at a time per
+  When the image is missing the note has the `image-tag.py build` command (or
+  `docker pull`) that gets it. The first request for a trial does the work, one at a time per
   trial; the files are cached under `~/.cache/kavach-bench/src/<job>/<trial>/`
   (`image/…`, or `container/…` re-read every time). The patch is applied on
   the image's `HEAD`, as the collect hook diffs against the Kavach
@@ -510,7 +548,7 @@ when the task has neither.
 ```
 
 - The fixture is the grader's copy (`verifier/incident.kavach`), else the
-  `incident.kavach` beside the Dockerfile the task's verifier builds; for a
+  `incident.kavach` beside the Dockerfile the task's verifier image is built from; for a
   feature task, the collected contract's `traffic.kavach` (`kind:
   "traffic"`, with no `old`, `new` or `diff`).
 - `steps` are as in a variant's replay below; `recorded` holds production's
@@ -627,6 +665,7 @@ rejected.
 | `timeout_sec` | overrides the tasks' agent timeout when it is above 0 |
 | `concurrent` | trials at once, 1–32. Default 1 |
 | `retries` | how many times an attempt that ends with an error (a provider or container failure) runs again, 0–5. Harbor deletes the failed attempt's folder first. It does not retry timeouts, usage limits or refusals, nor an attempt whose tests ran and failed. Default 0 |
+| `environment` | where the attempts run: `docker` (local, the default), `daytona`, `modal` or `vercel`. A cloud provider is written to the job config as `environment.type` and is refused with 400, naming the missing variable, unless its keys are present (see `environments` in `/api/status`). `modal` also sets `environment.kwargs.modal_vm_runtime: true`: Harbor's default Modal runtime puts every Compose service on the host network, which breaks tasks with networks of their own, so the VM runtime (an alpha Modal feature) is used. `docker` adds nothing to the config |
 | `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default adjective-colour-animal and seven random letters and digits (`brisk-cobalt-heron-x7k2p9q`) |
 
 The trials are every task × model × attempt.

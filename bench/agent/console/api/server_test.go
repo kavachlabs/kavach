@@ -502,17 +502,16 @@ func TestVariantEndpoints(t *testing.T) {
 }
 
 func TestInvariantSource(t *testing.T) {
-	tasks := t.TempDir()
+	tasks := filepath.Join(t.TempDir(), "harbor", "tasks")
 	task := filepath.Join(tasks, "redis-10068-kavach")
 	integration := "diff --git a/src/kavach.c b/src/kavach.c\n--- /dev/null\n+++ b/src/kavach.c\n@@ -0,0 +1,3 @@\n+static const kavach_invariant invariants[] = {\n+    {\"stream-trim-contract\", trimInvariant, NULL},\n+};\n"
 	for name, text := range map[string]string{
-		"task.toml":                          "",
-		"environment/docker-compose.yaml":    "services:\n  main:\n    build: ../docker\n",
-		"docker/Dockerfile":                  "FROM scratch\n",
-		"docker/redis-kavach.patch":          integration,
-		"docker/not-a-source.txt":            "secret\n",
-		"../redis-10068-control/task.toml":   "",
-		"../redis-10068-control/secret.diff": "secret\n",
+		"task.toml":                                     "[environment]\ndocker_image = \"ghcr.io/kavachlabs/bench-redis-10068:kavach-0123456789ab\"\n",
+		"../../../tasks/redis-10068/Dockerfile":         "FROM scratch\n",
+		"../../../tasks/redis-10068/redis-kavach.patch": integration,
+		"../../../tasks/redis-10068/not-a-source.txt":   "secret\n",
+		"../redis-10068-control/task.toml":              "",
+		"../redis-10068-control/secret.diff":            "secret\n",
 	} {
 		p := filepath.Join(task, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -531,7 +530,7 @@ func TestInvariantSource(t *testing.T) {
 		t.Fatalf("%d %+v", code, inv)
 	}
 	agentPatch := filepath.Join(jobs, "redis-oracle", "redis-10068-kavach__Dw5kmkd", "artifacts", "logs", "artifacts", "patch.diff")
-	if want := filepath.Join(task, "docker", "redis-kavach.patch"); inv.Sources[0] != want || inv.Sources[1] != agentPatch {
+	if want := filepath.Join(filepath.Dir(tasks), "..", "tasks", "redis-10068", "redis-kavach.patch"); inv.Sources[0] != want || inv.Sources[1] != agentPatch {
 		t.Fatalf("sources %q, want %q and %q", inv.Sources, want, agentPatch)
 	}
 	if len(inv.Invariants) == 0 || len(inv.Invariants[0].Code) == 0 {
@@ -590,11 +589,15 @@ type fakeDocker struct {
 	removed   int
 	applied   []string
 	failApply bool
+	// only, when set, limits ImageCreated to these names; asked records the names tried.
+	only  map[string]bool
+	asked []string
 }
 
 func (f *fakeDocker) Running(string) bool { return f.running }
 func (f *fakeDocker) ImageCreated(image string) (time.Time, error) {
-	if f.created.IsZero() {
+	f.asked = append(f.asked, image)
+	if f.created.IsZero() || (f.only != nil && !f.only[image]) {
 		return time.Time{}, errors.New("no such image: " + image)
 	}
 	return f.created, nil
@@ -618,14 +621,13 @@ func (f *fakeDocker) Exec(_ string, stdin []byte, args ...string) ([]byte, error
 }
 
 func TestInvariantRealSource(t *testing.T) {
-	tasks := t.TempDir()
+	tasks := filepath.Join(t.TempDir(), "harbor", "tasks")
 	task := filepath.Join(tasks, "redis-10068-kavach")
 	integration := "diff --git a/src/kavach.c b/src/kavach.c\n--- /dev/null\n+++ b/src/kavach.c\n@@ -0,0 +1,3 @@\n+static const kavach_invariant invariants[] = {\n+    {\"stream-trim-contract\", trimInvariant, NULL},\n+};\n"
 	for name, text := range map[string]string{
-		"task.toml":                                        "",
-		"environment/docker-compose.yaml":                  "services:\n  main:\n    build:\n      context: .\n      dockerfile: tasks/redis-10068/Dockerfile\n      target: kavach\n",
-		"environment/tasks/redis-10068/Dockerfile":         "FROM scratch\n",
-		"environment/tasks/redis-10068/redis-kavach.patch": integration,
+		"task.toml":                                     "[environment]\ndocker_image = \"ghcr.io/kavachlabs/bench-redis-10068:kavach-0123456789ab\"\n",
+		"../../../tasks/redis-10068/Dockerfile":         "FROM scratch\n",
+		"../../../tasks/redis-10068/redis-kavach.patch": integration,
 	} {
 		p := filepath.Join(task, name)
 		os.MkdirAll(filepath.Dir(p), 0o755)
@@ -643,7 +645,7 @@ func TestInvariantRealSource(t *testing.T) {
 	if code := get(t, ts.URL+trial+"/invariants", &inv); code != 200 {
 		t.Fatalf("%d", code)
 	}
-	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "kavach-bench/redis-10068:kavach was built") || !slices.Equal(inv.Files, []string{"src/kavach.c"}) {
+	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "ghcr.io/kavachlabs/bench-redis-10068:kavach-0123456789ab was built") || !slices.Equal(inv.Files, []string{"src/kavach.c"}) {
 		t.Fatalf("source %q note %q files %q", inv.Source, inv.SourceNote, inv.Files)
 	}
 	c := inv.Invariants[0].Code[0]
@@ -711,8 +713,71 @@ func TestInvariantRealSource(t *testing.T) {
 		mod()
 		var fb harbor.Invariants
 		get(t, ts.URL+trial+"/invariants", &fb)
-		if fb.Source != "patch" || fb.Invariants[0].Code[0].SrcFile != "" || !strings.Contains(fb.SourceNote, "docker build -f") {
+		if fb.Source != "patch" || fb.Invariants[0].Code[0].SrcFile != "" || !strings.Contains(fb.SourceNote, "image-tag.py build redis-10068 kavach") {
 			t.Errorf("%s: %q %q", name, fb.Source, fb.SourceNote)
 		}
+	}
+}
+
+func TestInvariantSourceImageOrder(t *testing.T) {
+	tasks := filepath.Join(t.TempDir(), "harbor", "tasks")
+	task := filepath.Join(tasks, "redis-10068-kavach")
+	toml := "ghcr.io/kavachlabs/bench-redis-10068:kavach-0123456789ab"
+	for name, text := range map[string]string{
+		"task.toml":                                     "[environment]\ndocker_image = \"" + toml + "\"\n",
+		"../../../tasks/redis-10068/Dockerfile":         "FROM scratch\n",
+		"../../../tasks/redis-10068/redis-kavach.patch": "diff --git a/src/kavach.c b/src/kavach.c\n--- /dev/null\n+++ b/src/kavach.c\n@@ -0,0 +1,3 @@\n+static const kavach_invariant invariants[] = {\n+    {\"stream-trim-contract\", trimInvariant, NULL},\n+};\n",
+	} {
+		p := filepath.Join(task, name)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := copyJobs(t)
+	trialDir := filepath.Join(jobs, "redis-oracle", "redis-10068-kavach__Dw5kmkd")
+	trial := "/api/trials/redis-oracle/redis-10068-kavach__Dw5kmkd/invariants"
+	file := "static const kavach_invariant invariants[] = {\n    {\"stream-trim-contract\", trimInvariant, NULL},\n};\n"
+	run := func(only ...string) (harbor.Invariants, []string) {
+		fd := &fakeDocker{created: time.Now().Add(-time.Hour), only: map[string]bool{}, files: map[string]string{"src/kavach.c": file}}
+		for _, o := range only {
+			fd.only[o] = true
+		}
+		_, ts := newServer(t, Config{JobsDir: jobs, TasksDir: tasks, Docker: fd, CacheDir: t.TempDir()})
+		var inv harbor.Invariants
+		get(t, ts.URL+trial, &inv)
+		return inv, fd.asked
+	}
+
+	// Only the legacy local name exists: it is used, and the note says so.
+	inv, asked := run("kavach-bench/redis-10068:kavach")
+	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "kavach-bench/redis-10068:kavach") || !slices.Equal(asked, []string{toml, "kavach-bench/redis-10068:kavach"}) {
+		t.Errorf("legacy: %q %q %q", inv.Source, inv.SourceNote, asked)
+	}
+
+	// An image Harbor recorded is tried first, and wins when it exists.
+	cfg := filepath.Join(trialDir, "config.json")
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(strings.Replace(string(b), `"task":`, `"environment": {"docker_image": "local/recorded:1"}, "task":`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inv, asked = run("local/recorded:1", toml)
+	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "local/recorded:1, recorded for the trial") || !slices.Equal(asked, []string{"local/recorded:1"}) {
+		t.Errorf("recorded: %q %q %q", inv.Source, inv.SourceNote, asked)
+	}
+
+	// The task.toml ref is next, with no remark in the note.
+	inv, asked = run(toml)
+	if inv.Source != "image" || strings.Contains(inv.SourceNote, "Read from") || !slices.Equal(asked, []string{"local/recorded:1", toml}) {
+		t.Errorf("toml: %q %q %q", inv.Source, inv.SourceNote, asked)
+	}
+
+	// None exists: the patch alone, naming the first image tried.
+	inv, _ = run()
+	if inv.Source != "patch" || !strings.Contains(inv.SourceNote, "local/recorded:1") {
+		t.Errorf("none: %q %q", inv.Source, inv.SourceNote)
 	}
 }

@@ -137,3 +137,19 @@ func TestTrialIncidentTraffic(t *testing.T) {
 		t.Errorf("got kind %q, %d steps, diff %v, new %v", inc.Kind, len(inc.Steps), inc.Diff, inc.New)
 	}
 }
+
+// The task's incident.kavach sits beside the Dockerfile that task.toml's
+// verifier image is built from.
+func TestTaskFixture(t *testing.T) {
+	root := t.TempDir()
+	task := filepath.Join(root, "harbor", "tasks", "demo-kavach")
+	writeFile(t, filepath.Join(task, "task.toml"), "[verifier.environment]\ndocker_image = \"ghcr.io/kavachlabs/bench-demo:grader-0123456789ab\"\n")
+	writeFile(t, filepath.Join(task, "tests", "docker-compose.yaml"), "services:\n  main: {}\n")
+	want := filepath.Join(root, "tasks", "demo", "incident.kavach")
+	writeFile(t, want, "x")
+	trial := t.TempDir()
+	writeFile(t, filepath.Join(trial, "config.json"), `{"task":{"path":"`+task+`"}}`)
+	if got := taskFixture(trial); got != want {
+		t.Errorf("taskFixture = %q, want %q", got, want)
+	}
+}

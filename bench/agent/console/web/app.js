@@ -263,7 +263,7 @@ export async function api(path, opts) {
 }
 
 function loadForm() {
-  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, retries: 1, timeout: 0, modelSort: "" };
+  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, retries: 1, timeout: 0, modelSort: "", environment: "docker" };
   try {
     Object.assign(form, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
   } catch {}
@@ -701,6 +701,7 @@ function renderTop() {
     kids.push(h("span", { class: "status-pill" },
       h("span", { class: `dot ${dot}` }),
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
+    if (job.environment && ENVIRONMENTS[job.environment]) kids.push(h("span", { class: "status-pill", title: "Where this run's attempts execute" }, ENVIRONMENTS[job.environment]));
     if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
@@ -1008,7 +1009,7 @@ function renderSide() {
       class: j.id === current.job ? "on" : null,
       title: `${name} (${j.id})`,
     },
-      h("span", {}, shape ? `${name} · ${shape}` : name, h("span", { class: "sub" }, j.id)),
+      h("span", {}, shape ? `${name} · ${shape}` : name, h("span", { class: "sub" }, j.environment && j.environment !== "docker" ? `${j.id} · ${j.environment}` : j.id)),
       mark));
   }
 
@@ -1208,6 +1209,22 @@ function updateRunDefaults(patch) {
   renderSettingsModal();
 }
 
+const ENVIRONMENTS = { docker: "Local Docker", daytona: "Daytona", modal: "Modal", vercel: "Vercel" };
+
+// Why a run on a remote provider cannot start, from the server's status.
+function envProblem(env) {
+  const e = ((state.status && state.status.environments) || []).find((x) => x.name === env);
+  return e && !e.ready ? e.problem : "";
+}
+
+function environmentHint(env) {
+  if (env === "docker") return "Each attempt runs in a container on this machine.";
+  const problem = envProblem(env);
+  return problem
+    ? `${problem[0].toUpperCase()}${problem.slice(1)}`
+    : `Each attempt runs in a ${ENVIRONMENTS[env]} sandbox, with the keys from your API keys file.`;
+}
+
 function settingsGeneralTab() {
   const f = state.form;
   const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b);
@@ -1221,6 +1238,16 @@ function settingsGeneralTab() {
           id: "set-agent", labelledBy: "set-agent-lbl", value: f.agent,
           options: Object.entries(AGENTS).map(([v, info]) => ({ value: v, label: info.label, title: info.desc })),
           onChange: (v) => updateRunDefaults({ agent: v }),
+        }),
+      }),
+      settingsRow({
+        label: "Where attempts run",
+        labelId: "set-env-lbl",
+        hint: environmentHint(f.environment),
+        control: segmented({
+          id: "set-env", labelledBy: "set-env-lbl", value: f.environment,
+          options: Object.entries(ENVIRONMENTS).map(([v, label]) => ({ value: v, label })),
+          onChange: (v) => updateRunDefaults({ environment: v }),
         }),
       }),
       settingsRow({
@@ -1364,6 +1391,11 @@ function settingsEnvironmentTab() {
       tool("Docker", st.docker, "Start Docker Desktop, then reopen this tab."),
       tool("Harbor", st.harbor, "Install it with uv tool install harbor."),
     ]),
+    settingsGroup("Cloud providers", (st.environments || []).map((e) => settingsRow({
+      label: ENVIRONMENTS[e.name] || e.name,
+      hint: e.ready ? (e.via ? `Set via ${e.via}` : e.keys.filter((k) => k.set).map((k) => k.name).join(", ")) : `${e.problem[0].toUpperCase()}${e.problem.slice(1)}`,
+      control: h("span", { class: `key-badge ${e.ready ? "ok" : "bad"}` }, e.ready ? "Ready" : "Not ready"),
+    }))),
     settingsGroup("Folders", [
       st.root ? pathRow("Repository", st.root) : null,
       pathRow("Benchmark tasks", st.tasks_dir, `${st.tasks} task${st.tasks === 1 ? "" : "s"} found.`),
@@ -1927,7 +1959,7 @@ function renderNew(view) {
           onchange: (e) => { f.runs = clampInt(e.target.value, 1, 100, 1); saveForm(); renderView(); },
         }),
         h("span", { class: "v" }, "each"),
-        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}`))))));
+        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment]}` : ""}`))))));
 
   if (state.picker.open && needsModel(f.agent)) kids.push(renderPicker());
 
@@ -2396,9 +2428,10 @@ function pickerFoot() {
 
 function canRun() {
   const f = state.form;
-  if (state.status && state.status.jobs_warning) return state.status.jobs_warning;
+  if (state.status && state.status.jobs_warning && f.environment === "docker") return state.status.jobs_warning;
   if (!state.tasks || !state.tasks.length) return "No task to run.";
   if (!chosenTasks().length) return "Choose at least one arm.";
+  if (envProblem(f.environment)) return environmentHint(f.environment);
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + Add OpenRouter model, or /model <id>.";
   return "";
 }
@@ -2408,6 +2441,7 @@ async function startRun() {
   const why = canRun();
   if (why) return say(why, true);
   const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent, retries: f.retries };
+  if (f.environment !== "docker") body.environment = f.environment;
   if (needsModel(f.agent)) body.models = f.models.map((m) => `openrouter/${m}`);
   if (f.timeout) body.timeout_sec = f.timeout * 60;
   state.starting = true;

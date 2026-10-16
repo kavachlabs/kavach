@@ -7,12 +7,13 @@ description = "Redis at the base commit and the bug report."
 
 [agent]
 timeout_sec = 2700.0
-# No network while the agent works: the OpenCode agent
-# (bench/agent/harbor/agents) lets it reach only its model proxy, which
-# holds the API key.
-network_mode = "no-network"
+# No network while the agent works: main's Compose network is internal and
+# shared only with the model proxy service, which holds the API key
+# (environment/docker-compose.yaml; bench/agent/harbor/agents/README.md).
 
 [environment]
+# Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
+docker_image = "ghcr.io/kavachlabs/bench-redis-10764:control-8470f5349f8f"
 build_timeout_sec = 1800.0
 workdir = "/work"
 
@@ -26,6 +27,21 @@ environment_mode = "separate"
 timeout_sec = 1200.0
 env = { ARM = "control" }
 
+[verifier.environment]
+# Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
+docker_image = "ghcr.io/kavachlabs/bench-redis-10764:grader-8470f5349f8f"
+build_timeout_sec = 1800.0
+workdir = "/work"
+
 [[verifier.collect]]
 user = "root"
 command = "cd /work && git -c safe.directory=/work add -A && git -c safe.directory=/work diff --cached --binary $(git -c safe.directory=/work rev-list --max-parents=0 HEAD) > /logs/artifacts/patch.diff"
+
+# Also the final version of every file changed since the commit the patch
+# starts from (for the Kavach arms, the parent of the integration commit, so
+# its files are included): whole, regular files only, not deleted or binary,
+# up to 1 MB each and 32 MB in all, so the console can show the agent's
+# source without the task's image.
+[[verifier.collect]]
+user = "root"
+command = "cd /work && g=\"git -c safe.directory=/work -c core.quotepath=false\" && $g add -A && b=$($g rev-list --max-parents=0 HEAD) && mkdir -p /logs/artifacts/source && t=0 && $g diff --cached --numstat --no-renames --diff-filter=d $b | while IFS=$(printf \"\\t\") read -r a r f; do [ \"$a\" != - ] && [ -f \"$f\" ] && [ ! -L \"$f\" ] && s=$(wc -c < \"$f\") && [ $s -le 1048576 ] && [ $((t+s)) -le 33554432 ] && t=$((t+s)) && mkdir -p \"/logs/artifacts/source/$(dirname \"$f\")\" && cp \"$f\" \"/logs/artifacts/source/$f\" && chmod 644 \"/logs/artifacts/source/$f\"; done; true"

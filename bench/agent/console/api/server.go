@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,6 +146,28 @@ type Status struct {
 	Root     string `json:"root,omitempty"`
 	// JobsWarning says why runs in JobsDir may fail to grade.
 	JobsWarning string `json:"jobs_warning,omitempty"`
+	// Environments says which remote providers have their keys; names only.
+	Environments []EnvironmentStatus `json:"environments"`
+}
+
+// EnvironmentStatus is whether a run on a remote provider can start: its
+// credentials are present and the Harbor install has its extra.
+type EnvironmentStatus struct {
+	Name  string `json:"name"`
+	Ready bool   `json:"ready"`
+	// Need describes the credentials the provider accepts.
+	Need string `json:"need"`
+	// Via names the file that authenticates when no variable does.
+	Via string `json:"via,omitempty"`
+	// Problem says why Ready is false.
+	Problem string      `json:"problem,omitempty"`
+	Keys    []KeyStatus `json:"keys"`
+}
+
+// KeyStatus is one variable a provider needs and whether it is set.
+type KeyStatus struct {
+	Name string `json:"name"`
+	Set  bool   `json:"set"`
 }
 
 // Check is whether a tool works, with its version or why not.
@@ -170,7 +193,24 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 		st.EnvFile = s.cfg.EnvFile != "" && err == nil
 		s.status, s.statusTime = st, time.Now()
 	}
-	writeJSON(w, http.StatusOK, s.status)
+	st := s.status
+	// Not cached: the keys change when settings are saved.
+	st.Environments = s.environments()
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) environments() []EnvironmentStatus {
+	out := []EnvironmentStatus{}
+	for _, p := range harbor.Providers {
+		_, via := s.runner.Credentials(p)
+		problem := s.runner.Problem(p)
+		e := EnvironmentStatus{Name: p.Name, Ready: problem == "", Need: p.Need(), Via: via, Problem: problem, Keys: []KeyStatus{}}
+		for _, k := range p.Keys() {
+			e.Keys = append(e.Keys, KeyStatus{Name: k, Set: s.runner.KeySet(k)})
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func check(ctx context.Context, name string, args ...string) Check {
@@ -517,6 +557,12 @@ var knownKeys = []struct {
 	{"OPENAI_API_KEY", "OpenAI API Key", "Direct OpenAI API access for GPT & o-series models"},
 	{"NVIDIA_API_KEY", "NVIDIA NIM API Key", "Hosted Nemotron endpoints on build.nvidia.com"},
 	{"ZAI_API_KEY", "Z.ai API Key", "Direct Z.ai API access for GLM models"},
+	{"DAYTONA_API_KEY", "Daytona API Key", "Runs the trials on Daytona instead of local Docker"},
+	{"MODAL_TOKEN_ID", "Modal Token ID", "Runs the trials on Modal; needs the token secret too"},
+	{"MODAL_TOKEN_SECRET", "Modal Token Secret", "Runs the trials on Modal; needs the token ID too"},
+	{"DAYTONA_JWT_TOKEN", "Daytona JWT Token", "Instead of the API key; needs the organization ID too"},
+	{"DAYTONA_ORGANIZATION_ID", "Daytona Organization ID", "Used with the Daytona JWT token"},
+	{"VERCEL_TOKEN", "Vercel Token", "Runs the trials on Vercel Sandbox"},
 }
 
 func (s *Server) envFilePath() string {
@@ -532,7 +578,9 @@ func (s *Server) envFilePath() string {
 	return ""
 }
 
-func maskSecret(val string) string {
+// maskSecret keeps a key's recognisable prefix and last four characters. A
+// provider's key has no prefix known to be fixed, so only its last four show.
+func maskSecret(name, val string) string {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return ""
@@ -540,45 +588,19 @@ func maskSecret(val string) string {
 	if len(val) <= 8 {
 		return "••••••••"
 	}
+	for _, p := range harbor.Providers {
+		if slices.Contains(p.Keys(), name) {
+			return "••••" + val[len(val)-4:]
+		}
+	}
 	prefix := val[:min(8, len(val)-4)]
 	suffix := val[len(val)-4:]
 	return prefix + "••••" + suffix
 }
 
-func readEnvMap(path string) (map[string]string, bool) {
-	out := map[string]string{}
-	if path == "" {
-		return out, false
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return out, false
-	}
-	for _, raw := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		k = strings.TrimSpace(k)
-		v = strings.TrimSpace(v)
-		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
-			v = v[1 : len(v)-1]
-		}
-		if k != "" {
-			out[k] = v
-		}
-	}
-	return out, true
-}
-
 func (s *Server) buildSettingsResponse() SettingsResponse {
 	path := s.envFilePath()
-	vals, exists := readEnvMap(path)
+	vals, exists := harbor.ReadEnv(path)
 	seen := map[string]bool{}
 	keys := make([]KeyEntry, 0, len(knownKeys))
 	for _, k := range knownKeys {
@@ -589,7 +611,7 @@ func (s *Server) buildSettingsResponse() SettingsResponse {
 			Label:  k.label,
 			Hint:   k.hint,
 			Set:    v != "",
-			Masked: maskSecret(v),
+			Masked: maskSecret(k.name, v),
 		})
 	}
 	for name, v := range vals {
@@ -601,7 +623,7 @@ func (s *Server) buildSettingsResponse() SettingsResponse {
 			Label:  name,
 			Hint:   "Custom environment key in .env",
 			Set:    v != "",
-			Masked: maskSecret(v),
+			Masked: maskSecret(name, v),
 		})
 	}
 	return SettingsResponse{EnvFile: path, Exists: exists, Keys: keys}

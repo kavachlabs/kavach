@@ -159,13 +159,7 @@ func TestPatchLines(t *testing.T) {
 func TestIntegrationDriver(t *testing.T) {
 	root := t.TempDir()
 	task := filepath.Join(root, "harbor", "tasks", "demo-kavach")
-	writeFile(t, filepath.Join(task, "task.toml"), "[environment]\nworkdir = \"/work\"\n")
-	writeFile(t, filepath.Join(task, "environment", "docker-compose.yaml"), `services:
-  main:
-    build:
-      context: ../../../..
-      dockerfile: tasks/demo/Dockerfile
-`)
+	writeFile(t, filepath.Join(task, "task.toml"), "[environment]\ndocker_image = \"ghcr.io/kavachlabs/bench-demo:kavach-0123456789ab\"\nworkdir = \"/work\"\n")
 	writeFile(t, filepath.Join(root, "tasks", "demo", "Dockerfile"), "FROM scratch\n")
 	writeFile(t, filepath.Join(root, "tasks", "demo", "traffic.kavach"), "")
 	driver := filepath.Join(root, "tasks", "demo", "kavach_demo.py")

@@ -4,9 +4,5 @@
 # grader image stays the pilot's.
 services:
   main:
-    build:
-      context: ${KAVACH_ROOT:-../../../../../..}
-      dockerfile: bench/agent/tasks/redis-10068/Dockerfile
-      target: grader
     volumes:
       - ./:/tests

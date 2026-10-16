@@ -171,6 +171,9 @@ func (m *Model) runLine() string {
 	if m.set.Timeout > 0 {
 		runs += sDim.Render(fmt.Sprintf(" · %dm timeout", m.set.Timeout))
 	}
+	if m.set.Env != "" && m.set.Env != "docker" {
+		runs += sDim.Render(" · on " + m.set.Env)
+	}
 	return strings.Join([]string{arm, task, model, runs}, "  ")
 }
 
@@ -352,6 +355,9 @@ func (m *Model) header() (title, right string) {
 			models = j.Agent
 		}
 		title = fmt.Sprintf("# %s · %s × %s × %s", base, models, plural(len(arms), "arm", "arms"), plural(max(runs, 1), "run", "runs"))
+		if !m.local(j.Environment) {
+			title += " · on " + j.Environment
+		}
 		right = fmt.Sprintf("%d of %d done   %s", j.Done, j.Total, dollars(j.Cost))
 		if j.Status != harbor.JobRunning && j.Status != harbor.JobDone {
 			right = j.Status + " · " + right
@@ -907,6 +913,9 @@ func (m *Model) jobsBody(width int) []string {
 				ms = append(ms, modelShort(mod))
 			}
 			agent = strings.Join(ms, ", ")
+		}
+		if !m.local(j.Environment) {
+			agent += sDim.Render(" · " + j.Environment)
 		}
 		status := sDim.Render(j.Status)
 		switch j.Status {

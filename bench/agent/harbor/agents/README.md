@@ -4,10 +4,13 @@
 same `opencode.txt` event stream, same ATIF trajectory and token and cost
 accounting) with three changes:
 
-- the API key stays out of the task container, and during the run the
-  container can reach nothing but the model;
-- the attempt can be watched live in OpenCode's TUI or web UI, read-only;
-- the finished session is exported and can be reopened in OpenCode.
+- the API key stays out of the task container, which can reach nothing but
+  the model, on local Docker and on remote Compose providers (Daytona, Modal,
+  Vercel) alike;
+- the session is copied to the trial directory every 15 seconds, so a run on
+  a remote sandbox can be followed from the Mac, and reopened in OpenCode;
+- on local Docker the attempt can also be watched live in OpenCode's TUI or
+  web UI, read-only.
 
 ## Running
 
@@ -30,6 +33,15 @@ overridable with the provider's base-URL variable (`OPENROUTER_BASE_URL`).
 OpenCode keeps its own provider for these, so it prices the run from
 models.dev (filled during setup) and the trajectory has a cost.
 
+The proxy forwards one call, `POST /v1/chat/completions` (`MODEL_ALLOWED` in
+`proxy.py`), and answers every other method and path with 403, so the key
+cannot reach the provider's account endpoints (OpenRouter's `/keys`,
+`/credits`, `/auth`). The check is made on the target after `clean_target`,
+so a query string is fine and a path trick is a 400 or a 403. OpenCode 1.1.8
+makes only that call with the `openrouter` and openai-compatible providers
+(the proxy log of the stub run shows only it); a provider with another API
+(Anthropic's `/v1/messages`, OpenAI's `/v1/responses`) needs its entry added.
+
 Any OpenAI-compatible endpoint (NIM, vLLM, Z.ai):
 
 ```sh
@@ -45,24 +57,80 @@ Options (`harbor agent schema` does not list import-path agents; see
 `KavachOpenCodeOptions` in `opencode_live.py`): `version` (default 1.1.8;
 installing is skipped when the image already has it), `base_url`,
 `api_key_env`, `isolate` (default true), `require_isolation` (default true),
-`live` (default true), `proxy_image` (default `python:3.12-alpine`), plus
+`live` (default true), plus
 Harbor's OpenCode options (`opencode_config`, `disable_web_search`, ...).
 MCP servers declared by the task (the kavach arm's `kavach mcp`) are
 configured as Harbor's agent does.
 
 ### What a task must declare
 
-```toml
-[agent]
-network_mode = "no-network"
+The isolation is in the task's `environment/docker-compose.yaml`, which
+`sync-tasks.py` writes (see Isolation below):
+
+```yaml
+services:
+  main:
+    # ...
+    networks: [sealed]
+    cap_drop: [NET_RAW]
+  proxy:
+    image: python:3.12-alpine
+    init: true
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./proxy.py:/proxy.py:ro
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    networks: [sealed, upstream]
+networks:
+  sealed:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+  upstream: {}
 ```
 
-This turns on Harbor's egress control for the agent phase; the agent then
-opens exactly one address, its proxy. Setup (installing OpenCode, filling the
-models.dev cache) keeps the environment's network, and the verifier is
-unaffected. Without it the agent refuses to run (`require_isolation`); with
-`--ak require_isolation=false` it runs with open egress, still without the
-key.
+and `environment/proxy.py`, a copy of `agents/proxy.py` (Compose binds it from
+there; a remote provider uploads the environment directory, not `agents/`).
+The task must not set `[agent] network_mode = "no-network"`. The task image
+must ship OpenCode (the container has no network to install it), `bash` and
+`node`; the task images do.
+
+`inhibit_ipv4` leaves the host's side of the bridge without an address. An
+`internal` network has no route out, but the bridge's gateway address is the
+Docker host itself, and on Daytona, Modal and Vercel that is the sandbox VM,
+which has full egress; without the option `main` can connect to it. The option
+is honoured by Docker 29.5.2 (checked here); the DinD sandboxes install 28.3.3
+(Daytona, Modal: `dind_image` default in `daytona/environment.py` 694,
+`modal.py` 726) or the latest docker-ce (Vercel, `vercel/snapshots.py` 94), and
+which release introduced it was not checked, so the agent tests it:
+
+`cap_drop: [NET_RAW]` on `main` and the proxy's forwarding sysctls off close a
+last way past the proxy: a root `main` with raw sockets could otherwise address
+Ethernet frames to the proxy's MAC with the host as destination IP, and a
+proxy that routes would pass them on (send-only, but a channel). No Harbor
+overlay sets capabilities, `privileged` or sysctls on a task's services (the
+only `cap_add` is the egress sidecar's own), and the namespaced `net.*`
+sysctls need no privilege, so they apply on the DinD providers as on local
+Docker; `docker compose config` merges them with Harbor's build overlay. The
+tests check that `main` cannot open an `AF_PACKET` socket and that the proxy's
+forwarding is off; they do not send a frame, since without `NET_RAW` none can
+be sent.
+
+Before the run the agent tries, from the task container, to connect to
+`1.1.1.1:443` and to ports 22, 80, 443, 2375, 2376 and 8080 of the default
+gateway and of the first address of each connected subnet (read from
+`/proc/net/route`, leaving out the container's own address and the proxy's), and to
+resolve `example.com`. If any connects or resolves, the task is not sealed and the agent
+refuses to run (`require_isolation`); with `--ak require_isolation=false` it
+runs with open egress, still without the key.
+
+On Modal the default (non-VM) runtime adds `docker-compose-host-network.yaml`,
+`network_mode: host` on every service (`modal.py` 594-595, 801-812), which
+cancels all of this: `main` would share the host's network. Run with
+`--ek modal_vm_runtime=true` (`modal.py` 985-986); the agent fails at the
+start of `run()` on Modal without it.
 
 ### Testing without a model
 
@@ -77,7 +145,16 @@ STUB_KEY=sk-fake PYTHONPATH=$PWD harbor run -p bench/agent/harbor/agents/testdat
   -m stub/scripted --ak base_url=http://host.docker.internal:8399/v1 --ak api_key_env=STUB_KEY
 ```
 
-`--delay` holds the tool call so there is time to attach. The stub logs the
+(`hello` gives its proxy service `host.docker.internal`; the benchmark tasks
+do not.) `python3 bench/agent/harbor/agents/test_agents.py` checks the same
+topology without Harbor or OpenCode: a cut-down copy of the Compose file with a
+fake upstream. The main container gets the fake's answer through the proxy
+with the key added, cannot connect to `1.1.1.1` or resolve a host name, and
+has no key in its environment. It also checks that every task is in sync with
+`sync-tasks.py`.
+
+`--delay` holds the tool call so there is time to look at the mirrored
+session. The stub logs the
 `Authorization` header of each request: it carries the key from `STUB_KEY`,
 which the task container never had. To exercise OpenCode's OpenRouter
 provider instead, run with `-m openrouter/z-ai/glm-4.6`,
@@ -86,30 +163,48 @@ provider instead, run with `-m openrouter/z-ai/glm-4.6`,
 
 ## Watching
 
-While an attempt runs, `<trial-dir>/agent/opencode-live.json` holds:
+While `opencode run` works, the agent exports the session
+(`opencode export`, run in the task container) every 15 seconds and replaces
+`<trial-dir>/agent/opencode-session.json` atomically (a temporary file, then a
+rename), so the file is always whole. `show.sh <trial-dir>` opens whatever
+is there, mid-run too. This works wherever the trial runs: the export travels
+through `environment.exec`, not a bind mount. `opencode-live.json`, which the
+console reads, appears once the session exists:
 
 ```json
-{"url": "http://127.0.0.1:32774", "session": "ses_...", "started": "2026-10-11T09:08:24Z", "dir": "/work"}
+{"url": "", "session": "ses_...", "started": "2026-10-11T09:08:24Z", "dir": "/work"}
 ```
 
-`url` is the read-only view of the OpenCode server in the task container,
-on the host's loopback only; `session` is the attempt's session; `dir` its
-working directory in the container. The file appears once the session exists
-(about when the first model call starts) and, when the run ends, gains
-`"finished": "<RFC3339>"`; the URL then stops answering.
+and gains `"finished": "<RFC3339>"` when the run ends.
+
+### A live view on local Docker
+
+For OpenCode's own TUI or web UI on a local Docker run, publish the proxy's
+read-only view with the overlay and say which host port:
+
+```sh
+export KAVACH_VIEW_PORT=48081
+harbor run ... --extra-docker-compose bench/agent/harbor/agents/docker-compose-view.yaml
+```
+
+`url` in `opencode-live.json` is then `http://127.0.0.1:48081`, on the host's
+loopback only (it is written only when the overlay is among the run's extra
+Compose files; otherwise `url` is `""`), and
 
 ```sh
 bench/agent/harbor/attach.sh <trial-dir>         # opencode attach <url> --session <session>
 bench/agent/harbor/attach.sh <trial-dir> --web   # prints the URL for a browser
 ```
 
-Do not pass `--dir` to `opencode attach`: it changes to that directory on
-the host, and with a directory that exists only in the container the TUI
-starts and never draws.
+work as before. Do not pass `--dir` to `opencode attach`: it changes to that
+directory on the host, and with a directory that exists only in the container
+the TUI starts and never draws. One port means one attempt at a time. Do not
+use the overlay on Daytona, Modal or Vercel: it would publish inside the
+sandbox VM, which nobody can reach. Without it the proxy has no view listener.
 
 ## Reopening
 
-After the run the session is exported (`opencode export`) to
+The last export, after the run, leaves the session in
 `<trial-dir>/agent/opencode-session.json`.
 
 ```sh
@@ -129,98 +224,141 @@ through the proxy: model calls, view requests, refusals) and `opencode/`
 
 ## How it works
 
-`run()` (in `opencode_live.py`), on the host:
+`run()` (in `opencode_live.py`), on the host, using only Harbor's environment
+API (`exec`, `service_exec`, `upload_file`); it does not call `docker`:
 
-1. Starts the proxy container (`proxy.py` in `python:3.12-alpine`, labelled
-   `kavach.bench=proxy`) on the trial's compose network with `docker run`.
-   The key is passed in its environment. It publishes the view port on
-   `127.0.0.1` with a random host port.
-2. Narrows the agent-phase network policy to the proxy's address
-   (`environment.set_network_policy`, an allowlist of one IP), restored when
-   the run ends.
+1. Fails on Modal without the VM runtime. Checks that the task container cannot connect to `1.1.1.1` or the Docker host (see above).
+2. Starts `proxy.py` in the `proxy` service with `service_exec`. The upstream
+   and the key are known only now (they follow from `-m` and the host
+   environment), so they are not in the Compose file: the key is in that
+   exec's environment, so only the proxy's process has it. Waits until the
+   task container can connect to `proxy:8080`.
 3. Writes `~/.config/opencode/opencode.json` in the container: the provider's
-   `baseURL` is the proxy, its `apiKey` a placeholder; permissions as in the
-   pre-Harbor harness (nothing asks, web fetch denied); `small_model` is the
-   model under test; autoupdate and sharing off.
+   `baseURL` is `http://proxy:8080/v1`, its `apiKey` a placeholder;
+   permissions as in the pre-Harbor harness (nothing asks, web fetch denied);
+   `small_model` is the model under test; autoupdate and sharing off.
 4. Starts `opencode serve --hostname 0.0.0.0 --port 4096` and submits the
    task with `opencode run --attach http://127.0.0.1:4096 --format json`, so
    `opencode.txt` and Harbor's trajectory conversion are unchanged.
-5. Polls the view's `GET /session` for the session and writes
-   `opencode-live.json`.
+5. Finds the session (`GET /session` from inside the container), writes
+   `opencode-live.json`, and mirrors the session every 15 seconds (an export that is still running holds back the next).
 6. Afterwards, also on failure or timeout: marks the file finished, stops the
-   server, exports the session, saves the proxy's log and removes it (a
-   container left on the network would stop Harbor's `compose down`), and
-   restores the network policy.
+   server, exports the session once more and saves the proxy's log
+   (`proxy.log`). Harbor's `compose down` removes the proxy.
+
+During setup the agent also downloads `https://models.dev/api.json` on the
+host and uploads it as OpenCode's `~/.cache/opencode/models.json`, because the
+sealed container cannot fetch it and the cache gives the trajectory its cost.
+
+### Isolation
+
+Harbor's `[agent] network_mode = "no-network"` is not used, because it is not
+the same thing on every provider (Harbor 0.24.0, `harbor/environments`):
+
+- Docker: it turns on an egress-control sidecar and moves `main` into the
+  sidecar's network namespace (`docker/docker.py` 480-515), unless the task
+  gives the service its own `networks`, which is respected (442-478). An
+  agent phase that differs from the environment's baseline needs
+  `capabilities.dynamic_network_policy` (`trial/trial.py` 283-312).
+- Daytona and Modal run Compose tasks inside a Docker-in-Docker sandbox and
+  report no dynamic network policy and no allowlists in Compose mode
+  (`daytona/environment.py` 1075-1082, `modal.py` 1007-1014), so a task that
+  sets `no-network` for the agent phase alone is rejected when the trial
+  starts. A `no-network` baseline instead appends
+  `docker-compose-no-network.yaml` (`main: network_mode: none`) after the
+  task's file (`daytona/environment.py` 552, `modal.py` 589,
+  `vercel/compose.py` ~409), which cuts `main` off from the proxy as well and
+  cannot be combined with `networks:`.
+
+So the task's Compose file does the sealing, with the same Compose features
+everywhere: `main` is only on `sealed`, an `internal: true` network with no
+IPv4 address on the host's side (no route out; Docker's DNS does not resolve outside
+names on it), shared with
+`proxy`, which is also on `upstream`, an ordinary network. `main` can reach the
+proxy by name and nothing else. The proxy forwards only `POST /v1/chat/completions` to the one
+upstream and, with `--model-client main`, only `main` may use that port. That
+is what the egress sidecar gave on local Docker (reach the proxy only), and it
+holds from the first second of the trial instead of only during `run()`.
+
+Why the key does not go through Compose's `${VAR}`: a DinD provider runs
+`docker compose` with only the task's `[environment].env` and the trial's
+persistent env as interpolation variables, not the host's environment
+(`daytona/environment.py` 523-535, `modal.py` 559, `vercel/compose.py`
+385-395; only local Docker adds `os.environ`, `docker/docker.py` 669-683).
+The same variables are injected into `main` (`docker/__init__.py` 20-25,
+`environments/base.py` 314-321), so interpolation would put the key in the
+container it must stay out of. `service_exec` on the proxy service
+(`compose_service_ops.py` 91-116, `dind_compose.py` 261, `docker/docker.py`
+1369) works the same on every provider.
+
+How `proxy.py` reaches the proxy service: Daytona, Modal and Vercel upload
+the task's `environment/` directory to the sandbox and run Compose with it as
+the project directory (`daytona/environment.py` 739, `modal.py` 778,
+`vercel/compose.py` 470-482), so `./proxy.py` is bound from there; a bind of
+`agents/proxy.py` could not work, as that path is not in the sandbox. Each
+task therefore holds a copy; `sync-tasks.py` writes them and `--check` fails
+when one differs. A build from `environment/` would need the same file there
+too, plus a Dockerfile for one script.
 
 The proxy (`proxy.py`, standard library only) has two ports:
 
 - 8080, the model: `/v1/<path>` goes to `<upstream>/<path>` with the key in
   place of the placeholder (in `Authorization`, or `x-api-key` if the client
-  used that). Only the task container's address may connect.
-- 8081, the view: forwards `GET`, `HEAD` and `OPTIONS` of OpenCode's API to
-  the server; refuses every other method, websocket upgrades and `/pty`
-  (the web UI's terminal) with 403. Other paths are the web UI, fetched from
-  `app.opencode.ai` as `opencode serve` itself does. Only the network
-  gateway, where published-port connections arrive, may connect; the task
-  container is refused.
+  used that). Only `main` may connect. Requests are parsed strictly (CRLF line endings only; header names are tokens; no control characters in values; no folded lines; no repeated or combined `Content-Length`/`Transfer-Encoding`), so `main` cannot inject headers or a second request into what is sent upstream; a violation or an oversized head is a 400. Request targets with control characters, `.`/`..`
+  or empty path segments, or `@` in the path get 400; the upstream request line is
+  rebuilt from the validated parts.
+- 8081, the view (only with `--opencode`, i.e. with `KAVACH_VIEW_PORT` set):
+  forwards `GET`, `HEAD` and `OPTIONS` of OpenCode's API to the server;
+  refuses every other method, websocket upgrades and `/pty` (the web UI's
+  terminal) with 403. Other paths are the web UI, fetched from
+  `app.opencode.ai` as `opencode serve` itself does. `main` is refused;
+  connections published to the host arrive from the network's gateway.
 
 Harbor internals this relies on (Harbor 0.24.0):
 `harbor.agents.installed.opencode.OpenCode` (subclassed; `_parse_stdout`,
 `populate_context_post_run`, `_build_register_skills_command`,
 `_deep_merge`, `_OUTPUT_FILENAME`), `BaseInstalledAgent.install` /
 `exec_as_agent` / `with_prompt_template`, `harbor.agents.model_connection`
-(`PROVIDERS`, the resolved `api_key`), the docker environment's compose
-project naming (`_sanitize_docker_compose_project_name(session_id)`, a private
-function) and labels `com.docker.compose.project` / `.service`, its egress
-control (`harbor-docker-egress-control-sidecar`, whose network namespace the
-task container shares; `capabilities.dynamic_network_policy`;
-`set_network_policy`), and the agent log directory being bind-mounted, so
-files written on the host appear in the trial directory at once.
+(`PROVIDERS`, the resolved `api_key`) and `BaseEnvironment.service_exec`.
 
 ## Security properties
 
-Checked from inside the task container during a run (the evidence is in the
-commit that added this):
+Checked with `test_agents.py` (a cut-down topology) and by running the stub
+end to end:
 
-- The key is not in the container's environment, in OpenCode's config, in
-  any process's environment, or in the server's `GET /config` (which shows
-  the placeholder). It exists only in the proxy container and on the host.
-- `https://github.com`, `http://example.com`, `https://openrouter.ai` and the
-  model endpoint itself are unreachable; only the proxy's address is. A
-  forged `Host` header or a connection to another address with the proxy's
-  name as TLS SNI is refused too, since the allowlist entry is an IP.
-- The proxy forwards only `/v1/` to the one upstream, and refuses the task
-  container on the view port.
+- The key is not in the task container's environment, in OpenCode's config,
+  in any process's environment, or in the server's `GET /config` (which shows
+  the placeholder). It exists only in the proxy service's process and on the
+  host.
+- From the task container, `1.1.1.1` and the Docker host (the bridge gateway) are unreachable and host names do not
+  resolve; only `proxy` is. The proxy forwards only `/v1/` to the one
+  upstream.
 - From the host, prompts (`POST /session/<id>/message`, `prompt_async`),
   `abort`, `shell`, new sessions, config changes and terminals are refused
   with 403 at the view.
 
 What remains:
 
-- **DNS.** Harbor's egress control lets DNS through to Docker's resolver,
-  so the agent can resolve any name, and could leak data in DNS queries. It
-  cannot connect to what it resolves.
 - **The model endpoint through the proxy.** The agent can make its own
   requests to the model with the key (not read it). It could use the
   model's output as a channel, or spend money; the run's timeout bounds it.
-- **15-second response-header limit.** Traffic from the task container to
-  the proxy passes Harbor's egress proxy (gost), which drops an HTTP
-  exchange whose response headers take more than 15 s. OpenCode streams and
-  real endpoints send headers at once (verified with a stub that waits 40 s
-  after the first chunk), so runs are unaffected; a non-streaming call to a
-  slow endpoint would fail.
+- **The key in the exec's command line.** `service_exec` passes it as
+  `docker compose exec -e KAVACH_UPSTREAM_KEY=...`, visible in the process list
+  of the host (local Docker) or of the sandbox VM (remote) for an instant;
+  the task container cannot see either.
 - **The web UI's assets come from app.opencode.ai**, via the proxy, as with
   `opencode serve`; the UI may be newer than the 1.1.8 server. The UI's
   HTML loads through the view; it has not been exercised in a browser.
 - **Watchers are not authenticated.** Anything on the host that can reach
-  127.0.0.1 can read the session while it runs (it is read-only). The view
-  forwards `GET /config` and `GET /provider`, which show the placeholder
-  key, not the real one.
+  127.0.0.1 can read the session while the local view is published (it is
+  read-only). The view forwards `GET /config` and `GET /provider`, which show
+  the placeholder key, not the real one.
 - **The read-only filter is method-based.** It relies on OpenCode 1.1.8's
   API changing state only through non-GET methods; every GET route in
   `GET /doc` was checked except `/tui/control/next`, which pops a TUI
   control request (nothing uses it in a headless run). A later OpenCode
   version should be rechecked.
-- The agent runs `docker` on the host (the proxy container, `docker port`,
-  `docker logs`), outside Harbor's environment abstraction; it works only
-  with Harbor's local docker environment.
+- **Not run on a remote provider.** Remote runs pull the task's prebuilt
+  images (`docker_image` in `task.toml`; bench/agent/harbor/README.md,
+  "Images"), which must be public, and additionally need `python:3.12-alpine`
+  pulled in the sandbox.

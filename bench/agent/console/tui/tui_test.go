@@ -336,6 +336,30 @@ func TestRetryCommand(t *testing.T) {
 	if m.confirm != nil {
 		t.Error("esc should dismiss the question")
 	}
+	drive(m, m.exec("/env modal"))
+	if m.set.Env != "modal" {
+		t.Errorf("/env modal: %q %q", m.note, m.set.Env)
+	}
+	m.status.Environments = []api.EnvironmentStatus{{Name: "daytona", Problem: "daytona needs DAYTONA_API_KEY"}}
+	drive(m, m.exec("/env daytona"))
+	if !strings.Contains(m.note, "DAYTONA_API_KEY") || m.set.Env != "daytona" {
+		t.Errorf("/env daytona: %q", m.note)
+	}
+	drive(m, m.exec("/env modal"))
+	m.status.JobsWarning = "outside home"
+	m.status.Docker = api.Check{}
+	if cmd := m.start([]string{"t"}, []string{"a/b"}); cmd == nil {
+		t.Errorf("a ready cloud run should start despite docker and the jobs warning: %q", m.note)
+	}
+	m.set.Env = "daytona"
+	if cmd := m.start([]string{"t"}, []string{"a/b"}); cmd != nil || !strings.Contains(m.note, "DAYTONA_API_KEY") {
+		t.Errorf("daytona without keys started: %q", m.note)
+	}
+	m.set.Env = "modal"
+	drive(m, m.exec("/env aws"))
+	if !strings.Contains(m.note, "/env takes") || m.set.Env != "modal" {
+		t.Errorf("/env aws: %q %q", m.note, m.set.Env)
+	}
 	drive(m, m.exec("/retries 9"))
 	if !strings.Contains(m.note, "/retries takes 0 to 5") || m.set.Retries != 1 {
 		t.Errorf("/retries 9: %q, %d", m.note, m.set.Retries)

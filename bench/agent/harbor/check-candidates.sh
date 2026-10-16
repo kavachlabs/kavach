@@ -26,8 +26,8 @@ for c in "$CANDIDATES"/*.patch "$out/empty.patch"; do
   done
 done
 
-# The copies are not where their compose files expect the repository.
-export KAVACH_ROOT=$ROOT
+# The copies name the same prebuilt images; build them first with
+# image-tag.py build redis-10068.
 harbor run -p "$out/tasks" -a oracle -n "$n" -o "$out" --job-name job -q -y >"$out/harbor.log" 2>&1 \
   || { tail -20 "$out/harbor.log"; exit 1; }
 

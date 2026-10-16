@@ -2,6 +2,7 @@ package harbor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -76,6 +77,7 @@ func (CLIDocker) Remove(container string) { docker(nil, "rm", "-f", container) }
 
 // Where a trial's real source came from.
 const (
+	SourceArtifacts = "artifacts" // the files the collect hook copied out of the trial's container
 	SourceContainer = "container" // the trial's own container, still running
 	SourceImage     = "image"     // the task's image with the trial's patch applied
 	SourcePatch     = "patch"     // neither: only the patches' lines are known
@@ -101,7 +103,19 @@ func (r *Reader) RealSource(tasksDir, job, id string, inv *Invariants) error {
 	if len(inv.Files) == 0 {
 		return nil
 	}
-	if r.Docker == nil || r.CacheDir == "" {
+	adir, complete := r.artifactSource(job, id, inv.Files)
+	useArtifacts := func() error {
+		inv.Source = SourceArtifacts
+		mapSnippets(inv, adir, srcs)
+		return nil
+	}
+	// A partial set is used when nothing else can supply the rest; the
+	// snippets of the files it lacks keep to the patches.
+	noDocker := r.Docker == nil || r.CacheDir == ""
+	if adir != "" && (complete || noDocker) {
+		return useArtifacts()
+	}
+	if noDocker {
 		inv.SourceNote = "Docker isn't configured, so only the patches are shown."
 		return nil
 	}
@@ -118,6 +132,9 @@ func (r *Reader) RealSource(tasksDir, job, id string, inv *Invariants) error {
 	}
 	source, note, err := r.fetchSource(tasksDir, job, id, dir, inv.Files, agentPatch)
 	if err != nil {
+		if adir != "" {
+			return useArtifacts()
+		}
 		inv.SourceNote = err.Error()
 		return nil
 	}
@@ -128,6 +145,41 @@ func (r *Reader) RealSource(tasksDir, job, id string, inv *Invariants) error {
 	inv.Source, inv.SourceNote = source, note
 	mapSnippets(inv, filepath.Join(dir, source), srcs)
 	return nil
+}
+
+// artifactSource is the directory of whole files a trial's collect hook left
+// in its artifacts, when it holds any of files, and whether it holds all of
+// them; trials that ran before the hook existed have none.
+func (r *Reader) artifactSource(job, id string, files []string) (dir string, complete bool) {
+	dir, err := r.trialDir(job, id)
+	if err != nil {
+		return "", false
+	}
+	dir = filepath.Join(dir, "artifacts", "logs", "artifacts", "source")
+	has := func(f string) bool { _, err := readArtifact(dir, f); return err == nil }
+	if !slices.ContainsFunc(files, has) {
+		return "", false
+	}
+	return dir, !slices.ContainsFunc(files, func(f string) bool { return !has(f) })
+}
+
+// readArtifact reads a regular file under root. The artifacts come from a
+// container the agent controlled, so a symlink in them, as the file or any
+// directory on its path, is refused rather than followed.
+func readArtifact(root, path string) ([]byte, error) {
+	p := root
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		p = filepath.Join(p, part)
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return nil, err
+		}
+		if want := i == len(parts)-1; fi.Mode().IsRegular() != want || fi.Mode()&os.ModeSymlink != 0 {
+			return nil, ErrNotFound
+		}
+	}
+	return os.ReadFile(p)
 }
 
 // snippetFiles lists the repo-relative files the snippets are in.
@@ -157,7 +209,7 @@ func (r *Reader) fetchSource(tasksDir, job, id, dir string, files []string, agen
 		}
 		return SourceContainer, "Read from the trial's running container; the agent may still be changing it.", nil
 	}
-	image, build, err := r.trialImage(tasksDir, job, id)
+	choices, build, err := r.trialImages(tasksDir, job, id)
 	if err != nil {
 		return "", "", err
 	}
@@ -169,9 +221,21 @@ func (r *Reader) fetchSource(tasksDir, job, id, dir string, files []string, agen
 			return SourceImage, done.Note, nil
 		}
 	}
-	created, err := r.Docker.ImageCreated(image)
-	if err != nil {
-		return "", "", fmt.Errorf("The image %s isn't available (%v); build it from the repository root with: %s", image, headLine(err.Error()), build)
+	var (
+		image   string
+		created time.Time
+		how     string
+	)
+	for _, c := range choices {
+		if t, e := r.Docker.ImageCreated(c.image); e == nil {
+			image, created, how = c.image, t, c.how
+			break
+		} else if err == nil {
+			err = fmt.Errorf("The image %s isn't available (%v); build it from the repository root with %s", c.image, headLine(e.Error()), build)
+		}
+	}
+	if image == "" {
+		return "", "", err
 	}
 	id0, err := r.Docker.Start(image)
 	if err != nil {
@@ -179,7 +243,7 @@ func (r *Reader) fetchSource(tasksDir, job, id, dir string, files []string, agen
 	}
 	defer r.Docker.Remove(id0)
 	if err := applyPatch(r.Docker, id0, agentPatch); err != nil {
-		return "", "", fmt.Errorf("The agent's patch doesn't apply to %s (%v); it may have been rebuilt since the trial ran. To rebuild it: %s", image, headLine(err.Error()), build)
+		return "", "", fmt.Errorf("The agent's patch doesn't apply to %s (%v); it may have been rebuilt since the trial ran. To get it again: %s", image, headLine(err.Error()), build)
 	}
 	os.RemoveAll(out)
 	if err := copyOut(r.Docker, id0, out, files); err != nil {
@@ -190,6 +254,9 @@ func (r *Reader) fetchSource(tasksDir, job, id, dir string, files []string, agen
 	}
 	if started := r.trialStart(job, id); !started.IsZero() && created.After(started) {
 		note = fmt.Sprintf("%s was built at %s, after this trial started (%s); its files may differ from the trial's.", image, created.Local().Format("2006-01-02 15:04"), started.Local().Format("2006-01-02 15:04"))
+	}
+	if how != "" {
+		note = strings.TrimSpace(fmt.Sprintf("Read from %s, %s. %s", image, how, note))
 	}
 	b, _ := json.Marshal(struct{ Note string }{note})
 	if err := os.WriteFile(filepath.Join(out, ".done"), b, 0o644); err != nil {
@@ -262,20 +329,44 @@ func copyOut(d Docker, c, dir string, files []string) error {
 	return nil
 }
 
-// trialImage names the image a trial's container was built from, which the
-// benchmark keeps as kavach-bench/<task>:<arm>, and the command that builds it.
-func (r *Reader) trialImage(tasksDir, job, id string) (image, build string, err error) {
+// imageChoice is an image a trial may have run from; how says where the name
+// came from, for the note when it isn't the task.toml one.
+type imageChoice struct{ image, how string }
+
+// trialImages lists the images a trial's container may have run from, best
+// first: the one Harbor recorded for the trial, the docker_image of the
+// current task.toml, and the kavach-bench/<task>:<target> name that older
+// trials were built under locally. build says how to get the task.toml one:
+// build it, or pull it.
+func (r *Reader) trialImages(tasksDir, job, id string) (choices []imageChoice, build string, err error) {
 	dir, err := r.trialDir(job, id)
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	var cfg struct {
+	// Harbor's trial config.json, and the copy of it in result.json, name the
+	// task; a version that records the image names it under task or environment.
+	type trialConfig struct {
 		Task struct {
-			Path string `json:"path"`
+			Path        string `json:"path"`
+			DockerImage string `json:"docker_image"`
 		} `json:"task"`
+		Environment struct {
+			DockerImage string `json:"docker_image"`
+		} `json:"environment"`
 	}
+	var cfg, fromResult trialConfig
 	if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err == nil {
 		json.Unmarshal(b, &cfg)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "result.json")); err == nil {
+		var res struct {
+			Config trialConfig `json:"config"`
+		}
+		json.Unmarshal(b, &res)
+		fromResult = res.Config
+	}
+	if rec := cmp.Or(cfg.Environment.DockerImage, cfg.Task.DockerImage, fromResult.Environment.DockerImage, fromResult.Task.DockerImage); rec != "" {
+		choices = append(choices, imageChoice{rec, "recorded for the trial"})
 	}
 	for _, try := range []struct{ dir, name string }{
 		{tasksDir, filepath.Base(cfg.Task.Path)},
@@ -286,24 +377,20 @@ func (r *Reader) trialImage(tasksDir, job, id string) (image, build string, err 
 			continue
 		}
 		for _, f := range env.Files {
-			if f.Role != "agent" || f.Dockerfile == "" || f.Target == "" {
+			if f.Role != "agent" || f.Image == "" {
 				continue
 			}
 			base := filepath.Base(filepath.Dir(f.Dockerfile))
-			image = fmt.Sprintf("kavach-bench/%s:%s", base, f.Target)
-			return image, fmt.Sprintf("docker build -f %s --target %s -t %s .", relFrom(f.Dockerfile), f.Target, image), nil
+			choices = append(choices,
+				imageChoice{f.Image, ""},
+				imageChoice{"kavach-bench/" + base + ":" + f.Target, "built locally under its earlier name"})
+			return choices, fmt.Sprintf("bench/agent/harbor/image-tag.py build %s %s (or docker pull %s)", base, f.Target, f.Image), nil
 		}
 	}
-	return "", "", errors.New("The task's compose file doesn't say which image the trial ran in.")
-}
-
-// relFrom shortens a Dockerfile's path to bench/agent/tasks/… when it is
-// under a checkout of the repository, as the command runs from its root.
-func relFrom(p string) string {
-	if _, rest, ok := strings.Cut(filepath.ToSlash(p), "/bench/agent/"); ok {
-		return "bench/agent/" + rest
+	if len(choices) > 0 {
+		return choices, "", nil
 	}
-	return p
+	return nil, "", errors.New("The task's task.toml doesn't say which image the trial ran in.")
 }
 
 func (r *Reader) trialStart(job, id string) time.Time {
@@ -343,7 +430,7 @@ func mapSnippets(inv *Invariants, root string, srcs []patchSource) {
 		if l, ok := cache[p]; ok {
 			return l
 		}
-		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+		b, err := readArtifact(root, p)
 		var l []string
 		if err == nil {
 			l = strings.Split(string(b), "\n")
@@ -477,7 +564,7 @@ func (r *Reader) RealFile(tasksDir, job, id, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.CacheDir == "" || !fs.ValidPath(path) {
+	if !fs.ValidPath(path) {
 		return nil, ErrNotFound
 	}
 	known := false
@@ -487,6 +574,14 @@ func (r *Reader) RealFile(tasksDir, job, id, path string) ([]byte, error) {
 		}
 	}
 	if !known {
+		return nil, ErrNotFound
+	}
+	if dir, _ := r.artifactSource(job, id, []string{path}); dir != "" {
+		if b, err := readArtifact(dir, path); err == nil {
+			return b, nil
+		}
+	}
+	if r.CacheDir == "" {
 		return nil, ErrNotFound
 	}
 	dir := filepath.Join(r.CacheDir, job, id)

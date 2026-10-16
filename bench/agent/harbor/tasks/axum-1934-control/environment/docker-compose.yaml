@@ -1,9 +1,32 @@
-# The image is the task's, built from the repository root because it builds
-# Kavach from source. KAVACH_ROOT points copies of this task elsewhere back at
-# the repository.
+# main is the prebuilt image named by docker_image in ../task.toml, which
+# sync-tasks.py keeps current; build it with bench/agent/harbor/image-tag.py.
 services:
   main:
-    build:
-      context: ${KAVACH_ROOT:-../../../../../..}
-      dockerfile: bench/agent/tasks/axum-1934/Dockerfile
-      target: control
+    # No route out: main shares only an internal network with the proxy.
+    networks: [sealed]
+    # No raw sockets, which could address frames past the proxy to the host.
+    cap_drop: [NET_RAW]
+
+  # The OpenCode agent (bench/agent/harbor/agents) starts proxy.py here with
+  # the API key in that command's environment. main never has the key and
+  # reaches the model only through this service.
+  proxy:
+    image: python:3.12-alpine
+    init: true
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./proxy.py:/proxy.py:ro
+    # Not a router: frames sent to the proxy's MAC are not forwarded.
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    networks: [sealed, upstream]
+
+networks:
+  sealed:
+    internal: true
+    # No address on the host's side of the bridge: main cannot reach the Docker
+    # host, which on a remote provider is the sandbox VM and has full egress.
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+  upstream: {}
