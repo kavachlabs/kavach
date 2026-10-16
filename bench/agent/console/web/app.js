@@ -261,7 +261,7 @@ export async function api(path, opts) {
 }
 
 function loadForm() {
-  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, retries: 1, timeout: 0 };
+  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, retries: 1, timeout: 0, modelSort: "" };
   try {
     Object.assign(form, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
   } catch {}
@@ -2207,7 +2207,7 @@ async function searchModels() {
     p.list = list;
     p.err = "";
     if (list && list.length && (!p.previewId || !list.some((m) => m.id === p.previewId))) {
-      p.previewId = list[0].id;
+      p.previewId = sortedModels(list)[0].id;
     }
   } catch (e) {
     p.err = e.message;
@@ -2215,14 +2215,47 @@ async function searchModels() {
   if (p.open) renderPickerList();
 }
 
+// The model picker's orders: a column and a direction. "" keeps
+// OpenRouter's own order.
+const MODEL_SORTS = [
+  { value: "", label: "OpenRouter's order", desc: "As OpenRouter lists them" },
+  { value: "in:asc", label: "Input price ↑", desc: "Cheapest input tokens first" },
+  { value: "out:asc", label: "Output price ↑", desc: "Cheapest output tokens first" },
+  { value: "in:desc", label: "Input price ↓", desc: "Most expensive input tokens first" },
+  { value: "out:desc", label: "Output price ↓", desc: "Most expensive output tokens first" },
+  { value: "ctx:desc", label: "Context ↓", desc: "Largest context window first" },
+];
+
+function setModelSort(v) {
+  state.form.modelSort = v;
+  saveForm();
+  renderView();
+}
+
+// sortedModels orders the picker's list. Models whose price varies (or
+// whose context is unknown) go last. A tie on one price goes by the other;
+// other ties keep OpenRouter's order.
+function sortedModels(list) {
+  const [key, dir] = (state.form.modelSort || "").split(":");
+  const fields = { in: ["price_in", "price_out"], out: ["price_out", "price_in"], ctx: ["context_length"] }[key];
+  if (!fields) return list;
+  const by = (f) => (a, b) => {
+    const x = a[f], y = b[f];
+    if (x == null || y == null) return (x == null) - (y == null);
+    return dir === "desc" ? y - x : x - y;
+  };
+  return [...list].sort((a, b) => fields.reduce((c, f) => c || by(f)(a, b), 0));
+}
+
 function renderPicker() {
   const p = state.picker;
-  return h("div", { class: "picker", id: "picker", onkeydown: (e) => { if (e.key === "Escape") { openPicker(null); } } },
+  return h("div", { class: "picker", id: "picker", onkeydown: (e) => { if (e.key === "Escape" && !state.openSelect) { openPicker(null); } } },
     h("div", { class: "picker-top" },
       h("input", {
         id: "pick-q", type: "search", value: p.q, placeholder: "Search OpenRouter models: glm, nemotron, claude, gemini, deepseek…", "aria-label": "Search models",
         oninput: (e) => { p.q = e.target.value; clearTimeout(pickerTimer); pickerTimer = setTimeout(searchModels, 180); },
       }),
+      renderSelect({ id: "pick-sort", label: "Sort models", value: state.form.modelSort || "", compact: true, options: MODEL_SORTS, onChange: setModelSort }),
       h("button", { type: "button", class: "picker-close", onclick: () => openPicker(null) }, "Done · Esc")),
     h("div", { class: "list", id: "pick-list" }, pickerRows()),
     h("div", { class: "foot", id: "pick-foot" }, pickerFoot()));
@@ -2245,7 +2278,8 @@ function renderPickerList() {
   const list = document.getElementById("pick-list");
   if (!list) return;
   list.replaceChildren(pickerRows());
-  const previewId = state.picker.previewId || (state.picker.list && state.picker.list[0] && state.picker.list[0].id);
+  const first = state.picker.list && sortedModels(state.picker.list)[0];
+  const previewId = state.picker.previewId || (first && first.id);
   if (previewId) updatePickerPreview(previewId);
   document.getElementById("pick-foot").replaceChildren(pickerFoot());
 }
@@ -2257,9 +2291,19 @@ function pickerRows() {
   if (!p.list) return h("div", { class: "empty" }, "Loading OpenRouter's models…");
   if (!p.list.length) return h("div", { class: "empty" }, `No model matches “${p.q}”.`);
   const price = (v) => v == null ? "varies" : `$${v < 1 ? v.toFixed(2) : v.toFixed(v < 10 ? 2 : 0)}`;
+  // A sortable column's header: a click sorts by it, a second click
+  // reverses it. Prices start cheapest first, context largest first.
+  const [sortKey, sortDir] = (state.form.modelSort || "").split(":");
+  const sortTh = (key, text, first) => {
+    const on = sortKey === key;
+    const next = on ? (sortDir === "asc" ? "desc" : "asc") : first;
+    return h("th", { class: "num", "aria-sort": on ? (sortDir === "asc" ? "ascending" : "descending") : "none" },
+      h("button", { type: "button", class: `sort-th ${on ? "on" : ""}`, title: `Sort by ${text}`, onclick: () => setModelSort(`${key}:${next}`) },
+        text, h("span", { class: "sort-arrow", "aria-hidden": "true" }, on ? (sortDir === "asc" ? "↑" : "↓") : "↕")));
+  };
   return h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "model"), h("th", {}, "name"), h("th", { class: "num" }, "context"), h("th", { class: "num" }, "in/M"), h("th", { class: "num" }, "out/M"), h("th", {}, "tools"))),
-    h("tbody", {}, p.list.slice(0, SHOWN).map((m) => {
+    h("thead", {}, h("tr", {}, h("th", {}, "model"), h("th", {}, "name"), sortTh("ctx", "context", "desc"), sortTh("in", "in/M", "asc"), sortTh("out", "out/M", "asc"), h("th", {}, "tools"))),
+    h("tbody", {}, sortedModels(p.list).slice(0, SHOWN).map((m) => {
       const have = state.form.models.includes(m.id);
       const toggleModel = () => {
         if (have) {
