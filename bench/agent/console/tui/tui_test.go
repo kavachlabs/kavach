@@ -231,9 +231,9 @@ func TestRunRequests(t *testing.T) {
 		t.Fatalf("%d runs started, want 3", len(*posted))
 	}
 	want := []harbor.RunRequest{
-		{Tasks: []string{"redis-10068-control", "redis-10068-kavach"}, Models: []string{"openrouter/z-ai/glm-5.3"}, Attempts: 3, Agent: "opencode", TimeoutSec: 1800},
-		{Tasks: []string{"redis-10068-kavach"}, Attempts: 3, Agent: "oracle", TimeoutSec: 1800},
-		{Tasks: []string{"redis-10068-control", "redis-10068-kavach"}, Models: []string{"openrouter/z-ai/glm-5.3", "openrouter/nvidia/nemotron-3.5-lightning"}, Attempts: 3, Agent: "opencode", TimeoutSec: 1800},
+		{Tasks: []string{"redis-10068-control", "redis-10068-kavach"}, Models: []string{"openrouter/z-ai/glm-5.3"}, Attempts: 3, Agent: "opencode", TimeoutSec: 1800, Retries: 1},
+		{Tasks: []string{"redis-10068-kavach"}, Attempts: 3, Agent: "oracle", TimeoutSec: 1800, Retries: 1},
+		{Tasks: []string{"redis-10068-control", "redis-10068-kavach"}, Models: []string{"openrouter/z-ai/glm-5.3", "openrouter/nvidia/nemotron-3.5-lightning"}, Attempts: 3, Agent: "opencode", TimeoutSec: 1800, Retries: 1},
 	}
 	for i, w := range want {
 		g, _ := json.Marshal((*posted)[i])
@@ -301,6 +301,44 @@ func TestStopConfirm(t *testing.T) {
 	press(m, tea.KeyEsc)
 	if m.confirm != nil {
 		t.Error("esc should dismiss the question")
+	}
+}
+
+func TestRetryCommand(t *testing.T) {
+	m := openRuns(t)
+	var failed, passed string
+	for _, tr := range m.job.Trials {
+		switch tr.Status {
+		case harbor.Fail, harbor.Error:
+			failed = tr.ID
+		case harbor.Pass:
+			passed = tr.ID
+		}
+	}
+	if failed == "" || passed == "" {
+		t.Fatalf("the fixture needs a failed and a passed attempt: %+v", m.job.Trials)
+	}
+	drive(m, m.exec("/retry "+passed))
+	if !strings.Contains(m.note, "Only a failed attempt") {
+		t.Errorf("retry a pass: %q", m.note)
+	}
+	m.job.Status, m.job.Retryable = harbor.JobDone, false
+	drive(m, m.exec("/retry "+failed))
+	if !strings.Contains(m.note, "wasn't started by bench") || m.confirm != nil {
+		t.Errorf("retry in a run bench didn't start: %q", m.note)
+	}
+	m.job.Retryable = true
+	drive(m, m.exec("/retry "+failed))
+	if m.confirm == nil || !strings.Contains(m.confirm.text, "Run "+failed+" again?") {
+		t.Fatalf("confirm %+v", m.confirm)
+	}
+	press(m, tea.KeyEsc)
+	if m.confirm != nil {
+		t.Error("esc should dismiss the question")
+	}
+	drive(m, m.exec("/retries 9"))
+	if !strings.Contains(m.note, "/retries takes 0 to 5") || m.set.Retries != 1 {
+		t.Errorf("/retries 9: %q, %d", m.note, m.set.Retries)
 	}
 }
 

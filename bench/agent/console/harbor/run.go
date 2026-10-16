@@ -25,7 +25,8 @@ var (
 	// or whose Harbor has exited.
 	ErrNotRunning = errors.New("job is not running")
 	// ErrNotStopped is returned when resuming a job that bench did not
-	// start, that is still running or that has finished.
+	// start, that is still running or that has finished, or when retrying
+	// an attempt of a job that is still running.
 	ErrNotStopped = errors.New("job is not paused or stopped")
 )
 
@@ -46,6 +47,12 @@ type RunRequest struct {
 	TimeoutSec float64 `json:"timeout_sec"`
 	// Concurrent is how many trials run at once. Default 1.
 	Concurrent int `json:"concurrent"`
+	// Retries is how many times Harbor runs an attempt again when it ends
+	// with an error (a provider or container failure), 0-5. Harbor deletes
+	// the failed attempt's folder first, and does not retry timeouts, usage
+	// limits or refusals, nor an attempt whose tests ran and failed.
+	// Default 0.
+	Retries int `json:"retries"`
 	// Name is the job's name and folder; default three random words
 	// (brisk-cobalt-heron).
 	Name string `json:"name"`
@@ -186,6 +193,9 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 	if req.Attempts < 1 || req.Attempts > 100 || req.Concurrent < 1 || req.Concurrent > 32 {
 		return nil, fmt.Errorf("%w: attempts must be 1-100 and concurrent 1-32", ErrInvalid)
 	}
+	if req.Retries < 0 || req.Retries > 5 {
+		return nil, fmt.Errorf("%w: retries must be 0-5", ErrInvalid)
+	}
 	if req.TimeoutSec < 0 {
 		return nil, fmt.Errorf("%w: negative timeout", ErrInvalid)
 	}
@@ -226,6 +236,7 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		"n_attempts":          req.Attempts,
 		"n_concurrent_trials": req.Concurrent,
 		"quiet":               true,
+		"retry":               map[string]any{"max_retries": req.Retries},
 		"agents":              agents,
 		"tasks":               tasks,
 	}, nil
@@ -286,11 +297,45 @@ func (r *Runner) Resume(id string) error {
 	if _, alive, _ := r.stateLocked(id); alive {
 		return ErrNotStopped
 	}
-	dir := filepath.Join(r.JobsDir, id)
 	var res jobResult
-	if readJSON(filepath.Join(dir, "result.json"), &res) == nil && res.FinishedAt != nil {
+	if readJSON(filepath.Join(r.JobsDir, id, "result.json"), &res) == nil && res.FinishedAt != nil {
 		return ErrNotStopped
 	}
+	return r.resumeLocked(id)
+}
+
+// Retry runs one attempt of a finished, stopped or paused run again. The
+// attempt's folder moves to <jobs>/.bench/retried/<id>/, and `harbor jobs
+// resume` then runs the attempt it no longer finds, under a new id, along
+// with any others the run had not finished.
+func (r *Runner) Retry(id, trial string) error {
+	if !r.launched(id) || !validName(trial) {
+		return ErrNotFound
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, alive, _ := r.stateLocked(id); alive {
+		return ErrNotStopped
+	}
+	dir := filepath.Join(r.JobsDir, id)
+	src := filepath.Join(dir, trial)
+	if !exists(filepath.Join(dir, "config.json")) || !isTrialDir(src) {
+		return ErrNotFound
+	}
+	// Harbor deletes any folder in the job's that has no result.json, so
+	// the old attempt is kept outside it.
+	dst := filepath.Join(r.JobsDir, ".bench", "retried", id, trial+"."+time.Now().Format("20060102-150405"))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return err
+	}
+	return r.resumeLocked(id)
+}
+
+func (r *Runner) resumeLocked(id string) error {
+	dir := filepath.Join(r.JobsDir, id)
 	if exists(filepath.Join(dir, "config.json")) {
 		if err := prepareResume(dir, id); err != nil {
 			return err

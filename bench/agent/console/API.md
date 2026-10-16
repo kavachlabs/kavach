@@ -63,6 +63,7 @@ The console never reads it.
   "cost": 0.084,
   "stoppable": true,
   "resumable": false,
+  "retryable": false,
   "error": "…",
   "trials": [ Trial, … ]
 }
@@ -80,6 +81,9 @@ The console never reads it.
   paused.
 - `resumable`: true when bench started the job and it is `paused` or
   `stopped`, not finished.
+- `retryable`: true when bench started the job, its Harbor is not running,
+  and Harbor wrote its folder: any of its trials can be run again with
+  `POST /api/trials/{job}/{trial}/retry`.
 - `error`: set on a `stopped` job when there is something to say:
   - for a job bench started whose Harbor exited without writing
     `result.json`, the end of Harbor's output, such as a bad model name;
@@ -569,6 +573,7 @@ rejected.
   "agent": "opencode",
   "timeout_sec": 3600,
   "concurrent": 1,
+  "retries": 1,
   "name": "glm-vs-sonnet"
 }
 ```
@@ -581,6 +586,7 @@ rejected.
 | `agent` | a Harbor agent name, or a custom agent's import path (`module.path:ClassName`). Default `opencode`, which runs the repository's OpenCode agent (`bench.agent.harbor.agents:KavachOpenCode`) rather than Harbor's: the model key stays out of the task container, and each attempt can be watched in OpenCode. Jobs list it as `opencode` |
 | `timeout_sec` | overrides the tasks' agent timeout when it is above 0 |
 | `concurrent` | trials at once, 1–32. Default 1 |
+| `retries` | how many times an attempt that ends with an error (a provider or container failure) runs again, 0–5. Harbor deletes the failed attempt's folder first. It does not retry timeouts, usage limits or refusals, nor an attempt whose tests ran and failed. Default 0 |
 | `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default adjective-colour-animal and seven random letters and digits (`brisk-cobalt-heron-x7k2p9q`) |
 
 The trials are every task × model × attempt.
@@ -643,6 +649,18 @@ A job stopped before Harbor wrote its folder is started again from its
 
 Reply: 202 and the Job, now `running`. 409 when the job is running,
 finished, or bench did not start it.
+
+### POST /api/trials/{job}/{trial}/retry
+
+Runs one trial of a `retryable` job again, finished or not, whatever its
+outcome. The trial's folder moves to
+`<jobs>/.bench/retried/<job>/<trial>.<yyyymmdd-hhmmss>`, where it is kept,
+and `harbor jobs resume` runs the trial it no longer finds under a new id,
+together with any others the job had not finished. A finished job is
+finished again once it does.
+
+Reply: 202 and the Job, now `running`. 404 when bench did not start the job
+or it has no such trial; 409 while its Harbor is running.
 
 ### GET /api/events
 
