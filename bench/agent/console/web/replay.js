@@ -1,9 +1,11 @@
 // The replay scene: one saved variant of a contract check, stepped through
 // input by input as the new build replayed it (GET /api/trials/…/variants/
-// {round}/{id}). It takes the job view's left pane while open. What it shows
-// is only what the journal and the replay record: the inputs, the env reads,
-// the outputs (recorded and the new build's), and where the replay stopped.
-// There is no handler state in either, so the scene draws none.
+// {round}/{id}), or the recorded incident itself as the old or the new build
+// replayed it (GET /api/trials/…/incident). It takes the job view's left pane
+// while open. What it shows is only what the journal and the replay record:
+// the inputs, the env reads, the outputs (recorded and the build's), and
+// where the replay stopped. There is no handler state in either, so the
+// scene draws none.
 
 import { h, state, api, renderView } from "./app.js";
 import { checksOf } from "./invariants.js";
@@ -20,7 +22,10 @@ let ctx = null; // the last scene built: { t, d, m }
 const STEP_MS = 140; // about 7 steps a second
 const enc = encodeURIComponent;
 const tkey = (t) => `${t.job}/${t.id}`;
-const vkey = (r) => `${r.job}/${r.trial}/${r.round}/${r.id}`;
+const vkey = (r) => (r.incident ? `${r.job}/${r.trial}/incident/${r.build}` : `${r.job}/${r.trial}/${r.round}/${r.id}`);
+// lkey is what a scene loads: the incident's one response serves both builds.
+const lkey = (r) => (r.incident ? `${r.job}/${r.trial}/incident` : vkey(r));
+const views = new Map(); // vkey of an incident scene -> its response, seen as one build's replay
 const vpath = (job, trial) => `/trials/${enc(job)}/${enc(trial)}/variants`;
 
 // savedVariants returns the variants the trial's contract checks saved,
@@ -54,6 +59,20 @@ export function openReplay(t, round, id) {
   if (el) el.focus({ preventScroll: true });
 }
 
+// openIncident opens the scene on the recorded incident, as build ("old" or
+// "new") replayed it.
+export function openIncident(t, build = "new") {
+  stop();
+  const i = state.replay && state.replay.incident && state.replay.trial === t.id ? state.replay.i : null;
+  state.replay = { job: t.job, trial: t.id, incident: true, build, i };
+  if (!opener.startsWith("incident")) expanded = false;
+  opener = "incident";
+  load(state.replay);
+  renderView();
+  const el = document.getElementById("rp");
+  if (el) el.focus({ preventScroll: true });
+}
+
 export function closeReplay() {
   stop();
   state.replay = null;
@@ -64,13 +83,14 @@ export function closeReplay() {
 }
 
 function load(r) {
-  const key = vkey(r);
+  const key = lkey(r);
   if (sceneCache.has(key)) return;
   if (ctrl) ctrl.abort();
   const mine = new AbortController();
   ctrl = mine;
   sceneCache.set(key, "loading");
-  api(`${vpath(r.job, r.trial)}/${enc(r.round)}/${enc(r.id)}`, { signal: mine.signal })
+  const path = r.incident ? `/trials/${enc(r.job)}/${enc(r.trial)}/incident` : `${vpath(r.job, r.trial)}/${enc(r.round)}/${enc(r.id)}`;
+  api(path, { signal: mine.signal })
     .then((d) => sceneCache.set(key, d))
     .catch((e) => {
       if (mine.signal.aborted) sceneCache.delete(key);
@@ -78,8 +98,25 @@ function load(r) {
     })
     .finally(() => {
       if (ctrl === mine) ctrl = null;
-      if (state.replay && vkey(state.replay) === key) renderView();
+      if (state.replay && lkey(state.replay) === key) renderView();
     });
+}
+
+// sceneData is what the scene draws for r: the response, or, for the
+// incident, the response seen as one build's replay of the recording.
+function sceneData(r) {
+  const got = sceneCache.get(lkey(r));
+  if (!r.incident || !got || got === "loading" || got.error) return got;
+  const key = vkey(r);
+  const seen = views.get(key);
+  if (seen && seen.src === got) return seen.d;
+  const f = got.failure;
+  const d = {
+    ...got, incident: true, build: r.build, id: "incident", round: null, new: got[r.build] || null,
+    variant: { id: "incident", mutation: "", incident: f ? f.seq : null, failure: (got.diff && got.diff.old) || (f ? `${f.kind}@${f.seq}` : "") },
+  };
+  views.set(key, { src: got, d });
+  return d;
 }
 
 const DUR = { d: 86400e9, h: 3600e9, m: 60e9, s: 1e9, ms: 1e6 };
@@ -181,9 +218,18 @@ function derive(d, report) {
   // feature_steps are traffic seqs.
   steps.forEach((s, i) => { if (feats.has(s.tseq)) featIdx.push(i); });
 
+  const fault = faultOf(steps, firstIdx, v);
+  if (d.incident) {
+    const f = d.failure;
+    fault.why = f ? `production failed here: ${[f.kind, f.message].filter(Boolean).join(": ")}` : "";
+  }
   const out = {
     report, steps, n, v, nw, newAt, end, fail, failing, lastRead, names, broke, feats, featIdx,
-    fault: faultOf(steps, firstIdx, v), shift: shiftOf(v.mutation),
+    fault, shift: shiftOf(v.mutation),
+    incident: !!d.incident,
+    // What the scene calls the build replaying, and the outputs it is held to.
+    bname: d.incident && d.build === "old" ? "old build" : "new build",
+    rname: d.incident ? "production" : null,
   };
   derived.set(d, out);
   return out;
@@ -321,6 +367,7 @@ function update() {
 }
 
 const valueText = (m, i) => (m.steps[i] ? `input @${m.steps[i].seq}, step ${i + 1} of ${m.n}` : "");
+const sceneName = (r) => (r.incident ? "the recorded incident" : `variant ${r.id}, round ${r.round}`);
 
 function reportFor(t, round) {
   if (state.stepsFor !== tkey(t)) return null;
@@ -331,22 +378,25 @@ function reportFor(t, round) {
 export function renderReplay(t) {
   const r = state.replay;
   load(r);
-  const got = sceneCache.get(vkey(r));
+  const got = sceneData(r);
   const fid = document.activeElement && document.activeElement.closest("#rp") ? document.activeElement.dataset.fid : "";
-  const pane = h("div", { class: "pane rp-pane", id: "rp", tabindex: "-1", role: "region", "aria-label": `Replay of variant ${r.id}, round ${r.round}`, dataset: { key: vkey(r) } });
+  const pane = h("div", { class: "pane rp-pane", id: "rp", tabindex: "-1", role: "region", "aria-label": `Replay of ${sceneName(r)}`, dataset: { key: vkey(r) } });
   if (!got || got === "loading" || got.error) {
     ctx = null;
-    pane.append(h("header", { class: "rp-head" }, backBtn(), h("div", { class: "rp-title" }, h("span", { class: "rp-name" }, `Variant ${r.id}`, h("span", { class: "m faint" }, ` round ${r.round}`)))),
-      h("div", { class: "rp-stage rp-empty" }, !got || got === "loading" ? h("span", { class: "dim" }, "Loading the variant…")
-        : got.status === 404 ? h("span", { class: "dim" }, "The console's API has no replay of this variant: it was not saved, or the server predates saved variants.")
-          : h("span", { class: "bad" }, `Couldn't load the variant: ${got.error}`)));
+    const what = r.incident ? "the incident" : "the variant";
+    pane.append(h("header", { class: "rp-head" }, backBtn(), h("div", { class: "rp-title" }, r.incident ? h("span", { class: "rp-name" }, "Recorded incident")
+      : h("span", { class: "rp-name" }, `Variant ${r.id}`, h("span", { class: "m faint" }, ` round ${r.round}`)))),
+      h("div", { class: "rp-stage rp-empty" }, !got || got === "loading" ? h("span", { class: "dim" }, `Loading ${what}…`)
+        : got.status === 404 ? h("span", { class: "dim" }, r.incident ? "This trial's task has no recorded incident, or the server predates incident replays."
+          : "The console's API has no replay of this variant: it was not saved, or the server predates saved variants.")
+          : h("span", { class: "bad" }, `Couldn't load ${what}: ${got.error}`)));
     return pane;
   }
-  const m = derive(got, reportFor(t, r.round));
+  const m = derive(got, r.incident ? null : reportFor(t, r.round));
   ctx = { t, d: got, m };
   const rr = cur();
   if (!m.n) {
-    pane.append(head(t, got, m, rr), h("div", { class: "rp-stage rp-empty" }, h("span", { class: "dim" }, "This variant's journal has no steps.")));
+    pane.append(head(t, got, m, rr), h("div", { class: "rp-stage rp-empty" }, h("span", { class: "dim" }, `This ${r.incident ? "recording" : "variant's journal"} has no steps.`)));
     return pane;
   }
   pane.append(head(t, got, m, rr), stage(m, rr), controls(m, rr));
@@ -359,6 +409,7 @@ function backBtn() {
 }
 
 function head(t, d, m, r) {
+  if (m.incident) return incidentHead(d, m, r);
   const nw = m.nw;
   const step = m.steps[r.i];
   let badge, tone;
@@ -377,6 +428,35 @@ function head(t, d, m, r) {
       d.new_error ? h("span", { class: "bad rp-sub" }, `The new build's replay couldn't be read: ${d.new_error}`) : null),
     h("span", { class: `rp-badge ${tone}`, title: step ? `at input @${step.seq}` : null }, badge));
 }
+
+// incidentHead titles the recorded incident, with a switch between the
+// builds replaying it.
+function incidentHead(d, m, r) {
+  const nw = m.nw;
+  const step = m.steps[r.i];
+  const logged = d.diff && d.diff[d.build];
+  let badge, tone;
+  if (!nw) { badge = logged ? `${logged} · steps not saved for this run` : `the ${m.bname}'s replay wasn't saved`; tone = "none"; }
+  else if (m.failing && r.i < m.fail) { badge = `running · stops at @${m.steps[m.fail].seq}`; tone = "run"; }
+  else { badge = nw.verdict; tone = m.failing ? "bad" : "ok"; }
+  const f = d.failure;
+  const pick = (b, label) => h("button", {
+    type: "button", class: `rp-build ${d.build === b ? "on" : ""}`, "data-fid": `build-${b}`, "aria-pressed": String(d.build === b),
+    title: `Replay the recording on the ${label}`, onclick: () => { if (d.build !== b) openIncident(t0(), b); },
+  }, label);
+  return h("header", { class: "rp-head" },
+    backBtn(),
+    h("div", { class: "rp-title" },
+      h("span", { class: "rp-name" }, "Recorded incident", h("span", { class: "m dim" }, d.service ? ` ${d.service}` : "")),
+      h("span", { class: "rp-sub" },
+        h("span", {}, `${m.n} input${m.n === 1 ? "" : "s"} from production`),
+        f ? h("span", { class: "violet-t" }, ` · failed at @${f.seq}: ${f.kind}`) : h("span", { class: "faint" }, " · no failure recorded"),
+        d.diff && d.diff.verdict ? h("span", { class: "faint" }, ` · kavach diff ${d.diff.verdict}`) : null)),
+    h("span", { class: "rp-builds", role: "group", "aria-label": "Build" }, pick("old", "old build"), pick("new", "new build")),
+    h("span", { class: `rp-badge ${tone}`, title: step ? `at input @${step.seq}` : null }, badge));
+}
+
+const t0 = () => (ctx ? ctx.t : { job: state.replay.job, id: state.replay.trial });
 
 function stage(m, r) {
   const i = r.i;
@@ -411,14 +491,14 @@ function stage(m, r) {
       : h("span", { class: "m faint rp-shift-none" }, "as recorded"));
 
   const inp = decodeInput(s);
-  const tag = isFault ? `fault: ${m.fault.why}` : isFeat ? "feature step" : "baseline step";
+  const tag = isFault ? (m.incident ? m.fault.why : `fault: ${m.fault.why}`) : isFeat ? "feature step" : m.incident ? "recorded step" : "baseline step";
   const card = h("div", { class: `rp-input ${isFault ? "fault" : ""}` },
     h("span", { class: "rp-lbl peach" }, `input @${s.seq}`, s.tseq !== s.seq ? h("span", { class: "faint" }, ` · traffic @${s.tseq}`) : null, s.source && s.source !== "traffic" ? h("span", { class: "faint" }, ` · ${s.source}`) : null),
     expanded && inp.long ? h("pre", { class: "m rp-input-full" }, inp.pretty) : h("span", { class: "m rp-input-line" }, inp.line || "(empty input)"),
     inp.note ? h("span", { class: "faint rp-note" }, inp.note) : null,
     h("span", { class: `rp-tag ${isFault ? "fault" : isFeat ? "feat" : ""}` }, tag),
     s.input_changed && !isFault ? h("span", { class: "rp-tag fault" }, "the mutation changed this input") : null,
-    s.marker ? h("span", { class: "rp-marker" }, `the variant records the old build failing here: ${[s.marker.kind, s.marker.message].filter(Boolean).join(": ")}`) : null);
+    s.marker && !m.incident ? h("span", { class: "rp-marker" }, `the variant records the old build failing here: ${[s.marker.kind, s.marker.message].filter(Boolean).join(": ")}`) : null);
 
   const center = h("div", { class: "rp-center", style: "grid-area: center" },
     card,
@@ -436,13 +516,13 @@ function stage(m, r) {
     grp("lbot", "lbot", evens.slice(0, 1)),
     grp("rtop", "rtop", odds.slice(1)),
     grp("rbot", "rbot", odds.slice(0, 1)),
-    !m.names.length ? h("span", { class: "faint rp-nolamps", style: "grid-area: lbot" }, "No invariants named for this round.") : null);
+    !m.names.length ? h("span", { class: "faint rp-nolamps", style: "grid-area: lbot" }, m.incident ? "The recorded failure names no invariant." : "No invariants named for this round.") : null);
 }
 
 function lampState(m, name, i) {
   const seq = m.steps[i] ? m.steps[i].seq : "?";
   const checks = `${i + 1} check${i ? "s" : ""}`;
-  if (!m.nw) return ["off", "not replayed", "the new build's replay of this variant wasn't saved"];
+  if (!m.nw) return ["off", "not replayed", m.incident ? `the ${m.bname}'s replay of the incident wasn't saved` : "the new build's replay of this variant wasn't saved"];
   if (m.fail < 0 || i < m.fail) return ["held", `✓ held, ${checks}`, `held after every step up to @${seq}`];
   if (m.nw.status === "invariant_violated" && m.broke) {
     if (name === m.broke) return ["broke", `✕ broke after @${seq}`, m.nw.detail || `broke after input @${seq}; the replay stopped`];
@@ -457,9 +537,10 @@ function lampEl(m, name, i, k) {
   const [st, sub, why] = lampState(m, name, i);
   const on = state.iv.inv === name;
   return h("button", {
-    type: "button", class: `rp-lamp ${st} ${on ? "on" : ""}`, "data-fid": `lamp-${k}`, title: `${why}. Select it in the Invariants tab.`,
+    type: "button", class: `rp-lamp ${st} ${on ? "on" : ""}`, "data-fid": `lamp-${k}`, title: m.incident ? why : `${why}. Select it in the Invariants tab.`,
     "aria-label": `${name}: ${sub.replace(/^[✓✕○]\s*/, "")}`, "aria-pressed": String(!!on),
     onclick: () => {
+      if (state.replay.incident) return;
       const checks = checksOf(state.steps);
       const idx = checks.findIndex((c) => (c.round || c.n) === state.replay.round);
       state.iv.inv = name;
@@ -493,7 +574,8 @@ function stepBox(m, i, s, ns, inp) {
   // a journal that records outputs itself has them in recorded.
   const fromTraffic = Array.isArray(s.traffic);
   const rec = fromTraffic ? s.traffic : s.recorded;
-  const recName = fromTraffic ? "old build" : "recorded";
+  const recName = m.rname || (fromTraffic ? "old build" : "recorded");
+  const bn = m.bname;
   const got = ns ? ns.outputs : null;
   const same = got && got.length === rec.length && got.every((o, k) => outKey(o) === outKey(rec[k]));
   const long = inp.long || [...rec, ...(got || [])].some((o) => o.data.length > 80)
@@ -507,18 +589,18 @@ function stepBox(m, i, s, ns, inp) {
       : [h("div", { class: "faint rp-out" }, "nothing")];
   };
   if (i > m.end || (!ns && m.nw)) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, "not replayed by the new build")),
+    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, `not replayed by the ${bn}`)),
       h("div", { class: "rp-col-h faint" }, recName), outList(rec, null, ""));
   } else if (!m.nw) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, `${recName}; the new build's replay wasn't saved`)), outList(rec, null, ""));
+    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, `${recName}; the ${bn}'s replay wasn't saved`)), outList(rec, null, ""));
   } else if (same) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, rec.length ? `the new build's, the same as the ${recName}'s` : "")), outList(got, null, ""));
+    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, rec.length ? `the ${bn}'s, the same as ${m.rname ? "" : "the "}${recName}'s` : "")), outList(got, null, ""));
   } else {
     emitted = h("div", { class: "rp-outs" },
-      h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "peach" }, `the new build's differ from the ${recName}'s`)),
+      h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "peach" }, `the ${bn}'s differ from ${m.rname ? "" : "the "}${recName}'s`)),
       h("div", { class: "rp-diff" },
         h("div", {}, h("div", { class: "rp-col-h faint" }, recName), outList(rec, got, "gone")),
-        h("div", {}, h("div", { class: "rp-col-h faint" }, "new build"), outList(got, rec, "new"))));
+        h("div", {}, h("div", { class: "rp-col-h faint" }, bn), outList(got, rec, "new"))));
   }
 
   let stopLine = null;
@@ -552,10 +634,10 @@ function ctlRow(m, r) {
     h("button", { type: "button", class: "rp-ctl", "data-fid": "prev", "aria-label": "Back one step", title: "Back one step (←)", disabled: r.i <= 0, onclick: () => { stop(); go(r.i - 1); } }, icon("M8 2 L3 6 L8 10", false)),
     h("button", { type: "button", class: "rp-ctl play", "data-fid": "play", "aria-label": playing ? "Pause" : "Play", title: `${playing ? "Pause" : "Play"} (space)`, onclick: toggle }, icon(playing ? "M2 1 H5 V11 H2 Z M7 1 H10 V11 H7 Z" : "M2 1 L11 6 L2 11 Z", true)),
     h("button", { type: "button", class: "rp-ctl", "data-fid": "next", "aria-label": "Forward one step", title: "Forward one step (→)", disabled: r.i >= m.end, onclick: () => { stop(); go(r.i + 1); } }, icon("M4 2 L9 6 L4 10", false)),
-    m.fault.i >= 0 ? h("button", { type: "button", class: "rp-jump", "data-fid": "jump", title: "Jump to the fault (F)", onclick: jump }, `Jump to fault @${m.steps[m.fault.i].seq}`) : null,
+    m.fault.i >= 0 ? h("button", { type: "button", class: "rp-jump", "data-fid": "jump", title: `Jump to the ${m.incident ? "recorded failure" : "fault"} (F)`, onclick: jump }, `Jump to ${m.incident ? "failure" : "fault"} @${m.steps[m.fault.i].seq}`) : null,
     h("span", { class: "rp-spacer" }),
     h("span", { class: "m rp-pos", "aria-live": playing ? "off" : "polite" }, "step ", h("b", {}, `@${s.seq}`),
-      h("span", { class: "faint" }, ` · ${r.i + 1} of ${m.end + 1} replayed · ${m.n} in the variant${ctx.d.truncated || ctx.d.journal_truncated ? " (the API sent only the first steps)" : ""}`)));
+      h("span", { class: "faint" }, ` · ${r.i + 1} of ${m.end + 1} replayed · ${m.n} in the ${m.incident ? "recording" : "variant"}${ctx.d.truncated || ctx.d.journal_truncated ? " (the API sent only the first steps)" : ""}`)));
 }
 
 function icon(d, fill) {
@@ -598,7 +680,7 @@ function controls(m, r) {
       range),
     h("div", { class: "rp-legend" },
       m.featIdx.length ? h("span", {}, h("i", { class: "lg-tick" }), "feature step") : null,
-      m.fault.i >= 0 ? h("span", {}, h("i", { class: "lg-diamond" }), "fault: the mutated input") : null,
+      m.fault.i >= 0 ? h("span", {}, h("i", { class: "lg-diamond" }), m.incident ? "the recorded failure" : "fault: the mutated input") : null,
       m.fail >= 0 ? h("span", {}, h("i", { class: "lg-trip" }), "replay stopped") : null,
       m.end < m.n - 1 ? h("span", {}, h("i", { class: "lg-rest" }), "not replayed") : null,
       h("span", { class: "faint rp-keys" }, "← → step · space play · F fault · Esc back")));

@@ -92,6 +92,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants", s.getInvariants)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants/source", s.getInvariantSource)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants/file", s.getInvariantFile)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/incident", s.getIncident)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants", s.getVariants)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants/{round}/{id}", s.getVariant)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
@@ -352,6 +353,15 @@ func (s *Server) getInvariantFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write(text)
+}
+
+func (s *Server) getIncident(w http.ResponseWriter, r *http.Request) {
+	inc, err := s.reader.TrialIncident(r.PathValue("job"), r.PathValue("trial"))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inc)
 }
 
 func (s *Server) getVariants(w http.ResponseWriter, r *http.Request) {
