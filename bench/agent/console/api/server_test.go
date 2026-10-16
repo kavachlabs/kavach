@@ -484,10 +484,15 @@ func TestVariantEndpoints(t *testing.T) {
 		t.Fatalf("%d %+v", code, in)
 	}
 	for path, want := range map[string]int{
-		"/api/trials/opencode-glm/nope/incident": 404,
-		trial + "/variants/4/3": 404, trial + "/variants/5/12": 404, "/api/trials/opencode-glm/nope/variants": 404,
-		"/api/trials/opencode-glm/nope/variants/4/12": 404, "/api/trials/..%2Fopencode-glm/x/variants": 404,
-		trial + "/variants/x/12": 400, trial + "/variants/4/1.5": 400, trial + "/variants/-1/12": 400,
+		"/api/trials/opencode-glm/nope/incident":      404,
+		trial + "/variants/4/3":                       404,
+		trial + "/variants/5/12":                      404,
+		"/api/trials/opencode-glm/nope/variants":      404,
+		"/api/trials/opencode-glm/nope/variants/4/12": 404,
+		"/api/trials/..%2Fopencode-glm/x/variants":    404,
+		trial + "/variants/x/12":                      400,
+		trial + "/variants/4/1.5":                     400,
+		trial + "/variants/-1/12":                     400,
 	} {
 		var e map[string]string
 		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {
