@@ -1,0 +1,6 @@
+{"do":"load","narrow":false,"view":"new"}
+{"do":"poll","status":{"docker":{"ok":true,"version":"29.5.2"},"harbor":{"ok":true,"version":"0.24.0"},"jobs_dir":"~/kavach/bench/agent/results/harbor","tasks_dir":"~/kavach/bench/agent/harbor/tasks","tasks":11,"env_file":true,"root":"~/kavach"}}
+{"do":"open_picker"}
+{"do":"poll","status":{"docker":{"ok":true,"version":"29.5.2"},"harbor":{"ok":true,"version":"0.24.0"},"jobs_dir":"~/kavach/bench/agent/results/harbor","tasks_dir":"~/kavach/bench/agent/harbor/tasks","tasks":11,"env_file":true,"root":"~/kavach"}}
+{"do":"poll","status":{"docker":{"ok":true,"version":"29.5.2"},"harbor":{"ok":true,"version":"0.24.0"},"jobs_dir":"~/kavach/bench/agent/results/harbor","tasks_dir":"~/kavach/bench/agent/harbor/tasks","tasks":11,"env_file":true,"root":"~/kavach"}}
+{"do":"poll","status":{"docker":{"ok":true,"version":"29.5.2"},"harbor":{"ok":true,"version":"0.24.0"},"jobs_dir":"~/kavach/bench/agent/results/harbor","tasks_dir":"~/kavach/bench/agent/harbor/tasks","tasks":11,"env_file":true,"root":"~/kavach"}}

@@ -6,5 +6,5 @@ import "embed"
 
 // Files are the app's files, served as they are.
 //
-//go:embed index.html app.css app.js invariants.js logos.js monaco.js replay.js trail.js kavach.png kavach-icon.png fonts
+//go:embed index.html app.css app.js invariants.js logos.js monaco.js replay.js trail.js uistate.js kavach.png kavach-icon.png fonts
 var Files embed.FS
