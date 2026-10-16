@@ -484,6 +484,46 @@ the trial touches and the response fetched can be read. 400 when `path` is
 missing; 404 for an unknown trial, a path no patch touches or that wasn't
 fetched, and any path with `..` or a leading `/`.
 
+### GET /api/trials/{job}/{trial}/incident
+
+What the trial was checked against, decoded into steps: the recorded
+incident with the verifier's `kavach diff` of it and the old and new builds'
+replays, or, for a feature task, the contract's recorded traffic. The web
+console draws its headline, probe strip and incident replay from it. 404
+when the task has neither.
+
+```json
+{"kind": "incident", "fixture": "verifier/incident.kavach", "service": "ledger", "start": "genesis", "records": 34,
+ "steps": [{"seq": 32, "source": "file:events.jsonl", "position": "8", "input": "{…}", "…": "…",
+            "marker": {"kind": "panic", "message": "runtime error: invalid memory address or nil pointer dereference"}}],
+ "failure": {"seq": 32, "kind": "panic", "message": "runtime error: …"},
+ "old": {"verdict": "still_failing@32", "status": "still_failing", "seq": 32, "steps": [{"seq": 1, "outputs": [], "panic": "", "error": ""}]},
+ "new": {"verdict": "fixed", "status": "fixed", "steps": […]},
+ "diff": {"source": "json", "verdict": "variant_failed(7)@23", "old": "still_failing@32", "new": "fixed",
+          "detail": "variant 7 (…): still_failing@23: panic: …",
+          "divergence": {"seq": 32, "output": 0, "detail": "output 0 of step 32 differs"},
+          "variants": {"candidates": 56, "reproducing": 47, "passing": 39, "required": 10,
+                       "checks": [{"id": 7, "incident_seq": 23, "mutation": "failing input (seq 32): \"type\" \"deposit\" → \"transfer\"",
+                                   "old": "still_failing@23", "new": "still_failing@23", "passed": false, "reproduces": true}]},
+          "regressions": {"candidates": 48, "counted": 46, "passing": 46, "neighbours": 4,
+                          "checks": [{"id": 1, "input_seq": 4, "mutation": "input (seq 5): …", "old": "ok", "new": "ok", "passed": true, "counted": true}]}}}
+```
+
+- The fixture is the grader's copy (`verifier/incident.kavach`), else the
+  `incident.kavach` beside the Dockerfile the task's verifier builds; for a
+  feature task, the collected contract's `traffic.kavach` (`kind:
+  "traffic"`, with no `old`, `new` or `diff`).
+- `steps` are as in a variant's replay below; `recorded` holds production's
+  outputs. `failure` is the first step with a failure marker, `null` when
+  there is none.
+- `old` and `new`: `kavach replay --json` of the incident on each build
+  (`verifier/replay-old.json`, `replay-new.json`), `null` when not saved.
+- `diff`: `verifier/kavach-diff.json` (`source: "json"`), with every variant
+  check (at most 512 of each). Runs graded before the graders saved it have
+  the report from `grade.log` (`source: "log"`): the verdicts, the first
+  divergence, and `variants_line` and `regressions_line` in place of the
+  checks. `null` before grading.
+
 ### GET /api/trials/{job}/{trial}/variants
 
 The rounds of the trial's contract checks and the failing variants they

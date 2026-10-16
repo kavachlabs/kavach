@@ -3,6 +3,7 @@
 
 import { checksOf, renderInvariantBand, renderInvariants } from "./invariants.js";
 import { closeReplay, renderReplay, replayKey } from "./replay.js";
+import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
 
@@ -178,7 +179,7 @@ export const state = {
   confirm: "", actionErr: "", note: "", noteErr: false, starting: false,
   // The attempt inspector: its tab, and what the Invariants tab shows (round
   // is an index into the attempt's checks, null for the latest).
-  inspTab: "steps", // "steps" | "invariants"
+  inspTab: "steps", // "steps" | "trail" | "invariants"
   iv: { page: "results", inv: "", view: "radar", kind: null, variant: null, round: null },
   // The replay scene (replay.js) in the left pane, while a saved variant is
   // open: { job, trial, round, id, i } with i the step shown.
@@ -633,13 +634,19 @@ function patchSteps(t, steps) {
   if (checks.length !== before.length || checks.some((s, i) => s !== before[i])) return renderView();
 
   const shown = merged.filter((s) => s.kind !== "usage");
+  const oldShown = old.filter((s) => s.kind !== "usage");
   const badge = document.querySelector(".insp-tabs .aux-tab:first-child .aux-tab-badge");
   if (badge) badge.textContent = shown.length;
   if (document.querySelector(".insp-tabs") && state.inspTab === "invariants") return;
+  if (state.inspTab === "trail") {
+    if (shown.filter((s) => s.kavach).length !== oldShown.filter((s) => s.kavach).length) renderView();
+    return;
+  }
+  const scrub = document.querySelector(".scrub");
+  if (scrub) { const next = renderScrubber(t, shown, clock); if (next) scrub.replaceWith(next); }
 
   const key = CSS.escape(`${t.job}/${t.id}`);
   const box = document.querySelector(`.steps[data-key="${key}"]`);
-  const oldShown = old.filter((s) => s.kind !== "usage");
   const placeholder = !box && document.querySelector(`[data-steps="${key}"]`);
   if (placeholder) {
     const el = renderSteps(t, state.job);
@@ -653,7 +660,7 @@ function patchSteps(t, steps) {
   shown.forEach((s, i) => { if (s.kind === "text") lastText = i; });
   shown.forEach((s, i) => {
     if (s === oldShown[i]) return;
-    const el = renderStep(s, i, i === lastText, t.model);
+    const el = stepEl(s, i, i === lastText, t.model);
     const prev = box.children[i];
     if (!prev) return box.append(el);
     if (prev.matches("details[open]") || prev.querySelector("details[open]")) {
@@ -2650,28 +2657,39 @@ function renderAttempt(t) {
   const invTab = hasInv && state.inspTab === "invariants";
   const cmd = t.kavach ? (isContractTrial(t, t.kavach.verdict) ? "kavach contract check " : "kavach diff ") : "";
   const meta = t.kavach ? [t.kavach.features, t.kavach.variants].filter(Boolean).join(" · ") : "";
+  const headline = invTab ? null : renderHeadline(t);
+  if (headline) kids.push(headline);
   if (!invTab) kids.push(h("div", { class: `kcard arm-${t.arm || "kavach"}` },
     renderArmHintBar(t),
     t.kavach ? h("span", {}, h("span", { class: "peach m" }, cmd), h("b", { class: "m" }, t.kavach.verdict)) : h("span", { class: "dim" }, info.short),
     meta ? h("span", { class: "dim" }, meta) : null,
     t.kavach && t.kavach.old ? h("span", { class: "faint m" }, `old build: ${t.kavach.old}`) : null));
+  const probe = invTab ? null : renderProbe(t);
+  if (probe) kids.push(probe);
 
   const openInv = () => { state.inspTab = "invariants"; renderView(); };
-  if (hasInv && Array.isArray(state.steps) && state.stepsFor === key) {
+  if (Array.isArray(state.steps) && state.stepsFor === key) {
     if (!invTab && checks.length) kids.push(renderInvariantBand(checks, openInv));
+    const shown = state.steps.filter((s) => s.kind !== "usage");
+    const rounds = trailRows(shown).filter((r) => r.round).length;
+    if (!hasInv && state.inspTab === "invariants") state.inspTab = "steps";
     const tab = state.inspTab;
     const last = checks[checks.length - 1];
     const trips = last ? (last.variant_failures || []).length : 0;
     const tabs = [
-      { id: "steps", label: "Steps", badge: state.steps.filter((s) => s.kind !== "usage").length },
-      { id: "invariants", label: "Invariants", badge: !last ? null : last.passed ? "pass" : trips ? `${trips} trip` : last.verdict.replace(/[(@].*$/, ""), tone: last && (last.passed ? "ok" : "bad") },
-    ];
+      { id: "steps", label: "Steps", badge: shown.length },
+      { id: "trail", label: "Kavach trail", badge: rounds ? `${rounds} round${rounds === 1 ? "" : "s"}` : null },
+      hasInv ? { id: "invariants", label: "Invariants", badge: !last ? null : last.passed ? "pass" : trips ? `${trips} trip` : last.verdict.replace(/[(@].*$/, ""), tone: last && (last.passed ? "ok" : "bad") } : null,
+    ].filter(Boolean);
     kids.push(h("div", { class: "aux-tabs insp-tabs", role: "tablist", "aria-label": "Attempt" },
       tabs.map((x) => h("button", {
         type: "button", role: "tab", class: `aux-tab ${tab === x.id ? "on" : ""}`, "aria-selected": String(tab === x.id),
         onclick: () => { state.inspTab = x.id; renderView(); },
       }, h("span", {}, x.label), x.badge != null ? h("span", { class: `aux-tab-badge ${x.tone || ""}` }, x.badge) : null))));
-    kids.push(tab === "invariants" ? renderInvariants(t, checks) : renderSteps(t, job));
+    const pick = (i) => { state.inspTab = "steps"; renderView(); requestAnimationFrame(() => showStep(i)); };
+    if (tab === "invariants") kids.push(renderInvariants(t, checks));
+    else if (tab === "trail") kids.push(renderTrail(shown, pick, clock));
+    else kids.push(renderScrubber(t, shown, clock), renderSteps(t, job));
   } else {
     kids.push(renderSteps(t, job));
   }
@@ -2706,7 +2724,7 @@ function stepsBody(t, job) {
   }
   let lastTextIdx = -1;
   shown.forEach((s, idx) => { if (s.kind === "text") lastTextIdx = idx; });
-  shown.forEach((s, i) => box.append(renderStep(s, i, i === lastTextIdx, t.model)));
+  shown.forEach((s, i) => box.append(stepEl(s, i, i === lastTextIdx, t.model)));
   return box;
 }
 
@@ -2832,6 +2850,14 @@ function labMark(model) {
     svg.append(path);
   }
   return svg;
+}
+
+// stepEl is a step marked with its index among the shown steps, which the
+// scrubber and the trail scroll to.
+function stepEl(s, i, isLastText, model) {
+  const el = renderStep(s, i, isLastText, model);
+  el.dataset.si = String(i);
+  return el;
 }
 
 function renderStep(s, i, isLastText, model) {

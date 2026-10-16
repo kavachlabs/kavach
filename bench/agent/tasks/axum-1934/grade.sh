@@ -40,5 +40,10 @@ if [[ $arm == control ]]; then
 fi
 cargo build -p kavach-driver >&3 2>&3 || result true true "$hidden" n/a ""
 out=$(kavach --no-banner diff /task/incident.kavach --old /opt/axum-old/kavach-driver --new target/debug/kavach-driver 2>&1) || true
+# The console's probe strip and incident replay read these.
+kavach --no-banner diff /task/incident.kavach --old /opt/axum-old/kavach-driver --new target/debug/kavach-driver --json >/out/kavach-diff.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin /opt/axum-old/kavach-driver --json >/out/replay-old.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin target/debug/kavach-driver --json >/out/replay-new.json 2>/dev/null || true
+cp /task/incident.kavach /out/incident.kavach
 echo "$out" >&3
 result true true "$hidden" "$(awk '/^verdict/{print $2}' <<<"$out")" "$(sed -n 's/^variants *//p' <<<"$out")"

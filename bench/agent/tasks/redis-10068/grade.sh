@@ -45,5 +45,10 @@ if [[ $arm == control ]]; then
   { git apply /task/redis-kavach.patch 2>&3 && make -j"$(nproc)" >&3 2>&3; } || result true true "$hidden" n/a ""
 fi
 out=$(kavach --no-banner diff /task/incident.kavach --old /opt/redis-old/redis-server --new src/redis-server 2>&1) || true
+# The console's probe strip and incident replay read these.
+kavach --no-banner diff /task/incident.kavach --old /opt/redis-old/redis-server --new src/redis-server --json >/out/kavach-diff.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin /opt/redis-old/redis-server --json >/out/replay-old.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin src/redis-server --json >/out/replay-new.json 2>/dev/null || true
+cp /task/incident.kavach /out/incident.kavach
 echo "$out" >&3
 result true true "$hidden" "$(awk '/^verdict/{print $2}' <<<"$out")" "$(sed -n 's/^variants *//p' <<<"$out")"

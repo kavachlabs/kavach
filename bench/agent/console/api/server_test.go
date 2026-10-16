@@ -466,10 +466,33 @@ func TestVariantEndpoints(t *testing.T) {
 		v.New == nil || v.New.Verdict != "invariant_violated(cookie-limits)@3" {
 		t.Fatalf("%d %+v", code, v)
 	}
+	// The incident a diff task's grader saved, with the new build's replay.
+	vdir := filepath.Join(jobs, "opencode-glm", "redis-10068-control__Run0001", "verifier")
+	os.MkdirAll(vdir, 0o755)
+	inc := []journal.Record{
+		{Type: journal.TypeEnvironment, Flags: journal.FlagCritical, Seq: 0},
+		{Type: journal.TypeInput, Seq: 1, Source: "traffic", Position: "1", Data: []byte(`{"op":"set"}`)},
+		{Type: journal.TypeMarker, Seq: 2, Kind: journal.MarkerPanic, Message: "boom"},
+	}
+	if err := journal.WriteFile(filepath.Join(vdir, "incident.kavach"), journal.Meta{Service: "redis", Start: journal.StartGenesis}, inc); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(vdir, "replay-new.json"), []byte(`{"result":{"status":"fixed","steps":[{"seq":1,"outputs":[]}]}}`), 0o644)
+	var in harbor.Incident
+	if code := get(t, ts.URL+"/api/trials/opencode-glm/redis-10068-control__Run0001/incident", &in); code != 200 || in.Kind != "incident" ||
+		len(in.Steps) != 1 || in.Failure == nil || in.Failure.Seq != 1 || in.New == nil || in.New.Verdict != "fixed" || in.Old != nil {
+		t.Fatalf("%d %+v", code, in)
+	}
 	for path, want := range map[string]int{
-		trial + "/variants/4/3": 404, trial + "/variants/5/12": 404, "/api/trials/opencode-glm/nope/variants": 404,
-		"/api/trials/opencode-glm/nope/variants/4/12": 404, "/api/trials/..%2Fopencode-glm/x/variants": 404,
-		trial + "/variants/x/12": 400, trial + "/variants/4/1.5": 400, trial + "/variants/-1/12": 400,
+		"/api/trials/opencode-glm/nope/incident":      404,
+		trial + "/variants/4/3":                       404,
+		trial + "/variants/5/12":                      404,
+		"/api/trials/opencode-glm/nope/variants":      404,
+		"/api/trials/opencode-glm/nope/variants/4/12": 404,
+		"/api/trials/..%2Fopencode-glm/x/variants":    404,
+		trial + "/variants/x/12":                      400,
+		trial + "/variants/4/1.5":                     400,
+		trial + "/variants/-1/12":                     400,
 	} {
 		var e map[string]string
 		if code := get(t, ts.URL+path, &e); code != want || e["error"] == "" {

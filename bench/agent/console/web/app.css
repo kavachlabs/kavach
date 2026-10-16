@@ -3549,3 +3549,162 @@ details.patch[open] > summary::before { content: "▾ "; }
    round or page. */
 ::view-transition-old(root),
 ::view-transition-new(root) { animation-duration: 160ms; }
+
+/* The headline: the recorded failure and the verdict in plain words. */
+.headline {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: grid;
+  gap: 4px;
+  background: var(--panel);
+  flex: none;
+  min-width: 0;
+}
+.headline.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--edge)); background: color-mix(in srgb, var(--ok) 6%, var(--panel)); }
+.headline.bad { border-color: color-mix(in srgb, var(--bad) 40%, var(--edge)); background: color-mix(in srgb, var(--bad) 6%, var(--panel)); }
+.headline.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--edge)); background: color-mix(in srgb, var(--warn) 6%, var(--panel)); }
+.hl-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 12.5px; }
+.hl-row.main { font-size: 13.5px; flex-wrap: wrap; }
+.hl-k { flex: none; width: 112px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); }
+.hl-v { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-row.main .hl-v { white-space: normal; }
+.headline.ok .hl-row.main .hl-v { color: var(--ok-soft); }
+.headline.bad .hl-row.main .hl-v { color: var(--bad-soft); }
+.headline.warn .hl-row.main .hl-v { color: var(--warn); }
+.hl-pill { flex: none; font-size: 11px; }
+
+/* The probe strip: the recording's inputs as an axis, variants as bars. */
+.probe {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 10px 14px 12px;
+  display: grid;
+  gap: 6px;
+  background: var(--panel);
+  flex: none;
+  min-width: 0;
+}
+.probe-err { flex: none; }
+.pr-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.pr-spacer { flex: 1; }
+.pr-head .btn.sm { padding: 3px 10px; font-size: 11.5px; }
+.pr-sum { font-size: 11.5px; }
+.pr-note { font-size: 11.5px; }
+.pr-wrap { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 6px; min-width: 0; }
+.pr-plot { min-width: 0; }
+.pr-lanes { display: grid; grid-template-rows: 42px 8px; font-size: 10.5px; text-align: right; line-height: 1.1; }
+.pr-wrap.two .pr-lanes { grid-template-rows: 42px 8px 42px; }
+.pr-lanes span:first-child { align-self: end; }
+.pr-lanes span + span { grid-row: 3; align-self: start; }
+.pr-chart { display: grid; align-items: stretch; gap: 0 1px; min-width: 0; }
+.pr-col {
+  display: grid;
+  grid-template-rows: 42px 8px auto;
+  align-items: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  border-radius: 3px;
+}
+button.pr-col { cursor: pointer; }
+button.pr-col:hover { background: var(--hover); }
+button.pr-col.on { background: color-mix(in srgb, var(--blue) 12%, transparent); }
+button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pr-bar { display: flex; flex-direction: column-reverse; align-items: stretch; justify-content: flex-start; min-width: 0; padding: 0 12%; }
+.pr-bar.up { justify-content: flex-start; }
+.pr-bar.down { flex-direction: column; height: 42px; }
+.pr-seg { display: block; width: 100%; min-width: 2px; }
+.pr-seg.ok { background: var(--ok); }
+.pr-seg.bad { background: var(--bad); }
+.pr-seg.skip { background: var(--edge-strong); }
+.pr-axis { display: block; height: 8px; background: var(--panel3); border-radius: 1px; align-self: center; }
+.pr-axis.fail { background: var(--bad); height: 8px; }
+.pr-axis.div { background: var(--warn); }
+.pr-axis.feat { background: var(--violet); }
+.pr-ticks { position: relative; display: flex; justify-content: space-between; font-size: 10.5px; height: 14px; }
+.pr-tick-fail { position: absolute; transform: translateX(-50%); color: var(--bad); }
+.pr-tick-end-fail { color: var(--bad); }
+.pr-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; }
+.pr-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.pr-legend span:empty { display: none; }
+.pr-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.pr-sw.ok { background: var(--ok); }
+.pr-sw.bad { background: var(--bad); }
+.pr-sw.skip { background: var(--edge-strong); }
+.pr-sw.fail { background: var(--bad); height: 5px; }
+.pr-sw.div { background: var(--warn); height: 5px; }
+.pr-sw.feat { background: var(--violet); height: 5px; }
+.pr-detail { border-top: 1px solid var(--edge); padding-top: 6px; display: grid; gap: 4px; min-width: 0; }
+.pr-detail-h { font-size: 12px; }
+.pr-list { display: grid; gap: 2px; max-height: 180px; overflow: auto; min-width: 0; }
+.pr-row { display: grid; grid-template-columns: 34px 40px 96px minmax(0, 1fr); align-items: baseline; gap: 8px; font-size: 11.5px; min-width: 0; }
+.pr-row.skip { opacity: 0.6; }
+.pr-marks { display: inline-flex; gap: 6px; font-weight: 600; }
+.pr-mark.ok { color: var(--ok); }
+.pr-mark.bad { color: var(--bad); }
+.pr-mark.skip { color: var(--faint); }
+.pr-mut { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The Kavach trail: the agent's Kavach calls as rounds. */
+.trail { flex: 1 1 0; min-height: 160px; overflow: auto; }
+.trail-t { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trail-t th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--edge); position: sticky; top: 0; background: var(--panel); }
+.trail-t td { padding: 6px 8px; border-bottom: 1px solid var(--edge); vertical-align: baseline; }
+.trail-t tr { cursor: pointer; }
+.trail-t tbody tr:hover { background: var(--hover); }
+.trail-t tbody tr:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.trail-t tr.minor td { color: var(--dim); }
+.trail-cmd { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trail-what { color: var(--text-2); }
+.trail-empty { padding: 8px 0; }
+
+/* The scrubber over the agent's steps, with Kavach calls as chapters. */
+.scrub { flex: none; display: grid; gap: 2px; padding: 2px 2px 4px; }
+.sc-track { position: relative; padding-top: 18px; }
+.sc-chapters { position: absolute; left: 2px; right: 2px; top: 0; height: 18px; }
+.sc-ch {
+  position: absolute;
+  transform: translateX(-50%);
+  top: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  border: 1px solid var(--edge-strong);
+  background: var(--panel2);
+  color: var(--dim);
+  font: 600 10px/14px var(--font-code);
+  cursor: pointer;
+}
+.sc-ch.minor { min-width: 8px; width: 8px; height: 8px; top: 5px; padding: 0; border-radius: 50%; }
+.sc-ch.ok { background: var(--ok); border-color: var(--ok); color: var(--on-accent); }
+.sc-ch.bad { background: var(--bad); border-color: var(--bad); color: var(--on-accent); }
+.sc-ch:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.sc-rail { position: absolute; left: 2px; right: 2px; top: 24px; height: 6px; border-radius: 3px; background: var(--panel3); pointer-events: none; }
+.sc-edit { position: absolute; top: 0; width: 2px; height: 6px; background: var(--peach); transform: translateX(-1px); opacity: 0.8; }
+.sc-range { -webkit-appearance: none; appearance: none; width: 100%; margin: 0; position: relative; height: 18px; background: transparent; }
+.sc-range::-webkit-slider-runnable-track { height: 18px; background: transparent; }
+.sc-range::-moz-range-track { height: 18px; background: transparent; }
+.sc-range::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 18px; border-radius: 2px; background: var(--blue); cursor: ew-resize; }
+.sc-range::-moz-range-thumb { width: 4px; height: 18px; border: 0; border-radius: 2px; background: var(--blue); cursor: ew-resize; }
+.sc-range:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.sc-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; min-width: 0; }
+.sc-read { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sc-legend { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.sc-sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; }
+.sc-sw.ok { background: var(--ok); }
+.sc-sw.bad { background: var(--bad); }
+.sc-sw.edit { background: var(--peach); border-radius: 1px; width: 2px; }
+.steps .scrub-at { outline: 2px solid color-mix(in srgb, var(--blue) 55%, transparent); outline-offset: 1px; border-radius: 6px; }
+
+/* The incident scene's switch between the builds. */
+.rp-builds { display: inline-flex; border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; flex: none; }
+.rp-build { border: 0; background: var(--panel); color: var(--dim); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.rp-build + .rp-build { border-left: 1px solid var(--edge); }
+.rp-build.on { background: var(--panel3); color: var(--text); font-weight: 600; }
+.rp-build:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.pr-wrap.bare .pr-col { grid-template-rows: 8px; }

@@ -46,5 +46,10 @@ if [[ $arm == control ]]; then
   { git apply /task/valkey-kavach.patch 2>&3 && make -j4 >&3 2>&3; } || result true true "$hidden" n/a ""
 fi
 out=$(kavach --no-banner diff /task/incident.kavach --old /opt/valkey-old/valkey-server --new src/valkey-server 2>&1) || true
+# The console's probe strip and incident replay read these.
+kavach --no-banner diff /task/incident.kavach --old /opt/valkey-old/valkey-server --new src/valkey-server --json >/out/kavach-diff.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin /opt/valkey-old/valkey-server --json >/out/replay-old.json 2>/dev/null || true
+kavach --no-banner replay /task/incident.kavach --bin src/valkey-server --json >/out/replay-new.json 2>/dev/null || true
+cp /task/incident.kavach /out/incident.kavach
 echo "$out" >&3
 result true true "$hidden" "$(awk '/^verdict/{print $2}' <<<"$out")" "$(sed -n 's/^variants *//p' <<<"$out")"
