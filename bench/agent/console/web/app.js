@@ -6,6 +6,7 @@ import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
+import { NARROW, UI_PREFS_KEY, initialPanes, prefsJSON, readPrefs, sideOpen as sideOpenOn, statusRedraw, toggleFold, toggleRight, toggleSide } from "./uistate.js";
 
 // Where the theme a person picked is kept; index.html reads it too.
 const THEME_KEY = "kavach-bench-theme";
@@ -102,24 +103,22 @@ function armInfo(arm, track) {
   };
 }
 
-const UI_PREFS_KEY = "kavach-bench.ui-prefs";
-
-// The panes' widths, and whether each is open, survive a reload. side is
-// null until the left sidebar is toggled by hand.
+// The panes survive a reload: uistate.js says what is saved and restored.
 function loadUIPrefs() {
-  const prefs = { leftW: 256, rightW: 400, side: null, rightSide: true, folded: [] };
+  let raw = null;
   try {
-    Object.assign(prefs, JSON.parse(localStorage.getItem(UI_PREFS_KEY) || "{}"));
+    raw = localStorage.getItem(UI_PREFS_KEY);
   } catch {}
-  return prefs;
+  return readPrefs(raw);
 }
 
 function saveUIPrefs() {
   try {
-    localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ leftW: state.leftW, rightW: state.rightW, side: state.side, rightSide: state.rightSide, folded: [...state.folded] }));
+    localStorage.setItem(UI_PREFS_KEY, prefsJSON(state));
   } catch {}
 }
 
+const narrowScreen = () => window.matchMedia(NARROW).matches;
 const initialPrefs = loadUIPrefs();
 
 // The editors code links can open, by their URL schemes. The source tree is
@@ -163,15 +162,11 @@ export const state = {
   job: null, jobErr: "", compare: null,
   sel: "", steps: null, stepsFor: "",
   grades: new Map(),
-  // null follows the screen; true or false once toggled. A narrow screen
-  // starts closed whatever was saved: there the sidebar covers the view.
-  side: typeof initialPrefs.side === "boolean" && !window.matchMedia("(max-width: 900px)").matches ? initialPrefs.side : null,
-  rightSide: initialPrefs.rightSide !== false, // right auxiliary pane open/closed
-  // The sidebar sections folded shut: "runs", "tasks", "incident", "feature".
-  folded: new Set(Array.isArray(initialPrefs.folded) ? initialPrefs.folded : []),
+  // side (the left sidebar: null follows the screen), rightSide (the right
+  // auxiliary pane), folded (the sidebar sections folded shut: "runs",
+  // "tasks", "incident", "feature"), leftW and rightW.
+  ...initialPanes(initialPrefs, narrowScreen()),
   auxTab: "task", // "task" | "arms" | "models"
-  leftW: initialPrefs.leftW || 256,
-  rightW: initialPrefs.rightW || 400,
   codeEditor: loadCodeEditor(), // CODE_EDITORS id
   live: false,
   form: loadForm(),
@@ -413,7 +408,7 @@ async function onRoute() {
     state.stepsFor = "";
     state.replay = null;
   }
-  if (window.matchMedia("(max-width: 900px)").matches) state.side = false;
+  if (narrowScreen()) state.side = false;
   await enterView(() => {
     renderAll();
     if (current.job) return refreshJob();
@@ -429,6 +424,8 @@ async function enterView(render) {
   setTimeout(() => view.classList.remove("entering"), 300);
 }
 
+// loadStatus runs every 15s; uistate.js says whether a poll redraws.
+let drawnStatus;
 async function loadStatus() {
   try {
     state.status = await api("/status");
@@ -436,6 +433,9 @@ async function loadStatus() {
   } catch (e) {
     state.statusErr = e.message;
   }
+  const draw = statusRedraw(drawnStatus, state.status, state.statusErr);
+  if (!draw.redraw) return;
+  drawnStatus = draw.key;
   renderTop();
   renderSide();
   if (current.view === "new") renderView();
@@ -811,7 +811,7 @@ function slideRightSide(layout) {
 }
 
 function toggleRightSide() {
-  state.rightSide = !state.rightSide;
+  toggleRight(state);
   saveUIPrefs();
   renderTop();
   renderView();
@@ -907,10 +907,10 @@ function closeNav() {
   if (t) t.setAttribute("aria-expanded", "false");
 }
 
-// Keep sidebar open on desktop by default so navigation is rock-solid and Settings is always accessible.
+// The left sidebar shows by default on a wide screen, so navigation and
+// Settings are always at hand.
 function sideOpen() {
-  if (state.side != null) return state.side;
-  return !window.matchMedia("(max-width: 900px)").matches;
+  return sideOpenOn(state.side, narrowScreen());
 }
 
 function hasConfiguredKey() {
@@ -940,8 +940,7 @@ function sideSection(key, label, count, cls = "") {
     "aria-expanded": String(!shut),
     title: `${shut ? "Show" : "Hide"} ${label.toLowerCase()}`,
     onclick: () => {
-      if (shut) state.folded.delete(key);
-      else state.folded.add(key);
+      toggleFold(state, key);
       saveUIPrefs();
       renderSide();
     },
@@ -3360,7 +3359,7 @@ function exportCSV() {
 }
 
 document.getElementById("menu").addEventListener("click", () => {
-  state.side = !sideOpen();
+  toggleSide(state, narrowScreen());
   saveUIPrefs();
   renderSide();
 });
@@ -3371,7 +3370,7 @@ document.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
     if (k === "b") {
       e.preventDefault();
-      state.side = !sideOpen();
+      toggleSide(state, narrowScreen());
       saveUIPrefs();
       renderSide();
       return;
@@ -3396,7 +3395,7 @@ document.addEventListener("keydown", (e) => {
       document.getElementById("title").focus();
     } else if (state.replay && current.view === "runs") {
       closeReplay();
-    } else if (state.side && window.matchMedia("(max-width: 900px)").matches) {
+    } else if (state.side && narrowScreen()) {
       state.side = false;
       renderSide();
     }
@@ -3409,7 +3408,7 @@ document.addEventListener("click", (e) => {
     state.selectFilter = "";
     renderView();
   }
-  if (e.target.closest(".side-scroll a") && window.matchMedia("(max-width: 900px)").matches) {
+  if (e.target.closest(".side-scroll a") && narrowScreen()) {
     state.side = false;
     renderSide();
   }
