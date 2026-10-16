@@ -539,6 +539,24 @@ body.resizing .body {
   flex-direction: column;
   gap: 8px;
 }
+.side-static {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.side .side-static a {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.side .side-static a:hover {
+  background: none;
+  border-color: transparent;
+}
 .side-env-row {
   display: flex;
   align-items: center;

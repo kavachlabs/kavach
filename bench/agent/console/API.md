@@ -22,6 +22,24 @@ cd bench/agent/console && go run ./cmd/bench api [--jobs DIR] [--tasks DIR] [--r
 `<root>/bench/agent/.env` is passed to Harbor as `--env-file` if it exists.
 The console never reads it.
 
+## A read-only copy
+
+The server starts paid runs and writes API keys, so it is never put on the
+internet. To publish results, `bench export` writes the web console and the
+answer to every GET it makes for some runs as files, for any static host:
+
+```sh
+cd bench/agent/console && go run ./cmd/bench export --out DIR [--job ID,ID] [--landing ID] [--jobs DIR]
+```
+
+`--job` defaults to every finished run, and `--landing`, the run the copy
+opens on, to the newest of them. The copy has no new-run form, settings,
+controls, live events or editor links. Paths under the repository and the
+home directory, the host name and the user name are rewritten; anything
+else the runs hold (agent transcripts, patches) is published as it is, so
+read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
+`web/app.js` agree on where each response is kept.
+
 ## Conventions
 
 - Everything is JSON. Times are RFC 3339; a time that is not known is `null`.

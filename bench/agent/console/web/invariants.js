@@ -3,7 +3,7 @@
 // carry (Step.contract). A report from an older Kavach has no variant kinds
 // or declared list; the views say what they can't show rather than guess.
 
-import { h, state, renderView, api, CODE_EDITORS, editorURL, setCodeEditor } from "./app.js";
+import { h, state, renderView, api, apiURL, STATIC, CODE_EDITORS, editorURL, setCodeEditor } from "./app.js";
 import { cachedElement, languageOf, monacoStatus, patchEditor, snippetEditor, useTrial } from "./monaco.js";
 import { isSaved, openReplay, savedVariants } from "./replay.js";
 
@@ -632,9 +632,9 @@ function rerenderFocus(id) {
   if (el) el.focus({ preventScroll: true });
 }
 
-const trialURL = (t) => `/api/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}`;
-const loadPatch = (ctx, i) => loadText(ctx, i, `${trialURL(ctx.t)}/invariants/source?i=${i}`);
-const loadFile = (ctx, path) => loadText(ctx, `file|${path}`, `${trialURL(ctx.t)}/invariants/file?path=${encodeURIComponent(path)}`);
+const trialPath = (t) => `/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}`;
+const loadPatch = (ctx, i) => loadText(ctx, i, apiURL(`${trialPath(ctx.t)}/invariants/source?i=${i}`));
+const loadFile = (ctx, path) => loadText(ctx, `file|${path}`, apiURL(`${trialPath(ctx.t)}/invariants/file?path=${encodeURIComponent(path)}`));
 
 // loadText fetches a plain-text resource of the trial once, as sub names it.
 function loadText(ctx, sub, url) {
@@ -744,6 +744,7 @@ function menuKeys(e) {
 // openIn links to line of file (a patch) in the chosen editor, with a menu
 // beside it that picks another.
 function openIn(key, file, line) {
+  if (STATIC) return null; // the file is on the machine that ran the attempt
   const ed = CODE_EDITORS.find((e) => e.id === state.codeEditor) || CODE_EDITORS[0];
   const menu = domId(key) + "-ed";
   const open = state.openSelect === menu;
