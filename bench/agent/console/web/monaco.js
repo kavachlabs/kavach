@@ -72,25 +72,25 @@ function token(name, fallback) {
   return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
 }
 
-export const THEME = "kavach-dark";
+export const THEME = "kavach";
 
-function setup() {
-  const app = token("--app", "#0d0f12");
-  const panel = token("--panel", "#13161b");
-  const text = token("--text", "#eef1f6");
-  const dim = token("--dim", "#949ca9");
-  const faint = token("--faint", "#646c7a");
-  const edge = token("--edge-strong", "#323947");
-  const pop = token("--pop", "#161a21");
-  const violet = token("--violet", "#a99bff");
-  const peach = token("--peach", "#f5a97f");
-  const blue = token("--blue", "#68a0f6");
-  const ok = token("--ok", "#2bc866");
-  const bad = token("--bad", "#f05252");
+function defineTheme() {
+  const app = token("--app", "#191917");
+  const panel = token("--panel", "#21211e");
+  const text = token("--text", "#eeefe9");
+  const dim = token("--dim", "#a7a89e");
+  const faint = token("--faint", "#787970");
+  const edge = token("--edge-strong", "#45453f");
+  const pop = token("--pop", "#252522");
+  const violet = token("--violet", "#b79cff");
+  const peach = token("--peach", "#f7773a");
+  const blue = token("--blue", "#8199ff");
+  const ok = token("--ok", "#6abf6f");
+  const bad = token("--bad", "#f26b4a");
   const bare = (c) => c.slice(1);
-  // The console has only a dark theme.
+  const dark = getComputedStyle(document.documentElement).colorScheme === "dark";
   monaco.editor.defineTheme(THEME, {
-    base: "vs-dark",
+    base: dark ? "vs-dark" : "vs",
     inherit: true,
     rules: [
       { token: "comment", foreground: bare(faint), fontStyle: "italic" },
@@ -124,6 +124,18 @@ function setup() {
       "editor.findMatchHighlightBackground": violet + "40",
     },
   });
+}
+
+// retheme redefines the editors' theme from the console's colour tokens,
+// after the console switched between light and dark.
+export function retheme() {
+  if (!monaco) return;
+  defineTheme();
+  monaco.editor.setTheme(THEME);
+}
+
+function setup() {
+  defineTheme();
   // Snippets are fragments of files: language services would flag them.
   const ts = monaco.languages.typescript;
   if (ts) for (const d of [ts.typescriptDefaults, ts.javascriptDefaults]) d.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true });

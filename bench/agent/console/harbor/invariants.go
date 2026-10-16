@@ -3,6 +3,7 @@ package harbor
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -138,6 +139,9 @@ var (
 	quotedInv = regexp.MustCompile(`"(` + kebab + `)"`)
 	constInv  = regexp.MustCompile(`\b(\w*[iI]nv\w*)\s*=\s*"(` + kebab + `)"`)
 	termStart = regexp.MustCompile(`^(` + kebab + `)(:|\s{2,}|\s[-—]\s)`)
+	// A name alone on its line, as an entry of a list of invariants:
+	// for n in (\n # what it means\n "x",\n ...).
+	bareInv = regexp.MustCompile(`^\s*"(` + kebab + `)",?\s*$`)
 	// The function an invariant's declaration passes as its check:
 	// Invariant("x", self._limits), Invariant("x", per_step("x")),
 	// {"x", trimInvariant, NULL}, lambda: self._check("x").
@@ -195,6 +199,9 @@ func (r *Reader) invariantSources(tasksDir, job, id string) (task string, srcs [
 	if patch := integrationPatch(tasksDir, cfg.Task.Path); patch != "" {
 		if b, err := os.ReadFile(patch); err == nil {
 			if abs, err := filepath.Abs(patch); err == nil {
+				if !strings.HasSuffix(patch, ".patch") {
+					b = newFilePatch(filepath.Base(patch), b)
+				}
 				srcs = append(srcs, patchSource{abs, b, false})
 			}
 		}
@@ -226,7 +233,9 @@ func (r *Reader) InvariantSource(tasksDir, job, id string, i int) ([]byte, error
 }
 
 // integrationPatch finds the patch that adds Kavach to a task's service: the
-// *kavach*.patch next to the Dockerfile its compose file builds.
+// *kavach*.patch next to the Dockerfile its compose file builds. A task
+// whose image copies in a whole driver instead (kavach_kombu.py) has no
+// patch; the driver is returned, and read as a patch that adds it.
 func integrationPatch(tasksDir, taskPath string) string {
 	for _, try := range []struct{ dir, name string }{
 		{tasksDir, filepath.Base(taskPath)},
@@ -244,9 +253,62 @@ func integrationPatch(tasksDir, taskPath string) string {
 			if len(m) > 0 {
 				return m[0]
 			}
+			m, _ = filepath.Glob(filepath.Join(filepath.Dir(f.Path), "kavach_*"))
+			for _, p := range m {
+				if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && !strings.HasSuffix(p, ".kavach") {
+					return p
+				}
+			}
 		}
 	}
 	return ""
+}
+
+// inInvariantList says whether line i of f follows, within 30 lines, code
+// that names invariants (def invariants(self):), as the entries of a list
+// of their names do.
+func inInvariantList(f *hunkFile, i int) bool {
+	for j := i - 1; j >= 0 && j >= i-30; j-- {
+		l := f.lines[j]
+		if l.n != f.lines[j+1].n-1 {
+			return false // a gap in the patch: the code between is unknown
+		}
+		if !isComment(l.text) && strings.Contains(strings.ToLower(l.text), "invariant") {
+			return true
+		}
+	}
+	return false
+}
+
+// commentAbove is the comment block that ends on the line above line i of
+// f, as one paragraph, and its first line.
+func commentAbove(f *hunkFile, i int) (string, srcLine) {
+	var parts []string
+	var first srcLine
+	for j := i - 1; j >= 0 && j >= i-16; j-- {
+		l := f.lines[j]
+		if l.n != f.lines[j+1].n-1 || !isComment(l.text) {
+			break
+		}
+		_, b := commentBody(l.text)
+		if b = strings.TrimSpace(b); b == "" {
+			break
+		}
+		parts = append([]string{b}, parts...)
+		first = l
+	}
+	return strings.Join(parts, " "), first
+}
+
+// newFilePatch is a unified diff that adds the file name with text b.
+func newFilePatch(name string, b []byte) []byte {
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	var out strings.Builder
+	fmt.Fprintf(&out, "diff --git a/%s b/%[1]s\nnew file mode 100644\n--- /dev/null\n+++ b/%[1]s\n@@ -0,0 +1,%d @@\n", name, len(lines))
+	for _, l := range lines {
+		out.WriteString("+" + l + "\n")
+	}
+	return []byte(out.String())
 }
 
 func findInvariants(files []*hunkFile, known []string) []InvariantDef {
@@ -259,7 +321,11 @@ func findInvariants(files []*hunkFile, known []string) []InvariantDef {
 		}
 	}
 	for _, f := range files {
-		for _, l := range f.lines {
+		for i, l := range f.lines {
+			if m := bareInv.FindStringSubmatch(l.text); m != nil && inInvariantList(f, i) {
+				add(m[1])
+				continue
+			}
 			if m := constInv.FindStringSubmatch(l.text); m != nil {
 				consts[m[2]] = m[1]
 				add(m[2])
@@ -300,8 +366,16 @@ func findInvariants(files []*hunkFile, known []string) []InvariantDef {
 				}
 				lower := strings.ToLower(l.text)
 				switch {
-				case decl == nil && (strings.Contains(lower, "invariant") || constInv.MatchString(l.text)) && !isComment(l.text):
+				case decl == nil && (strings.Contains(lower, "invariant") || constInv.MatchString(l.text)) && !isComment(l.text),
+					decl == nil && bareInv.MatchString(l.text) && inInvariantList(f, i):
 					decl, declFile = l, f
+					if d.Doc == "" {
+						if doc, at := commentAbove(f, i); doc != "" {
+							d.Doc = doc
+							d.DocAt = &Snippet{Role: "doc", Path: at.path, Line: at.n, Agent: at.agent && at.added, File: f.file, FileLine: at.pline, FileHit: at.pline}
+							d.Agent = d.Agent || at.agent && at.added
+						}
+					}
 				case len(fails) < 4 && !isComment(l.text):
 					fails = append(fails, around(f, i, 1, 1, "fails"))
 				}

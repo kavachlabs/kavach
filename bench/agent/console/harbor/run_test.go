@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -262,7 +263,7 @@ func TestPauseAndResume(t *testing.T) {
 	runner, dir := fakeHarbor(t, `
 echo "$UNUSED" > "`+"$JOBS"+`/../env"
 mkdir -p "$JOBS/demo/demo__1" "$JOBS/demo/demo__2"
-echo '{}' > "$JOBS/demo/config.json"
+[ -f "$JOBS/demo/config.json" ] || echo '{}' > "$JOBS/demo/config.json"
 echo '{}' > "$JOBS/demo/demo__1/config.json"
 echo '{"task_name":"hello-world-control","exception_info":{"exception_type":"CancelledError"}}' > "$JOBS/demo/demo__1/result.json"
 echo '{}' > "$JOBS/demo/demo__2/config.json"
@@ -300,8 +301,21 @@ while :; do sleep 0.05; done
 		t.Fatalf("after second pause %+v", j)
 	}
 
+	// An attempt of a killed Harbor, which wrote no result.json.
+	os.MkdirAll(filepath.Join(jobs, "demo", "demo__3"), 0o755)
+	os.WriteFile(filepath.Join(jobs, "demo", "demo__3", "config.json"), []byte("{}"), 0o644)
 	if err := runner.Resume("demo"); err != nil {
 		t.Fatal(err)
+	}
+	if exists(filepath.Join(jobs, "demo", "demo__3")) {
+		t.Error("resume kept the killed attempt")
+	}
+	// Without job_name, harbor jobs resume starts a new job folder.
+	var cfg struct {
+		JobName string `json:"job_name"`
+	}
+	if readJSON(filepath.Join(jobs, "demo", "config.json"), &cfg); cfg.JobName != "demo" {
+		t.Errorf("job_name %q", cfg.JobName)
 	}
 	waitFor(t, func() bool {
 		b, _ := os.ReadFile(filepath.Join(dir, "env"))
@@ -330,5 +344,17 @@ while :; do sleep 0.05; done
 	}
 	if err := runner.Resume("other"); !errors.Is(err, ErrNotStopped) {
 		t.Fatalf("resume unknown: %v", err)
+	}
+}
+
+func TestNewName(t *testing.T) {
+	runner := &Runner{JobsDir: t.TempDir()}
+	seen := map[string]bool{}
+	for range 50 {
+		n := runner.newName()
+		if !namePattern.MatchString(n) || !regexp.MustCompile(`^[a-z]+-[a-z]+-[a-z]+-[a-z0-9]{7}$`).MatchString(n) || seen[n] {
+			t.Fatalf("name %q", n)
+		}
+		seen[n] = true
 	}
 }

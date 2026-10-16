@@ -1,6 +1,8 @@
 package harbor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -149,5 +151,50 @@ func TestPatchLines(t *testing.T) {
 	}
 	if d := got["streamed-call-args"].DocAt; d == nil || d.File != "/t/patch.diff" || d.FileLine != 8 {
 		t.Errorf("doc at %+v", d)
+	}
+}
+
+// A task whose image copies in a whole Kavach driver, with no integration
+// patch, has its invariants read from the driver.
+func TestIntegrationDriver(t *testing.T) {
+	root := t.TempDir()
+	task := filepath.Join(root, "harbor", "tasks", "demo-kavach")
+	writeFile(t, filepath.Join(task, "task.toml"), "[environment]\nworkdir = \"/work\"\n")
+	writeFile(t, filepath.Join(task, "environment", "docker-compose.yaml"), `services:
+  main:
+    build:
+      context: ../../../..
+      dockerfile: tasks/demo/Dockerfile
+`)
+	writeFile(t, filepath.Join(root, "tasks", "demo", "Dockerfile"), "FROM scratch\n")
+	writeFile(t, filepath.Join(root, "tasks", "demo", "traffic.kavach"), "")
+	driver := filepath.Join(root, "tasks", "demo", "kavach_demo.py")
+	writeFile(t, driver, `class Handler:
+    def invariants(self):
+        return [check(n) for n in (
+            # A message is never delivered
+            # after its time to live.
+            "queue-ttl",
+            # Untouched, nothing to say.
+            "queue-order",
+        )]
+
+    def _deliver(self):
+        self._violate("queue-ttl", "expired")
+`)
+
+	got := integrationPatch(filepath.Join(root, "harbor", "tasks"), "demo-kavach")
+	if got != driver {
+		t.Fatalf("integration %q, want %q", got, driver)
+	}
+	b, _ := os.ReadFile(driver)
+	defs := findInvariants(parsePatch(newFilePatch("kavach_demo.py", b), driver, false), nil)
+	if len(defs) != 2 || defs[0].Name != "queue-ttl" || defs[1].Name != "queue-order" ||
+		defs[0].Doc != "A message is never delivered after its time to live." || defs[0].DocAt == nil || defs[0].DocAt.Line != 4 {
+		t.Fatalf("defs %+v", defs)
+	}
+	c := defs[0].Code
+	if len(c) != 2 || c[0].Role != "declaration" || c[0].Path != "kavach_demo.py" || c[0].Line != 5 || c[1].Role != "fails" || c[1].Line != 11 {
+		t.Errorf("code %+v", c)
 	}
 }

@@ -4,13 +4,10 @@
 import { checksOf, renderInvariantBand, renderInvariants } from "./invariants.js";
 import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { LABS } from "./logos.js";
+import { retheme } from "./monaco.js";
 
-// The wordmark, as [kavach, bench] pairs, one per text line.
-const LOGO = [
-  ["█  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █   ", "█    ▄▀▀▀ █▀▀▄ █▀▀▀ █   "],
-  ["█▄▀  █▀▀█ █  █ █▀▀█ █    █▀▀▄", "█▀▀█ █▀▀▀ █  █ █    █▀▀▄"],
-  ["█ ▀▄ ▀▀▀▀  ▀▀  ▀▀▀▀ ▀▀▀▀ ▀  ▀", "▀▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀  ▀"],
-];
+// Where the theme a person picked is kept; index.html reads it too.
+const THEME_KEY = "kavach-bench-theme";
 
 const COMMANDS = [
   ["/run", "start the benchmark run"],
@@ -60,7 +57,7 @@ const ARM_INFO = {
     tone: "peach",
     short: "Kavach CLI & MCP + recorded incident fixture or locked contract",
     tileHint: "Kavach arm: agent uses kavach diff / contract check with the incident fixture or locked contract during the run.",
-    detail: "The agent is equipped with the kavach CLI and MCP server plus the recorded production fixture (Track A: kavach diff with variants) or locked behavior contract (Track B: kavach contract check).",
+    detail: "The agent is equipped with the kavach CLI and MCP server plus the recorded production fixture (incidents: kavach diff with variants) or locked behavior contract (features: kavach contract check).",
   },
   "kavach-implement": {
     label: "kavach-implement",
@@ -72,8 +69,29 @@ const ARM_INFO = {
   },
 };
 
-function armInfo(arm) {
-  return ARM_INFO[arm] || {
+// What an arm gets differs by track: an incident's bug report and fixture, or
+// a feature's spec and contract.
+const ARM_TRACK = {
+  incident: {
+    control: { short: "Base repo + bug report only (no Kavach tools)" },
+    kavach: {
+      short: "Kavach CLI & MCP + the recorded incident fixture",
+      tileHint: "Kavach arm: agent checks its fix with kavach diff on the recorded incident during the run.",
+    },
+  },
+  feature: {
+    control: { short: "Base repo + spec only (no Kavach tools)" },
+    kavach: {
+      short: "Kavach CLI & MCP + the locked behaviour contract",
+      tileHint: "Kavach arm: agent checks its build with kavach contract check against the locked contract during the run.",
+    },
+  },
+};
+
+function armInfo(arm, track) {
+  const info = ARM_INFO[arm];
+  if (info && track && ARM_TRACK[track] && ARM_TRACK[track][arm]) return { ...info, ...ARM_TRACK[track][arm] };
+  return info || {
     label: arm || "task",
     tag: "Standard",
     tone: "peach",
@@ -692,6 +710,8 @@ function renderTop() {
     }
   }
 
+  kids.push(themeToggle());
+
   // Antigravity symmetrical right-hand Auxiliary Pane toggle icon on #/new and #/jobs/<id>
   if (current.view === "new" || current.view === "runs") {
     kids.push(h("button", {
@@ -708,6 +728,73 @@ function renderTop() {
   title.textContent = text;
   document.title = current.view === "new" ? "kavach bench" : `${text} · kavach bench`;
   right.replaceChildren(...kids.filter(Boolean));
+}
+
+// The theme in effect: the one a person picked, else the system's.
+function currentTheme() {
+  return document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+}
+
+function themeToggle() {
+  const dark = currentTheme() === "dark";
+  const icon = dark
+    ? '<circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.35"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
+    : '<path d="M13.5 9.6A5.6 5.6 0 0 1 6.4 2.5a5.6 5.6 0 1 0 7.1 7.1Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/>';
+  const btn = h("button", {
+    type: "button",
+    class: "theme-toggle",
+    title: `Switch to ${dark ? "light" : "dark"} theme`,
+    "aria-label": `Switch to ${dark ? "light" : "dark"} theme`,
+    onclick: (e) => setTheme(dark ? "light" : "dark", e.currentTarget),
+  });
+  btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">${icon}</svg>`;
+  return btn;
+}
+
+// setTheme switches the theme, revealing the new one in a circle that grows
+// from the button that asked for it.
+function setTheme(theme, from) {
+  const root = document.documentElement;
+  const apply = () => {
+    root.dataset.theme = theme;
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+    retheme();
+    renderTop();
+  };
+  if (!document.startViewTransition || document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) return apply();
+  const r = from.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  // Without transitions, the new snapshot has the new colours, not the
+  // first frame of a fade to them.
+  root.classList.add("theme-switching");
+  const t = document.startViewTransition(apply);
+  t.ready.then(() => root.animate(
+    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+    { duration: 560, easing: "cubic-bezier(0.16, 1, 0.3, 1)", pseudoElement: "::view-transition-new(root)" },
+  ));
+  t.finished.finally(() => root.classList.remove("theme-switching"));
+}
+
+// With no theme picked, follow the system's as it changes.
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (document.documentElement.dataset.theme) return;
+  retheme();
+  renderTop();
+});
+
+// The right pane's state as last drawn. Each render builds the layout anew, so
+// a new layout starts from this state and transitions to the current one.
+let drawnRightSide = null;
+
+function slideRightSide(layout) {
+  const was = drawnRightSide;
+  drawnRightSide = state.rightSide;
+  if (was === null || was === state.rightSide) return;
+  layout.classList.toggle("noright", !was);
+  void layout.offsetWidth;
+  layout.classList.toggle("noright", !state.rightSide);
 }
 
 function toggleRightSide() {
@@ -912,7 +999,8 @@ function renderSide() {
         }
       },
     },
-      h("span", {}, t.name),
+      h("span", {}, t.name,
+        h("span", { class: `sub track-kind ${trackOf(t)}` }, trackOf(t))),
       h("span", { class: "side-arm-badge" }, armLabel)));
   }
 
@@ -1448,11 +1536,16 @@ function shortSource(src) {
   return src.split(/\s+/)[0] || src;
 }
 
+// trackOf says whether a task is an incident to fix or a feature to build.
+function trackOf(task) {
+  return task.track === "feature" || task.arms.some((a) => a.arm === "workflow" || a.arm === "kavach-implement") ? "feature" : "incident";
+}
+
 // Task Card component rendered in the Right Auxiliary Pane ("Task" tab)
 function renderTaskCard(task) {
   if (!task) return null;
-  const isFeature = task.track === "feature" || task.arms.some((a) => a.arm === "workflow" || a.arm === "kavach-implement");
-  const trackBadge = isFeature ? "Track B · Feature" : "Track A · Incident";
+  const isFeature = trackOf(task) === "feature";
+  const trackBadge = isFeature ? "Feature" : "Incident";
   const checkCmd = isFeature ? "kavach contract check" : "kavach diff";
   const timeoutMin = task.timeout_sec ? `${Math.round(task.timeout_sec / 60)}m` : null;
   const srcShort = shortSource(task.source);
@@ -1489,7 +1582,7 @@ function renderRightArms(task, selectedArms) {
       h("span", { class: "faint" }, "Click any arm card below to toggle it in the run matrix.")),
     h("div", { class: "rside-arm-list" },
       task.arms.map((a) => {
-        const info = armInfo(a.arm);
+        const info = armInfo(a.arm, trackOf(task));
         const active = selectedArms.includes(a.arm);
         const toneCls = info.tone === "blue" ? "blue" : "peach";
         return h("button", {
@@ -1595,7 +1688,7 @@ function renderRightSidebar(task) {
   const tab = state.auxTab || "task";
 
   const tabs = [
-    { id: "task", label: "Task", badge: task ? (task.track === "feature" ? "B" : "A") : null },
+    { id: "task", label: "Task", badge: task ? (trackOf(task) === "feature" ? "Feature" : "Incident") : null },
     { id: "arms", label: "Arms", badge: totalArms ? `${activeCount}/${totalArms}` : null },
     { id: "models", label: "Models", badge: needsModel(f.agent) ? String(f.models.length) : "–" },
   ];
@@ -1637,6 +1730,20 @@ function renderRightSidebar(task) {
     h("div", { class: "aux-body", role: "tabpanel" }, bodyContent));
 }
 
+// Line icons for the new-run form's rows, drawn like the top bar's.
+const ROW_ICONS = {
+  task: '<path d="M4 1.75h5.25l3 3v9.5H4z"/><path d="M9.25 1.75v3h3"/><path d="M6.25 8.25h3.5M6.25 10.75h2.5"/>',
+  arms: '<circle cx="4.25" cy="3.5" r="1.6"/><circle cx="11.75" cy="3.5" r="1.6"/><circle cx="8" cy="12.5" r="1.6"/><path d="M4.25 5.1v.9c0 2 3.75 2.4 3.75 4.9M11.75 5.1v.9c0 2-3.75 2.4-3.75 4.9"/>',
+  models: '<rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.5"/><path d="M6.5 1.75v2.5M9.5 1.75v2.5M6.5 11.75v2.5M9.5 11.75v2.5M1.75 6.5h2.5M1.75 9.5h2.5M11.75 6.5h2.5M11.75 9.5h2.5"/>',
+  runs: '<path d="M2.75 7.5a5.25 5.25 0 0 1 9.4-3.2"/><path d="M12.5 1.75v2.9H9.6"/><path d="M13.25 8.5a5.25 5.25 0 0 1-9.4 3.2"/><path d="M3.5 14.25v-2.9h2.9"/>',
+};
+
+function rowIcon(name) {
+  const ic = h("span", { class: "ic", "aria-hidden": "true" });
+  ic.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">${ROW_ICONS[name]}</svg>`;
+  return ic;
+}
+
 function renderNew(view) {
   const f = state.form;
   const st = state.status;
@@ -1646,9 +1753,10 @@ function renderNew(view) {
 
   const kids = [
     h("div", { class: "hero-head" },
-      h("pre", { class: "logo", "aria-label": "kavach bench" },
-        LOGO.map(([k, b], i) => [i ? "\n" : "", h("span", { class: "peach" }, k), " ", h("span", { class: "blue" }, b)])),
-      h("p", { class: "hero-sub" }, "Agent benchmark console for incident reproduction & contract-verified feature engineering")),
+      h("h1", { class: "logo", "aria-label": "kavach bench" },
+        h("span", { class: "logo-mark", "aria-hidden": "true" }),
+        h("span", { class: "logo-sub", "aria-hidden": "true" }, "bench")),
+      h("p", { class: "hero-sub" }, "Coding agents, with and without Kavach.")),
   ];
 
   if (state.statusErr && !st) {
@@ -1675,7 +1783,7 @@ function renderNew(view) {
       value: t.name,
       label: t.name,
       desc: t.title.replace(/^Task:\s*/, ""),
-      badge: `${t.arms.length} arms · ${t.track || (t.arms.length > 2 ? "feature" : "incident")}`,
+      badge: `${t.arms.length} arms · ${trackOf(t)}`,
     }));
     taskRow = [
       renderSelect({
@@ -1693,7 +1801,7 @@ function renderNew(view) {
         },
       }),
       task
-        ? h("span", { class: "faint m" }, `${task.track === "feature" ? "Feature" : "Incident"} · ${task.arms.length} arms`)
+        ? h("span", { class: "faint m" }, `${trackOf(task) === "feature" ? "Feature" : "Incident"} · ${task.arms.length} arms`)
         : h("span", { class: "bad" }, `${f.task} isn't a task any more`),
     ];
   }
@@ -1722,7 +1830,7 @@ function renderNew(view) {
     modelVal = h("span", { class: "faint" }, `The ${f.agent} agent needs no model.`);
   } else {
     modelVal = h("div", { class: "chips" },
-      f.models.map((m) => h("span", { class: "chip on" },
+      f.models.map((m) => h("span", { class: "chip on", title: m },
         labMark(m),
         h("span", { class: "m" }, m),
         h("button", {
@@ -1747,10 +1855,10 @@ function renderNew(view) {
   const conc = f.concurrent > 1 ? `${f.concurrent} at once` : "one at a time";
   kids.push(h("div", { class: "config-card" },
     h("div", { class: "meta" },
-      h("div", {}, h("span", { class: "ic", "aria-hidden": "true" }, "▢"), h("span", { class: "row-lbl" }, "Task"), h("span", { class: "val" }, taskRow)),
-      h("div", {}, h("span", { class: "ic", "aria-hidden": "true" }, "◑"), h("span", { class: "row-lbl" }, "Arms"), h("span", { class: "val chips" }, armChips)),
-      h("div", {}, h("span", { class: "ic", "aria-hidden": "true" }, "◇"), h("span", { class: "row-lbl" }, "Models"), h("div", { class: "val" }, modelVal)),
-      h("div", {}, h("span", { class: "ic", "aria-hidden": "true" }, "↻"), h("span", { class: "row-lbl" }, "Runs"), h("span", { class: "val" },
+      h("div", {}, rowIcon("task"), h("span", { class: "row-lbl" }, "Task"), h("span", { class: "val" }, taskRow)),
+      h("div", {}, rowIcon("arms"), h("span", { class: "row-lbl" }, "Arms"), h("span", { class: "val chips" }, armChips)),
+      h("div", {}, rowIcon("models"), h("span", { class: "row-lbl" }, "Models"), h("div", { class: "val" }, modelVal)),
+      h("div", {}, rowIcon("runs"), h("span", { class: "row-lbl" }, "Runs"), h("span", { class: "val" },
         h("input", {
           class: "num v", type: "number", min: "1", max: "100", value: String(f.runs), "aria-label": "Runs per task and model",
           onchange: (e) => { f.runs = clampInt(e.target.value, 1, 100, 1); saveForm(); renderView(); },
@@ -1775,6 +1883,7 @@ function renderNew(view) {
   const focused = document.activeElement && document.activeElement.id;
   const caret = focused === "ask" ? document.activeElement.selectionStart : null;
   view.replaceChildren(layout);
+  slideRightSide(layout);
   const newAuxBody = view.querySelector(".aux-body");
   if (newAuxBody) newAuxBody.scrollTop = prevAuxScroll;
   if (focused) {
@@ -2216,11 +2325,17 @@ function matrixRows(job) {
     const key = `${base(t.task)}|${t.model}`;
     if (!rows.has(key)) {
       const who = t.model ? orId(t.model) : job.agent;
-      rows.set(key, { label: multi ? `${base(t.task)} · ${who}` : who, trials: [] });
+      rows.set(key, { label: multi ? `${base(t.task)} · ${who}` : who, model: t.model, trials: [] });
     }
     rows.get(key).trials.push(t);
   }
   return [...rows.values()];
+}
+
+// A table's first cell: the model's lab mark, then its name.
+function modelCell(model, label) {
+  if (!model) return label;
+  return h("span", { class: "model-cell" }, labMark(model), h("span", {}, label));
 }
 
 function selected() {
@@ -2278,12 +2393,12 @@ function pill(t) {
 }
 
 // Arm Guide / Legend banner explaining what control, workflow, kavach, and kavach-implement mean
-function renderArmGuide(arms) {
+function renderArmGuide(arms, track) {
   const known = arms.filter(Boolean);
   if (!known.length) return null;
   return h("div", { class: "arm-guide", "aria-label": "Experiment arm definitions" },
     known.map((a) => {
-      const info = armInfo(a);
+      const info = armInfo(a, track);
       return h("div", {
         class: `arm-guide-item ${info.tone === "peach" ? "kavach-tone" : ""}`,
         title: info.detail,
@@ -2296,7 +2411,7 @@ function renderArmGuide(arms) {
 }
 
 function renderArmHintBar(t) {
-  const info = armInfo(t.arm);
+  const info = armInfo(t.arm, jobTrack());
   return h("div", { class: "kcard-arm-hint", title: info.detail },
     h("span", { class: `arm-pill ${info.tone === "blue" ? "blue" : ""}` }, t.arm || "task"),
     h("span", { class: "arm-hint-text" }, info.tileHint),
@@ -2333,7 +2448,7 @@ function renderRuns(view) {
       });
       const allQueued = r.trials.every((t) => t.status === "queued");
       return h("tr", { class: r.trials.includes(sel) ? "sel" : null },
-        h("td", {}, r.label),
+        h("td", {}, modelCell(r.model, r.label)),
         arms.map((a) => h("td", {}, h("span", { class: "dots" }, r.trials.filter((t) => t.arm === a).map((t) => h("button", {
           type: "button", class: `st ${t.status} ${t === sel ? "on" : ""}`, dataset: { key: trialKey(t) },
           "aria-label": `${trialLabel(t, true)}: ${t.status}`, title: `${trialLabel(t, true)}: ${t.status} (${armInfo(t.arm).tag})`, "aria-pressed": String(t === sel),
@@ -2351,7 +2466,7 @@ function renderRuns(view) {
   if (state.replay && !(sel && sel.id === state.replay.trial && sel.job === state.replay.job)) state.replay = null;
   const left = state.replay ? renderReplay(sel) : h("div", { class: "pane" },
     kids,
-    renderArmGuide(arms),
+    renderArmGuide(arms, jobTrack()),
     h("div", { class: "tablewrap" }, table),
     h("div", { class: "legend" },
       h("span", {}, h("i", { class: "st pass" }), "pass"),
@@ -2371,9 +2486,11 @@ function renderRuns(view) {
   };
   const invs = document.querySelector(".invs");
   const invKeep = invs && { key: invs.dataset.key, top: invs.scrollTop };
-  view.replaceChildren(h("div", { class: `body ${state.rightSide ? "" : "noright"}` },
+  const body = h("div", { class: `body ${state.rightSide ? "" : "noright"}` },
     left,
-    sel ? renderAttempt(sel) : h("div", { class: "pane right-pane" }, makeResizeSash("right"))));
+    sel ? renderAttempt(sel) : h("div", { class: "pane right-pane" }, makeResizeSash("right")));
+  view.replaceChildren(body);
+  slideRightSide(body);
   const invNow = document.querySelector(".invs");
   if (invNow && invKeep && invKeep.key === invNow.dataset.key) invNow.scrollTop = invKeep.top;
   const now = document.querySelector(".steps");
@@ -2446,7 +2563,7 @@ function disagreement(t) {
 function renderAttempt(t) {
   const job = state.job;
   const multi = isMultiTaskJob(job);
-  const info = armInfo(t.arm);
+  const info = armInfo(t.arm, jobTrack());
   const kids = [
     makeResizeSash("right"),
     h("div", { class: "attempt-head-row" },
@@ -2791,6 +2908,14 @@ function patchView(t) {
 
 const shq = (s) => /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 
+// sessionState says why an attempt's OpenCode session has ended: the agent
+// can be done while Harbor still grades it, or have been stopped part-way.
+function sessionState(t) {
+  if (t.status === "running" || t.status === "queued") return "The agent has finished; this attempt is being graded.";
+  if (t.status === "error" && /^(interrupted|CancelledError)/.test(t.error || "")) return "This attempt was stopped before the agent finished; the session shows its work up to then.";
+  return "This attempt has finished.";
+}
+
 function openInOpenCode(t, job) {
   const oc = t.opencode;
   if (t.status === "running" && oc && oc.url && !oc.finished) {
@@ -2814,7 +2939,7 @@ function openInOpenCode(t, job) {
       }
     } }, "Copy");
     return h("details", { class: "oc" }, h("summary", { class: "btn blue" }, "Open in OpenCode ↗"),
-      h("div", { class: "cmd" }, h("span", {}, "This attempt has finished. Open its saved session in OpenCode's terminal UI:"), h("pre", {}, cmd), h("span", {}, copy)));
+      h("div", { class: "cmd" }, h("span", {}, `${sessionState(t)} Open its saved session in OpenCode's terminal UI:`), h("pre", {}, cmd), h("span", {}, copy)));
   }
   let why;
   if (t.status === "queued") why = "Not started yet.";
@@ -2908,8 +3033,19 @@ function renderCompare(view) {
   const multi = new Set(groups.map((g) => g.task)).size > 1;
   const kids = [];
   if (job.error) kids.push(banner("Harbor exited before it wrote the run's folder.", job.error));
-  kids.push(h("h2", { class: "h" }, `Pass rate comparison · ${arms.join(" → ")}`));
-  kids.push(renderArmGuide(arms));
+  kids.push(h("h2", { class: "h" }, "Pass rate by arm"));
+  kids.push(renderArmGuide(arms, jobTrack()));
+  // Pending attempts by cell, split into running and queued: the comparison
+  // only counts them together.
+  const waiting = new Map();
+  for (const t of job.trials) {
+    if (finished(t)) continue;
+    const key = `${base(t.task)}|${t.model}|${t.arm || "control"}`;
+    const w = waiting.get(key) || { running: 0, queued: 0 };
+    if (isQueued(t)) w.queued++;
+    else w.running++;
+    waiting.set(key, w);
+  }
 
   if (!groups.length) {
     kids.push(h("div", { class: "dim" }, job.status === "running" ? "No attempt has finished yet." : "This run has no attempts."));
@@ -2917,8 +3053,12 @@ function renderCompare(view) {
     const rate = (r) => r && r.attempts ? r.passes / r.attempts : null;
     const cell = (r, better) => {
       if (!r) return h("td", { class: "dim" }, "–");
-      const extra = [r.errors ? `${r.errors} error${r.errors > 1 ? "s" : ""}` : "", r.pending ? `${r.pending} pending` : ""].filter(Boolean).join(" · ");
-      return h("td", { class: better ? "b peach" : null }, r.attempts ? `${r.passes} / ${r.attempts}` : "–", extra ? h("span", { class: "sub" }, extra) : null);
+      const w = waiting.get(`${r.task}|${r.model}|${r.arm || "control"}`);
+      const pending = w ? [w.running ? `${w.running} running` : "", w.queued ? `${w.queued} queued` : ""] : [r.pending ? `${r.pending} pending` : ""];
+      const extra = [r.errors ? `${r.errors} error${r.errors > 1 ? "s" : ""}` : "", ...pending].filter(Boolean).join(" · ");
+      const live = w && w.running ? h("span", { class: "dot run", "aria-hidden": "true" }) : null;
+      if (!r.attempts) return h("td", { class: "dim" }, live, extra || "–");
+      return h("td", { class: better ? "b peach" : null }, `${r.passes} / ${r.attempts}`, extra ? h("span", { class: "sub" }, live, extra) : null);
     };
     const chain = (g, f, fmt) => {
       const vals = arms.map((a) => f(g.arms[a]));
@@ -2938,7 +3078,7 @@ function renderCompare(view) {
         const varied = new Set(arms.map((a) => rate(g.arms[a]) ?? -1)).size > 1;
         const who = g.model ? orId(g.model) : job.agent;
         return h("tr", {},
-          h("td", {}, multi ? `${g.task} · ${who}` : who),
+          h("td", {}, modelCell(g.model, multi ? `${g.task} · ${who}` : who)),
           ...arms.map((a) => {
             const r = g.arms[a];
             return cell(r, varied && best != null && rate(r) === best && a !== "control");
@@ -2949,12 +3089,61 @@ function renderCompare(view) {
       })))));
     kids.push(h("div", { class: "faint", style: "font-size:12.5px" }, "Rates count graded attempts; errors and pending attempts are excluded from medians. Tokens are fresh tokens (uncached input + output)."));
   }
-  const attempts = job.trials.filter((t) => t.id);
-  const queued = job.trials.length - attempts.length;
-  kids.push(h("div", { class: "row", style: "margin-top:8px" }, h("h2", { class: "h" }, "Attempt Tiles"), queued ? h("span", { class: "dim" }, `${queued} queued`) : null));
-  if (!attempts.length) kids.push(h("div", { class: "dim" }, "None has started yet."));
-  else kids.push(h("div", { class: "cards" }, attempts.map((t) => attemptCard(t, job, multi))));
+  kids.push(h("div", { class: "row", style: "margin-top:8px" }, h("h2", { class: "h" }, "Attempts"),
+    h("span", { class: "dim" }, `${Math.max(job.trials_total, job.trials.length)} in this run`)));
+  kids.push(renderKanban(job, multi));
   view.replaceChildren(h("div", { class: "pane" }, kids));
+}
+
+// An attempt Harbor has not started: it has no trial folder yet.
+const isQueued = (t) => !t.id || t.status === "queued";
+
+// The board's columns, left to right, by where an attempt is.
+const KANBAN = [
+  { id: "queued", label: "Queued", empty: "Nothing waiting.", has: isQueued },
+  { id: "running", label: "Running", empty: "Nothing running.", has: (t) => !isQueued(t) && !finished(t) },
+  { id: "passed", label: "Passed", empty: "None passed yet.", has: (t) => finished(t) && t.status === "pass" },
+  { id: "failed", label: "Failed", empty: "None failed.", has: (t) => finished(t) && t.status !== "pass" },
+];
+
+function renderKanban(job, multi) {
+  // A stopped run lists only the attempts that started; the rest are queued
+  // until it resumes.
+  const unlisted = Math.max(0, job.trials_total - job.trials.length);
+  return h("div", { class: "kanban" }, KANBAN.map((col) => {
+    const ts = job.trials.filter(col.has);
+    const more = col.id === "queued" ? unlisted : 0;
+    const note = more ? h("div", { class: "kcol-empty" },
+      `${ts.length ? `${more} more` : more} not started${job.resumable ? ": resume the run to start them" : ""}.`) : null;
+    return h("section", { class: `kcol ${col.id}`, "aria-label": `${col.label}: ${ts.length + more}` },
+      h("header", { class: "kcol-head" },
+        h("span", { class: "kcol-dot", "aria-hidden": "true" }),
+        h("span", { class: "kcol-name" }, col.label),
+        h("span", { class: "kcol-count" }, String(ts.length + more))),
+      ts.map((t) => col.id === "queued" ? queuedCard(t, multi) : attemptCard(t, job, multi)),
+      note,
+      ts.length || note ? null : h("div", { class: "kcol-empty" }, col.empty));
+  }));
+}
+
+function queuedCard(t, multi) {
+  return h("div", { class: `kcard queued arm-${t.arm || "kavach"}`, dataset: { key: trialKey(t) } },
+    h("div", { class: "kcard-arm-hint" },
+      h("span", { class: `arm-pill ${armInfo(t.arm).tone === "blue" ? "blue" : ""}` }, t.arm || "task"),
+      h("span", { class: "arm-hint-text" }, armInfo(t.arm, jobTrack()).tag)),
+    h("div", { class: "title" }, labMark(t.model || ""), h("b", { title: t.model || t.task }, trialLabel(t, multi))),
+    h("div", { class: "faint card-meta" }, "Waiting for a free slot"));
+}
+
+// The track of the run's tasks, when they share one.
+function jobTrack() {
+  const job = state.job;
+  if (!job || !state.tasks) return null;
+  const tracks = new Set(job.tasks.map((n) => {
+    const task = state.tasks.find((t) => t.name === base(n));
+    return task ? trackOf(task) : null;
+  }));
+  return tracks.size === 1 ? [...tracks][0] : null;
 }
 
 function attemptCard(t, job, multi = false) {

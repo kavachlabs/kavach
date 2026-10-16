@@ -11,7 +11,7 @@ import (
 // with the bug in place and the neutral environment of
 // testdata/kavach/facts.json (kavach-recorder --test-facts).
 //
-// provider-error.kavach: job 2026-10-15__15-47-13, read without the
+// provider-error.kavach: job polite-ruby-wolf-lzzmub9, read without the
 // providerError case in trialFrom. Its eighth attempt to finish ended on
 // OpenRouter's 429 and counted as fail.
 func TestKavachFixtures(t *testing.T) {
