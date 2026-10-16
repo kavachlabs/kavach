@@ -104,8 +104,10 @@ function armInfo(arm, track) {
 
 const UI_PREFS_KEY = "kavach-bench.ui-prefs";
 
+// The panes' widths, and whether each is open, survive a reload. side is
+// null until the left sidebar is toggled by hand.
 function loadUIPrefs() {
-  const prefs = { leftW: 256, rightW: 400 };
+  const prefs = { leftW: 256, rightW: 400, side: null, rightSide: true, folded: [] };
   try {
     Object.assign(prefs, JSON.parse(localStorage.getItem(UI_PREFS_KEY) || "{}"));
   } catch {}
@@ -114,7 +116,7 @@ function loadUIPrefs() {
 
 function saveUIPrefs() {
   try {
-    localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ leftW: state.leftW, rightW: state.rightW }));
+    localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ leftW: state.leftW, rightW: state.rightW, side: state.side, rightSide: state.rightSide, folded: [...state.folded] }));
   } catch {}
 }
 
@@ -161,8 +163,12 @@ export const state = {
   job: null, jobErr: "", compare: null,
   sel: "", steps: null, stepsFor: "",
   grades: new Map(),
-  side: null, // null follows the screen; true or false once toggled
-  rightSide: true, // right auxiliary pane open/closed
+  // null follows the screen; true or false once toggled. A narrow screen
+  // starts closed whatever was saved: there the sidebar covers the view.
+  side: typeof initialPrefs.side === "boolean" && !window.matchMedia("(max-width: 900px)").matches ? initialPrefs.side : null,
+  rightSide: initialPrefs.rightSide !== false, // right auxiliary pane open/closed
+  // The sidebar sections folded shut: "runs", "tasks", "incident", "feature".
+  folded: new Set(Array.isArray(initialPrefs.folded) ? initialPrefs.folded : []),
   auxTab: "task", // "task" | "arms" | "models"
   leftW: initialPrefs.leftW || 256,
   rightW: initialPrefs.rightW || 400,
@@ -806,6 +812,7 @@ function slideRightSide(layout) {
 
 function toggleRightSide() {
   state.rightSide = !state.rightSide;
+  saveUIPrefs();
   renderTop();
   renderView();
 }
@@ -817,6 +824,7 @@ function switchAuxTab(tab) {
     state.auxTab = tab;
     state.rightSide = true;
   }
+  saveUIPrefs();
   renderTop();
   renderView();
 }
@@ -923,10 +931,30 @@ function defaultKeySpecs() {
   ];
 }
 
+// sideSection is a sidebar heading that folds its section open and shut.
+function sideSection(key, label, count, cls = "") {
+  const shut = state.folded.has(key);
+  return h("button", {
+    type: "button",
+    class: `lbl fold ${cls} ${shut ? "shut" : ""}`,
+    "aria-expanded": String(!shut),
+    title: `${shut ? "Show" : "Hide"} ${label.toLowerCase()}`,
+    onclick: () => {
+      if (shut) state.folded.delete(key);
+      else state.folded.add(key);
+      saveUIPrefs();
+      renderSide();
+    },
+  },
+    h("span", {}, h("span", { class: "fold-ic", "aria-hidden": "true" }, "▾"), label),
+    count == null ? null : h("span", { class: "faint" }, String(count)));
+}
+
 function renderSide() {
   const side = document.getElementById("side");
   const open = sideOpen();
   document.getElementById("main").classList.toggle("noside", !open);
+  document.documentElement.classList.remove("boot-noside"); // index.html's guess until now
   const menuBtn = document.getElementById("menu");
   if (menuBtn) {
     menuBtn.setAttribute("aria-expanded", String(open));
@@ -962,13 +990,16 @@ function renderSide() {
     h("a", { href: "#/new", class: `new-run-link ${current.view === "new" ? "on" : ""}` },
       h("span", {}, "+ New benchmark run"),
       h("span", { class: "faint m" }, "/new")),
-    h("div", { class: "lbl" }, h("span", {}, "Runs"), state.jobs ? h("span", { class: "faint" }, String(state.jobs.length)) : null),
+    sideSection("runs", "Runs", state.jobs ? state.jobs.length : null),
   ];
 
-  if (state.jobsErr) scrollKids.push(h("div", { class: "none bad" }, "Couldn't list runs: " + state.jobsErr));
+  const runsShut = state.folded.has("runs");
+  if (runsShut) {
+    // nothing under a folded heading
+  } else if (state.jobsErr) scrollKids.push(h("div", { class: "none bad" }, "Couldn't list runs: " + state.jobsErr));
   else if (state.jobs && !state.jobs.length) scrollKids.push(h("div", { class: "none" }, "No runs yet."));
 
-  for (const j of state.jobs || []) {
+  for (const j of runsShut ? [] : state.jobs || []) {
     const { name, shape } = jobShape(j, true);
     const mark = j.status === "running"
       ? h("span", { class: "side-run", title: "running" }, spinner())
@@ -982,33 +1013,37 @@ function renderSide() {
       mark));
   }
 
-  scrollKids.push(h("div", { class: "lbl" },
-    h("span", {}, "Tasks"),
-    state.tasks ? h("span", { class: "faint" }, String(state.tasks.length)) : null));
+  scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  if (state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
-  for (const t of state.tasks || []) {
-    const isSelectedTask = current.view === "new" && state.form.task === t.name;
-    const armLabel = t.arms.length > 1 ? `${t.arms.length} arms` : t.arms[0].arm;
-    scrollKids.push(h("a", {
-      href: `#/new/${encodeURIComponent(t.name)}`,
-      class: isSelectedTask ? "on" : null,
-      title: `${t.name} — ${t.title}`,
-      onclick: (e) => {
-        if (current.view === "new") {
-          e.preventDefault();
-          state.form.task = t.name;
-          state.auxTab = "task";
-          saveForm();
-          history.replaceState(null, "", `#/new/${encodeURIComponent(t.name)}`);
-          renderSide();
-          renderView();
-        }
+  const tasksShut = state.folded.has("tasks");
+  if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
+  // Incidents first, then features; each task names the benchmark it came from.
+  const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
+    .map(([track, label]) => [track, label, (state.tasks || []).filter((t) => trackOf(t) === track)])
+    .filter(([, , ts]) => ts.length);
+  for (const [track, label, ts] of groups) {
+    scrollKids.push(sideSection(track, label, ts.length, "grp"));
+    for (const t of state.folded.has(track) ? [] : ts) {
+      const isSelectedTask = current.view === "new" && state.form.task === t.name;
+      scrollKids.push(h("a", {
+        href: `#/new/${encodeURIComponent(t.name)}`,
+        class: isSelectedTask ? "on" : null,
+        title: `${t.name} — ${t.title}`,
+        onclick: (e) => {
+          if (current.view === "new") {
+            e.preventDefault();
+            state.form.task = t.name;
+            state.auxTab = "task";
+            saveForm();
+            history.replaceState(null, "", `#/new/${encodeURIComponent(t.name)}`);
+            renderSide();
+            renderView();
+          }
+        },
       },
-    },
-      h("span", {}, t.name,
-        h("span", { class: `sub track-kind ${trackOf(t)}` }, trackOf(t))),
-      h("span", { class: "side-arm-badge" }, armLabel)));
+        h("span", {}, t.name,
+          h("span", { class: `sub task-src src-${sourceOf(t).toLowerCase().replace(/[^a-z]+/g, "-")}`, title: t.source || null }, sourceOf(t)))));
+    }
   }
 
   const prevScroll = side.querySelector(".side-scroll");
@@ -1553,6 +1588,16 @@ function shortSource(src) {
   if (src.startsWith("DeepSWE")) return "DeepSWE";
   if (src.startsWith("SWE-bench Multilingual")) return "SWE-bench";
   return src.split(/\s+/)[0] || src;
+}
+
+// sourceOf names the benchmark a task was taken from, from task.toml's
+// metadata.source ("DeepSWE deep-swe-1-1 ...", "SWE-bench Multilingual ...").
+function sourceOf(task) {
+  const src = task.source || "";
+  if (/deep-?swe/i.test(src)) return "DeepSWE";
+  if (/swe-bench multilingual/i.test(src)) return "SWE-bench Multilingual";
+  if (/swe-bench/i.test(src)) return "SWE-bench";
+  return src.split(/\s+/)[0] || "local";
 }
 
 // trackOf says whether a task is an incident to fix or a feature to build.
@@ -2123,6 +2168,7 @@ function runCommand(line) {
     case "/runs": {
       if (!arg) {
         state.side = true;
+        saveUIPrefs();
         renderSide();
         return say("Runs are in the sidebar. /runs <n> sets the attempts per task and model.");
       }
@@ -2174,6 +2220,7 @@ function addModel(id) {
   state.picker.previewId = id;
   state.auxTab = "models";
   state.rightSide = true;
+  saveUIPrefs();
   saveForm();
   ensureModelsLoaded();
   renderTop();
@@ -2195,6 +2242,7 @@ function openPicker(q) {
   p.q = q;
   state.auxTab = "models";
   state.rightSide = true;
+  saveUIPrefs();
   renderTop();
   renderView();
   const input = document.getElementById("pick-q");
@@ -2423,6 +2471,7 @@ async function select(t) {
   state.confirm = "";
   if (!state.rightSide) {
     state.rightSide = true;
+    saveUIPrefs();
     renderTop();
   }
   renderView();
@@ -3312,6 +3361,7 @@ function exportCSV() {
 
 document.getElementById("menu").addEventListener("click", () => {
   state.side = !sideOpen();
+  saveUIPrefs();
   renderSide();
 });
 document.getElementById("title").addEventListener("click", toggleNav);
@@ -3322,6 +3372,7 @@ document.addEventListener("keydown", (e) => {
     if (k === "b") {
       e.preventDefault();
       state.side = !sideOpen();
+      saveUIPrefs();
       renderSide();
       return;
     }

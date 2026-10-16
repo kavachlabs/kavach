@@ -8,6 +8,15 @@
 <script>
   // The theme a person picked, applied before the first paint.
   try { const t = localStorage.getItem("kavach-bench-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+  // The panes' widths, and a closed left sidebar, applied before the first
+  // paint too: app.js runs after it, and the sidebar would show and then slide
+  // shut. A narrow screen starts closed, as in app.js.
+  try {
+    const d = document.documentElement, p = JSON.parse(localStorage.getItem("kavach-bench.ui-prefs") || "{}");
+    if (p.leftW > 0) d.style.setProperty("--left-w", `${p.leftW}px`);
+    if (p.rightW > 0) d.style.setProperty("--right-w", `${p.rightW}px`);
+    if (p.side === false || matchMedia("(max-width: 900px)").matches) d.classList.add("boot-noside");
+  } catch {}
 </script>
 <link rel="stylesheet" href="app.css">
 <script type="module" src="app.js"></script>
