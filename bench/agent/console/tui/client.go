@@ -142,6 +142,10 @@ func (c *client) pause(ctx context.Context, id string) error {
 	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/pause", struct{}{}, nil)
 }
 
+func (c *client) retry(ctx context.Context, job, trial string) error {
+	return c.post(ctx, "/api/trials/"+url.PathEscape(job)+"/"+url.PathEscape(trial)+"/retry", struct{}{}, nil)
+}
+
 func (c *client) resume(ctx context.Context, id string) error {
 	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/resume", struct{}{}, nil)
 }

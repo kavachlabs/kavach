@@ -181,6 +181,10 @@ type (
 		job string
 		err error
 	}
+	retriedMsg struct {
+		job, trial string
+		err        error
+	}
 	eventMsg  event
 	tickMsg   time.Time
 	openedMsg struct{ err error }
@@ -346,6 +350,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fail("Couldn't resume %s: %v", msg.job, msg.err)
 		} else {
 			m.ok("Resumed %s.", msg.job)
+		}
+		return m, m.loadJob(msg.job)
+	case retriedMsg:
+		if msg.err != nil {
+			m.fail("Couldn't retry %s: %v", msg.trial, msg.err)
+		} else {
+			m.ok("Retrying %s: Harbor runs a new attempt in its place.", msg.trial)
 		}
 		return m, m.loadJob(msg.job)
 	case eventMsg:
@@ -771,6 +782,37 @@ func (m *Model) resume(j harbor.Job) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg { return resumedMsg{j.ID, m.c.resume(m.ctx, j.ID)} }
+}
+
+// askRetry confirms running a failed attempt again, which costs as much as
+// the first.
+func (m *Model) askRetry(j harbor.Job, t harbor.Trial) tea.Cmd {
+	switch {
+	case t.Status != harbor.Fail && t.Status != harbor.Error:
+		m.fail("Only a failed attempt can be retried; %s is %s.", t.ID, t.Status)
+		return nil
+	case j.Status == harbor.JobRunning || j.Status == harbor.JobPausing:
+		m.fail("%s is still running; retry the attempt once it ends.", j.ID)
+		return nil
+	case !j.Retryable:
+		m.fail("%s wasn't started by bench, so its attempts can't be retried here.", j.ID)
+		return nil
+	}
+	others := ""
+	if j.Resumable {
+		others = " Attempts the run didn't finish run too."
+	}
+	m.confirm = &confirm{
+		text: fmt.Sprintf("Run %s again? Harbor runs a new attempt of %s, which costs as much as the first. This one leaves the run; its folder is kept in .bench/retried/%s/.%s",
+			t.ID, t.Task, j.ID, others),
+		choices: []choice{
+			{"y", "retry", func(m *Model) tea.Cmd {
+				return func() tea.Msg { return retriedMsg{j.ID, t.ID, m.c.retry(m.ctx, j.ID, t.ID)} }
+			}},
+			{"esc", "keep it", func(*Model) tea.Cmd { return nil }},
+		},
+	}
+	return nil
 }
 
 func (m *Model) askStop(j harbor.Job) tea.Cmd {

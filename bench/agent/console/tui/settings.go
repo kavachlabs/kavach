@@ -15,11 +15,12 @@ type settings struct {
 	Name    string   `json:"name"`    // the model's display name: GLM 5.3
 	Runs    int      `json:"runs"`    // attempts per task and model
 	Timeout int      `json:"timeout"` // agent timeout in minutes; 0 keeps the task's
+	Retries int      `json:"retries"` // times Harbor runs an attempt again after an error
 	Matrix  []string `json:"matrix"`  // OpenRouter ids last picked for /matrix
 }
 
 func defaultSettings() settings {
-	return settings{Agent: "opencode", Arm: "kavach", Model: "z-ai/glm-5.3", Name: "GLM 5.3", Runs: 1}
+	return settings{Agent: "opencode", Arm: "kavach", Model: "z-ai/glm-5.3", Name: "GLM 5.3", Runs: 1, Retries: 1}
 }
 
 // settingsPath is <user config dir>/kavach/bench.json.

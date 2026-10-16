@@ -84,6 +84,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.stopJob)
 	s.mux.HandleFunc("POST /api/jobs/{id}/pause", s.pauseJob)
 	s.mux.HandleFunc("POST /api/jobs/{id}/resume", s.resumeJob)
+	s.mux.HandleFunc("POST /api/trials/{job}/{trial}/retry", s.retryTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}", s.getTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
@@ -440,6 +441,23 @@ func (s *Server) resumeJob(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "resuming harbor: %v", err)
+		return
+	}
+	s.writeJob(w, http.StatusAccepted, id)
+}
+
+func (s *Server) retryTrial(w http.ResponseWriter, r *http.Request) {
+	id, trial := r.PathValue("job"), r.PathValue("trial")
+	err := s.runner.Retry(id, trial)
+	switch {
+	case errors.Is(err, harbor.ErrNotFound):
+		writeError(w, http.StatusNotFound, "%s/%s: no such attempt in a run bench started", id, trial)
+		return
+	case errors.Is(err, harbor.ErrNotStopped):
+		writeError(w, http.StatusConflict, "%s is still running; retry the attempt once it ends", id)
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "retrying %s: %v", trial, err)
 		return
 	}
 	s.writeJob(w, http.StatusAccepted, id)

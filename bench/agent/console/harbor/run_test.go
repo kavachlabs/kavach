@@ -58,6 +58,7 @@ while :; do sleep 0.05; done
 		Models:     []string{"openrouter/a/b", "openrouter/c/d"},
 		Attempts:   3,
 		TimeoutSec: 600,
+		Retries:    2,
 		Name:       "demo",
 	})
 	if err != nil || id != "demo" {
@@ -75,7 +76,10 @@ while :; do sleep 0.05; done
 		JobsDir    string `json:"jobs_dir"`
 		Attempts   int    `json:"n_attempts"`
 		Concurrent int    `json:"n_concurrent_trials"`
-		Agents     []struct {
+		Retry      struct {
+			Max int `json:"max_retries"`
+		} `json:"retry"`
+		Agents []struct {
 			Name    string  `json:"name"`
 			Model   string  `json:"model_name"`
 			Timeout float64 `json:"override_timeout_sec"`
@@ -86,7 +90,7 @@ while :; do sleep 0.05; done
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JobName != "demo" || cfg.JobsDir != runner.JobsDir || cfg.Attempts != 3 || cfg.Concurrent != 1 ||
+	if cfg.JobName != "demo" || cfg.JobsDir != runner.JobsDir || cfg.Attempts != 3 || cfg.Concurrent != 1 || cfg.Retry.Max != 2 ||
 		len(cfg.Agents) != 2 || cfg.Agents[1].Name != "opencode" || cfg.Agents[1].Model != "openrouter/c/d" || cfg.Agents[0].Timeout != 600 ||
 		len(cfg.Tasks) != 2 || cfg.Tasks[0].Path != filepath.Join(filepath.Dir(abs), "hello-world-control") || cfg.Tasks[1].Path != abs {
 		t.Fatalf("config %s", b)
@@ -143,6 +147,7 @@ func TestStartRejects(t *testing.T) {
 		{Tasks: []string{"hello-world-control"}, Name: "../x"},
 		{Tasks: []string{"hello-world-control"}, Attempts: 1000},
 		{Tasks: []string{"hello-world-control"}, TimeoutSec: -1},
+		{Tasks: []string{"hello-world-control"}, Retries: 6},
 	} {
 		if _, err := runner.Start(req); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v: %v", req, err)
@@ -344,6 +349,69 @@ while :; do sleep 0.05; done
 	}
 	if err := runner.Resume("other"); !errors.Is(err, ErrNotStopped) {
 		t.Fatalf("resume unknown: %v", err)
+	}
+}
+
+func TestRetry(t *testing.T) {
+	runner, dir := fakeHarbor(t, `
+if [ "$1" = run ]; then
+	mkdir -p "$JOBS/demo/demo__1"
+	echo '{}' > "$JOBS/demo/config.json"
+	echo '{}' > "$JOBS/demo/demo__1/config.json"
+	echo '{"task_name":"hello-world-control","verifier_result":{"rewards":{"reward":0}}}' > "$JOBS/demo/demo__1/result.json"
+	echo '{"started_at":"2026-10-12T10:00:00Z","finished_at":"2026-10-12T10:05:00Z"}' > "$JOBS/demo/result.json"
+	exit 0
+fi
+mkdir -p "$JOBS/demo/demo__2"
+echo '{}' > "$JOBS/demo/demo__2/config.json"
+trap 'echo stopping; exit 130' INT
+while :; do sleep 0.05; done
+`)
+	jobs := filepath.Join(dir, "jobs")
+	t.Setenv("JOBS", jobs)
+	if _, err := runner.Start(RunRequest{Tasks: []string{"hello-world-control"}, Agent: "oracle", Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("demo")
+	reader := &Reader{Dir: jobs, Runs: runner}
+	if j, _ := reader.Job("demo"); j.Status != JobDone || !j.Retryable || j.Resumable || len(j.Trials) != 1 || j.Trials[0].Status != Fail {
+		t.Fatalf("finished %+v", j)
+	}
+	for _, c := range [][2]string{{"demo", "demo__7"}, {"demo", ".."}, {"demo", "config.json"}, {"other", "demo__1"}} {
+		if err := runner.Retry(c[0], c[1]); !errors.Is(err, ErrNotFound) {
+			t.Errorf("retry %s/%s: %v", c[0], c[1], err)
+		}
+	}
+
+	if err := runner.Retry("demo", "demo__1"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(jobs, "demo", "demo__1")) {
+		t.Error("the retried attempt is still in the job's folder")
+	}
+	kept, _ := filepath.Glob(filepath.Join(jobs, ".bench", "retried", "demo", "demo__1.*", "result.json"))
+	if len(kept) != 1 {
+		t.Errorf("kept %v", kept)
+	}
+	waitFor(t, func() bool { return exists(filepath.Join(jobs, "demo", "demo__2")) })
+	args, _ := os.ReadFile(filepath.Join(dir, "args"))
+	if got := strings.TrimSpace(string(args)); got != "jobs resume -p "+filepath.Join(jobs, "demo") {
+		t.Errorf("args %q", got)
+	}
+	j, _ := reader.Job("demo")
+	if j.Retryable || !j.Stoppable {
+		t.Fatalf("retrying %+v", j)
+	}
+	if err := runner.Retry("demo", "demo__2"); !errors.Is(err, ErrNotStopped) {
+		t.Errorf("retry while running: %v", err)
+	}
+	if err := runner.Stop("demo"); err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait("demo")
+	// The retried run has no other jobs listed for it.
+	if js, _ := reader.Jobs(); len(js) != 1 {
+		t.Errorf("jobs %+v", js)
 	}
 }
 

@@ -375,6 +375,9 @@ func TestPauseAndResumeRun(t *testing.T) {
 	if code, v := post(t, url+"/run1/resume", "", ""); code != 409 {
 		t.Fatalf("resume running: %d %v", code, v)
 	}
+	if code, v := post(t, ts.URL+"/api/trials/run1/hello-world-control__1/retry", "", ""); code != 409 {
+		t.Fatalf("retry while running: %d %v", code, v)
+	}
 	var args []byte
 	for deadline := time.Now().Add(5 * time.Second); strings.Count(string(args), "run -c") < 1 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		args, _ = os.ReadFile(filepath.Join(dir, "args"))
@@ -400,6 +403,9 @@ func TestPauseAndResumeRun(t *testing.T) {
 	}
 	post(t, url+"/run1/stop", "", "")
 	wait(harbor.JobStopped)
+	if code, v := post(t, ts.URL+"/api/trials/run1/hello-world-control__1/retry", "", ""); code != 404 {
+		t.Fatalf("retry a missing attempt: %d %v", code, v)
+	}
 }
 
 func TestSettings(t *testing.T) {

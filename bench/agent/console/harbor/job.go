@@ -88,6 +88,7 @@ type Job struct {
 	Cost      float64    `json:"cost"`
 	Stoppable bool       `json:"stoppable"` // started by this process and still running
 	Resumable bool       `json:"resumable"` // started by bench, stopped or paused, not finished
+	Retryable bool       `json:"retryable"` // started by bench, not running, with a job folder: its attempts can be run again
 	Error     string     `json:"error,omitempty"`
 	Trials    []Trial    `json:"trials,omitempty"`
 }
@@ -339,14 +340,18 @@ func (r *Reader) readJob(id string) Job {
 	}
 
 	launched, alive, out := r.Runs.state(id)
+	j.Retryable = launched && !alive && exists(filepath.Join(dir, "config.json"))
 	switch {
-	case j.Finished != nil:
-		j.Status = JobDone
 	case launched && alive:
+		// Before a retry's Harbor rewrites result.json, it still says
+		// when the run first finished.
+		j.Finished = nil
 		j.Stoppable = true
 		if r.Runs.paused(id) {
 			j.Status = JobPausing
 		}
+	case j.Finished != nil:
+		j.Status = JobDone
 	case launched:
 		j.Resumable = true
 		j.Status = JobStopped

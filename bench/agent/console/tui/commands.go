@@ -29,6 +29,7 @@ func init() {
 		{"task", "<name>", "Choose the task", true, (*Model).cmdTask},
 		{"agent", "opencode|oracle|nop", "Choose the agent; oracle applies the known fix, for checking a task", true, (*Model).cmdAgent},
 		{"timeout", "<minutes>", "Agent timeout per attempt; 0 keeps the task's", true, (*Model).cmdTimeout},
+		{"retries", "<n>", "Times an attempt that ends with an error runs again, 0-5", true, (*Model).cmdRetries},
 		{"matrix", "[ids…]", "Several models × both arms × N runs in one go", false, (*Model).cmdMatrix},
 		{"jobs", "", "Open an earlier run", false, (*Model).cmdJobs},
 		{"results", "", "Grade cards and the comparison for this run", false, (*Model).cmdResults},
@@ -37,6 +38,7 @@ func init() {
 		{"stop", "", "Stop this run", false, (*Model).cmdStop},
 		{"pause", "", "Pause this run; /resume continues it", false, (*Model).cmdPause},
 		{"resume", "", "Continue a paused or stopped run", false, (*Model).cmdResume},
+		{"retry", "[trial]", "Run a failed attempt again once its run has ended", false, (*Model).cmdRetry},
 		{"clear", "", "Back to the start screen", false, (*Model).cmdClear},
 		{"help", "", "List the commands", false, (*Model).cmdHelp},
 		{"quit", "", "Leave the console", false, (*Model).cmdQuit},
@@ -203,7 +205,7 @@ func (m *Model) start(tasks, models []string) tea.Cmd {
 		m.fail("%s", m.status.JobsWarning)
 		return nil
 	}
-	req := harbor.RunRequest{Tasks: tasks, Attempts: m.set.Runs, Agent: m.set.Agent, TimeoutSec: float64(m.set.Timeout * 60)}
+	req := harbor.RunRequest{Tasks: tasks, Attempts: m.set.Runs, Agent: m.set.Agent, TimeoutSec: float64(m.set.Timeout * 60), Retries: m.set.Retries}
 	if m.needsModel() {
 		for _, id := range models {
 			req.Models = append(req.Models, "openrouter/"+id)
@@ -344,6 +346,17 @@ func (m *Model) cmdTimeout(arg string) tea.Cmd {
 	return nil
 }
 
+func (m *Model) cmdRetries(arg string) tea.Cmd {
+	n, err := strconv.Atoi(arg)
+	if err != nil || n < 0 || n > 5 {
+		m.fail("/retries takes 0 to 5: how many times an attempt that ends with an error runs again.")
+		return nil
+	}
+	m.set.Retries = n
+	m.save()
+	return nil
+}
+
 func (m *Model) cmdJobs(string) tea.Cmd {
 	m.jobSel = 0
 	m.showPage(pageJobs, "/jobs")
@@ -421,6 +434,31 @@ func (m *Model) cmdResume(string) tea.Cmd {
 		return nil
 	}
 	return m.resume(*m.job)
+}
+
+func (m *Model) cmdRetry(arg string) tea.Cmd {
+	if m.job == nil {
+		m.fail("Open a run first: /jobs.")
+		return nil
+	}
+	t := m.selected()
+	if arg != "" {
+		t = nil
+		for i := range m.job.Trials {
+			if m.job.Trials[i].ID == arg {
+				t = &m.job.Trials[i]
+			}
+		}
+		if t == nil {
+			m.fail("There is no attempt %s in this run.", arg)
+			return nil
+		}
+	}
+	if t == nil {
+		m.fail("Pick an attempt, or give /retry a trial id.")
+		return nil
+	}
+	return m.askRetry(*m.job, *t)
 }
 
 func (m *Model) cmdClear(string) tea.Cmd {

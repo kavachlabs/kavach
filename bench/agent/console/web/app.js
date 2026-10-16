@@ -261,7 +261,7 @@ export async function api(path, opts) {
 }
 
 function loadForm() {
-  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, timeout: 0 };
+  const form = { task: "", arms: ["kavach", "control"], models: [], runs: 1, agent: "opencode", concurrent: 1, retries: 1, timeout: 0 };
   try {
     Object.assign(form, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
   } catch {}
@@ -1203,6 +1203,18 @@ function settingsGeneralTab() {
         }),
       }),
       settingsRow({
+        label: "Retries after an error",
+        labelId: "set-retries-lbl",
+        hint: f.retries
+          ? `An attempt that ends with an error, such as a provider or container failure, runs again up to ${f.retries} time${f.retries === 1 ? "" : "s"}. Timeouts and failed tests are results and are not retried.`
+          : "An attempt that ends with an error is not run again.",
+        control: segmented({
+          id: "set-retries", labelledBy: "set-retries-lbl", value: f.retries,
+          options: [0, 1, 2, 3].map((n) => ({ value: n, label: String(n) })),
+          onChange: (v) => updateRunDefaults({ retries: +v }),
+        }),
+      }),
+      settingsRow({
         label: "Agent timeout",
         labelId: "set-timeout-lbl",
         hint: f.timeout ? `The agent is stopped after ${f.timeout} minutes on every task.` : "Each task uses the timeout set in its task.toml.",
@@ -1864,7 +1876,7 @@ function renderNew(view) {
           onchange: (e) => { f.runs = clampInt(e.target.value, 1, 100, 1); saveForm(); renderView(); },
         }),
         h("span", { class: "v" }, "each"),
-        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.timeout ? ` · ${f.timeout} min timeout` : ""}`))))));
+        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}`))))));
 
   if (state.picker.open && needsModel(f.agent)) kids.push(renderPicker());
 
@@ -2297,7 +2309,7 @@ async function startRun() {
   const f = state.form;
   const why = canRun();
   if (why) return say(why, true);
-  const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent };
+  const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent, retries: f.retries };
   if (needsModel(f.agent)) body.models = f.models.map((m) => `openrouter/${m}`);
   if (f.timeout) body.timeout_sec = f.timeout * 60;
   state.starting = true;
@@ -2620,7 +2632,7 @@ function renderAttempt(t) {
     kids.push(renderSteps(t, job));
   }
   if (finished(t)) kids.push(patchView(t));
-  kids.push(h("div", { class: "actions" }, openInOpenCode(t, job), runControl(job)));
+  kids.push(h("div", { class: "actions" }, openInOpenCode(t, job), retryControl(t, job), runControl(job)));
   return h("div", { class: "pane right-pane", "aria-hidden": String(!state.rightSide) }, kids);
 }
 
@@ -2968,7 +2980,7 @@ function runControl(job) {
   const running = job.trials.filter((t) => t.status === "running").length;
   const queued = job.trials.filter((t) => t.status === "queued").length;
   const ask = (what) => { state.confirm = what; renderView(); document.getElementById("confirm-yes").focus(); };
-  if (!state.confirm) {
+  if (state.confirm !== "pause" && state.confirm !== "stop") {
     return [
       h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
       h("button", { type: "button", class: "btn", onclick: () => ask("stop") }, "Stop run…"),
@@ -2990,6 +3002,40 @@ function runControl(job) {
     h("div", { class: "row" },
       h("button", { type: "button", id: "confirm-yes", class: state.confirm === "stop" ? "btn danger" : "btn", onclick: () => jobAction(state.confirm) }, label),
       h("button", { type: "button", class: "btn", onclick: () => { state.confirm = ""; renderView(); } }, "Cancel")));
+}
+
+// retryControl offers to run a failed attempt again once its run has ended.
+function retryControl(t, job) {
+  if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
+  if (state.confirm !== `retry:${t.id}`) {
+    return h("button", { type: "button", class: "btn", onclick: () => {
+      state.confirm = `retry:${t.id}`;
+      state.actionErr = "";
+      renderView();
+      document.getElementById("confirm-yes").focus();
+    } }, "Retry attempt…");
+  }
+  const others = job.resumable ? " Attempts the run didn't finish run too." : "";
+  return h("div", { class: "confirm", role: "alertdialog", "aria-label": "Retry attempt", onkeydown: (e) => { if (e.key === "Escape") { state.confirm = ""; renderView(); } } },
+    h("span", {}, h("b", {}, "Run this attempt again? "),
+      `Harbor runs a new attempt of ${t.task}${t.model ? ` with ${shortModel(t.model)}` : ""}, which costs as much as the first. This one leaves the run; its folder is kept in .bench/retried/${job.id}/.${others}`),
+    state.actionErr ? h("span", { class: "bad" }, state.actionErr) : null,
+    h("div", { class: "row" },
+      h("button", { type: "button", id: "confirm-yes", class: "btn blue", onclick: () => retryTrial(t) }, "Retry attempt"),
+      h("button", { type: "button", class: "btn", onclick: () => { state.confirm = ""; renderView(); } }, "Cancel")));
+}
+
+async function retryTrial(t) {
+  try {
+    const job = await api(`/trials/${encodeURIComponent(state.job.id)}/${encodeURIComponent(t.id)}/retry`, { method: "POST" });
+    job.trials = job.trials || [];
+    state.job = job;
+    state.confirm = "";
+    state.actionErr = "";
+  } catch (e) {
+    state.actionErr = `Couldn't retry it: ${e.message}`;
+  }
+  renderAll();
 }
 
 async function jobAction(action) {
