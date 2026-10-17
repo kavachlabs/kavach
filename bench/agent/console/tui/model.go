@@ -777,7 +777,7 @@ func (m *Model) resume(j harbor.Job) tea.Cmd {
 		}
 		return nil
 	}
-	if m.status != nil && m.status.JobsWarning != "" {
+	if m.status != nil && m.status.JobsWarning != "" && m.local(j.Environment) {
 		m.fail("%s", m.status.JobsWarning)
 		return nil
 	}

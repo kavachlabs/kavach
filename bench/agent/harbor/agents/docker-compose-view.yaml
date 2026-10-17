@@ -1,0 +1,8 @@
+# Local Docker only: publishes the proxy's read-only view of OpenCode on
+# 127.0.0.1. Pass it with --extra-docker-compose and set KAVACH_VIEW_PORT to
+# a free host port (attach.sh then works). Do not use it on Daytona, Modal or
+# Vercel: it would publish inside their sandbox VM, which nobody can reach.
+services:
+  proxy:
+    ports:
+      - "127.0.0.1:${KAVACH_VIEW_PORT:?set KAVACH_VIEW_PORT}:8081"

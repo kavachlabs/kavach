@@ -21,10 +21,10 @@ type Invariants struct {
 	Invariants []InvariantDef `json:"invariants"`     // in declaration order
 	Note       string         `json:"note,omitempty"` // why nothing was found
 
-	// Source says where Snippet.SrcFile come from: "container", "image" or
-	// "patch" when there are no real files. SourceNote says why not, or warns
-	// that the files may differ from the trial's. Files are the repo-relative
-	// paths of the real files fetched.
+	// Source says where Snippet.SrcFile come from: "artifacts", "container",
+	// "image" or "patch" when there are no real files. SourceNote says why
+	// not, or warns that the files may differ from the trial's. Files are the
+	// repo-relative paths of the real files fetched.
 	Source     string   `json:"source"`
 	SourceNote string   `json:"source_note,omitempty"`
 	Files      []string `json:"files"`

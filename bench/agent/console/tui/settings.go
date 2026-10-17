@@ -17,6 +17,7 @@ type settings struct {
 	Timeout int      `json:"timeout"` // agent timeout in minutes; 0 keeps the task's
 	Retries int      `json:"retries"` // times Harbor runs an attempt again after an error
 	Matrix  []string `json:"matrix"`  // OpenRouter ids last picked for /matrix
+	Env     string   `json:"env"`     // where attempts run: docker (or empty), daytona, modal, vercel
 }
 
 func defaultSettings() settings {

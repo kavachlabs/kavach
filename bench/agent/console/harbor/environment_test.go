@@ -2,6 +2,7 @@ package harbor
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ func TestTaskEnvironment(t *testing.T) {
 network_mode = "no-network"
 
 [environment]
+docker_image = "ghcr.io/kavachlabs/bench-demo:kavach-0123456789ab"
 build_timeout_sec = 1800.0
 workdir = "/work"
 
@@ -35,21 +37,13 @@ name = "kavach"
 
 [verifier]
 environment_mode = "separate"
+
+[verifier.environment]
+docker_image = "ghcr.io/kavachlabs/bench-demo:grader-0123456789ab"
 `)
-	compose := func(target string) string {
-		return `# comment
-services:
-  main:
-    build:
-      context: ${KAVACH_TEST_ROOT_UNSET:-../../../..}
-      dockerfile: tasks/demo/Dockerfile
-      target: ` + target + `
-    volumes:
-      - ./:/tests
-`
-	}
-	writeFile(t, filepath.Join(task, "environment", "docker-compose.yaml"), compose("kavach"))
-	writeFile(t, filepath.Join(task, "tests", "docker-compose.yaml"), compose("grader"))
+	compose := "# comment\nservices:\n  main:\n    volumes:\n      - ./:/tests\n"
+	writeFile(t, filepath.Join(task, "environment", "docker-compose.yaml"), compose)
+	writeFile(t, filepath.Join(task, "tests", "docker-compose.yaml"), compose)
 	writeFile(t, filepath.Join(root, "tasks", "demo", "Dockerfile"), "FROM scratch AS kavach\nFROM kavach AS grader\n")
 
 	env, err := TaskEnvironment(tasks, "demo-kavach")
@@ -69,13 +63,13 @@ services:
 			t.Errorf("%s (%s) missing", f.Role, f.Path)
 		}
 	}
-	// Both compose files build the same Dockerfile, which is listed once.
+	// Both images are targets of the same Dockerfile, which is listed once.
 	if got := strings.Join(roles, ","); got != "agent,verifier,dockerfile,task" {
 		t.Fatalf("roles = %s", got)
 	}
 	dockerfile := filepath.Join(root, "tasks", "demo", "Dockerfile")
-	if f := env.Files[0]; f.Target != "kavach" || f.Dockerfile != dockerfile {
-		t.Errorf("agent compose = target %q, dockerfile %q; want kavach, %s", f.Target, f.Dockerfile, dockerfile)
+	if f := env.Files[0]; f.Target != "kavach" || f.Dockerfile != dockerfile || f.Image != "ghcr.io/kavachlabs/bench-demo:kavach-0123456789ab" {
+		t.Errorf("agent compose = image %q, target %q, dockerfile %q; want kavach, %s", f.Image, f.Target, f.Dockerfile, dockerfile)
 	}
 	if f := env.Files[1]; f.Target != "grader" {
 		t.Errorf("verifier target = %q", f.Target)
@@ -91,18 +85,16 @@ services:
 	}
 }
 
-func TestExpandEnv(t *testing.T) {
-	t.Setenv("KAVACH_TEST_SET", "/repo")
-	t.Setenv("KAVACH_TEST_EMPTY", "")
-	for in, want := range map[string]string{
-		"${KAVACH_TEST_SET:-../..}":   "/repo",
-		"${KAVACH_TEST_EMPTY:-../..}": "../..",
-		"${KAVACH_TEST_EMPTY}":        "",
-		"$KAVACH_TEST_SET/x":          "/repo/x",
-		"plain/path":                  "plain/path",
+func TestSplitImage(t *testing.T) {
+	for ref, want := range map[string][3]string{
+		"ghcr.io/kavachlabs/bench-redis-10068:kavach-implement-0123456789ab": {"redis-10068", "kavach-implement", "true"},
+		"ghcr.io/kavachlabs/bench-axum-1934:grader-0123456789ab":             {"axum-1934", "grader", "true"},
+		"kavach-bench/redis-10068:kavach":                                    {"", "", "false"},
+		"":                                                                   {"", "", "false"},
 	} {
-		if got := expandEnv(in); got != want {
-			t.Errorf("expandEnv(%q) = %q, want %q", in, got, want)
+		task, target, ok := splitImage(ref)
+		if got := [3]string{task, target, fmt.Sprint(ok)}; got != want {
+			t.Errorf("splitImage(%q) = %v, want %v", ref, got, want)
 		}
 	}
 }

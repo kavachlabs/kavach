@@ -851,7 +851,7 @@ function renderDefinitions(t, defs, checks) {
       "Kavach knows an invariant only by its name; what it means is in the code that declares and checks it. ",
       defs.source === "patch"
         ? (defs.sources.length ? ["Read from ", defs.sources.map((p, i) => [i ? " and " : "", h("span", { class: "m", title: p }, sourceName(p))]), "."] : "")
-        : `Showing the files as the agent left them, from ${defs.source === "container" ? "the trial's running container" : "the task's image with the agent's patch applied"}.`,
+        : `Showing the files as the agent left them, from ${{ artifacts: "the trial's collected artifacts", container: "the trial's running container" }[defs.source] || "the task's image with the agent's patch applied"}.`,
       defs.sourceNote ? h("span", { class: `inv-src-note ${defs.source === "patch" ? "" : "warn"}` }, " ", defs.sourceNote) : null));
   if (!defs.list.length) {
     sec.append(h("div", { class: "dim inv-empty" }, defs.note || "The source declares no invariants."));

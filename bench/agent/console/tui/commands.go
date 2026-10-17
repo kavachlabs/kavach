@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,7 @@ func init() {
 		{"runs", "<n>", "Attempts per model and arm", true, (*Model).cmdRuns},
 		{"task", "<name>", "Choose the task", true, (*Model).cmdTask},
 		{"agent", "opencode|oracle|nop", "Choose the agent; oracle applies the known fix, for checking a task", true, (*Model).cmdAgent},
+		{"env", "docker|daytona|modal|vercel", "Where attempts run; the cloud providers need their keys in bench/agent/.env", true, (*Model).cmdEnv},
 		{"timeout", "<minutes>", "Agent timeout per attempt; 0 keeps the task's", true, (*Model).cmdTimeout},
 		{"retries", "<n>", "Times an attempt that ends with an error runs again, 0-5", true, (*Model).cmdRetries},
 		{"matrix", "[ids…]", "Several models × both arms × N runs in one go", false, (*Model).cmdMatrix},
@@ -111,6 +113,11 @@ func (m *Model) suggestions() []suggestion {
 		add("opencode", "OpenCode with the chosen model")
 		add("oracle", "applies the task's known fix; no model, no cost")
 		add("nop", "does nothing; the hidden test should fail")
+	case "env":
+		add("docker", "containers on this machine")
+		for _, p := range harbor.Providers {
+			add(p.Name, "needs "+p.Need())
+		}
 	case "task":
 		for _, t := range m.tasks {
 			add(t.Name, t.Title)
@@ -197,15 +204,19 @@ func (m *Model) tasksDir() string {
 }
 
 func (m *Model) start(tasks, models []string) tea.Cmd {
-	if m.status != nil && !m.status.Docker.OK {
+	if m.status != nil && !m.status.Docker.OK && m.local(m.set.Env) {
 		m.fail("Docker isn't running: start Colima with `colima start`.")
 		return nil
 	}
-	if m.status != nil && m.status.JobsWarning != "" {
+	if m.status != nil && m.status.JobsWarning != "" && m.local(m.set.Env) {
 		m.fail("%s", m.status.JobsWarning)
 		return nil
 	}
-	req := harbor.RunRequest{Tasks: tasks, Attempts: m.set.Runs, Agent: m.set.Agent, TimeoutSec: float64(m.set.Timeout * 60), Retries: m.set.Retries}
+	if p := m.envProblem(m.set.Env); p != "" {
+		m.fail("%s.", p)
+		return nil
+	}
+	req := harbor.RunRequest{Tasks: tasks, Attempts: m.set.Runs, Agent: m.set.Agent, TimeoutSec: float64(m.set.Timeout * 60), Retries: m.set.Retries, Environment: m.set.Env}
 	if m.needsModel() {
 		for _, id := range models {
 			req.Models = append(req.Models, "openrouter/"+id)
@@ -304,6 +315,35 @@ func (m *Model) cmdAgent(arg string) tea.Cmd {
 	m.set.Agent = arg
 	m.save()
 	return nil
+}
+
+func (m *Model) cmdEnv(arg string) tea.Cmd {
+	if arg != "docker" && !slices.ContainsFunc(harbor.Providers, func(p harbor.Provider) bool { return p.Name == arg }) {
+		m.fail("/env takes docker, daytona, modal or vercel.")
+		return nil
+	}
+	m.set.Env = arg
+	m.save()
+	if p := m.envProblem(arg); p != "" {
+		m.fail("Saved, but %s.", p)
+	}
+	return nil
+}
+
+// local is whether env runs in Docker on this machine.
+func (m *Model) local(env string) bool { return env == "" || env == "docker" }
+
+// envProblem is why a run on env cannot start, from the server's status.
+func (m *Model) envProblem(env string) string {
+	if m.status == nil {
+		return ""
+	}
+	for _, e := range m.status.Environments {
+		if e.Name == env && !e.Ready {
+			return e.Problem
+		}
+	}
+	return ""
 }
 
 func (m *Model) cmdRuns(arg string) tea.Cmd {

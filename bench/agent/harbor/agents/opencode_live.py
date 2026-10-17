@@ -5,29 +5,35 @@ key in the agent's environment. This one keeps Harbor's install, trajectory
 and token accounting (the same JSON event stream lands in opencode.txt) and
 changes how the run is wired:
 
-- A proxy container (proxy.py) joins the environment's Docker network. It
+- A proxy service (proxy.py), declared in the task's docker-compose.yaml,
   holds the API key and is the agent's only route to the model; OpenCode in
   the task container is configured with the proxy's address and a
-  placeholder key.
-- During the run the task container can reach only the proxy: the agent
-  narrows Harbor's egress policy (the egress-control sidecar) to the proxy's
-  address, and restores it afterwards.
+  placeholder key. The task container is on a Compose network with
+  `internal: true`, shared with the proxy, which alone is also on a normal
+  one, so every Compose provider (Docker, Daytona, Modal, Vercel) seals the
+  task container the same way. The agent starts proxy.py inside its service
+  with the key in that exec's environment only.
 - `opencode serve` runs in the task container and the task is submitted to
-  it with `opencode run --attach`. The proxy publishes a read-only view of
-  that server on 127.0.0.1 of the host, recorded in opencode-live.json in the
-  trial's agent log directory.
-- After the run the session is exported to opencode-session.json, which
-  show.sh opens on the host.
+  it with `opencode run --attach`. While it runs, the session is exported
+  every few seconds to opencode-session.json in the trial's agent log
+  directory, so progress can be read from wherever the trial runs. With
+  KAVACH_VIEW_PORT set and the docker-compose-view.yaml overlay (local
+  Docker only), the proxy also publishes a read-only view of the server on
+  127.0.0.1, recorded in opencode-live.json.
+- After the run the session is exported once more, which show.sh opens.
 
 See README.md.
 """
 
 import asyncio
+import contextlib
 import copy
+import ipaddress
 import json
 import os
 import shlex
-import subprocess
+import socket
+import struct
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -41,16 +47,28 @@ from harbor.agents.installed.opencode import OpenCode, OpenCodeOptions
 from harbor.agents.model_connection import PROVIDERS
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.task.config import NetworkMode, NetworkPolicy
+from harbor.models.environment_type import EnvironmentType
 
-PROXY_SCRIPT = Path(__file__).with_name("proxy.py")
 LIVE_FILE = "opencode-live.json"
 EXPORT_FILE = "opencode-session.json"
 INSTRUCTION_FILE = "instruction.md"
+MODELS_URL = "https://models.dev/api.json"
 PINNED_VERSION = "1.1.8"
 SERVER_PORT = 4096
 MODEL_PORT = 8080
-VIEW_PORT = 8081
+PROXY_SERVICE = "proxy"
+# Pause between copies of the running session to the trial directory.
+MIRROR_SEC = 15
+# Outside every private range, then the Docker host's usual services: none may
+# accept a connection from a sealed task container.
+OUTSIDE = "1.1.1.1"
+SEALED_PORTS = (443, 2375, 2376, 22, 80, 8080)
+# A name that exists on the internet; a sealed container must not resolve it.
+OUTSIDE_NAME = "example.com"
+VIEW_OVERLAY = "docker-compose-view.yaml"
+# bash is in every task image; this is a TCP connect.
+PROBE = "timeout 3 bash -c 'exec 3<>/dev/tcp/{host}/{port}'"
+NVM = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; "
 # The provider id OpenCode is given for an endpoint named with base_url.
 ENDPOINT_PROVIDER = "kavach"
 PLACEHOLDER_KEY = "kavach-proxy-adds-the-key"
@@ -70,34 +88,57 @@ class KavachOpenCodeOptions(OpenCodeOptions):
     )
     isolate: bool = Field(
         default=True,
-        description="Restrict the task container's egress to the model proxy "
-        "during the run. Needs Harbor's egress control, which a task enables "
-        'with [agent] network_mode = "no-network".',
+        description="Check before the run that the task container cannot "
+        "reach the internet. The task's docker-compose.yaml seals it, on an "
+        "internal network shared with the proxy service.",
     )
     require_isolation: bool = Field(
         default=True,
-        description="Fail when isolate is set but the environment cannot "
-        "restrict egress, instead of running with open egress.",
+        description="Fail when isolate is set and the task container can "
+        "reach the internet, instead of running with open egress.",
     )
-    live: bool = Field(default=True, description="Run opencode serve and publish the read-only view.")
-    proxy_image: str = Field(default="python:3.12-alpine", description="Image the proxy runs in.")
+    live: bool = Field(default=True, description="Run opencode serve and mirror the session while it runs.")
+
+
+def check_modal_runtime(environment: BaseEnvironment) -> None:
+    """Modal's default runtime puts every Compose service on the host's network
+    (docker-compose-host-network.yaml), which defeats the sealed network.
+    Fails closed: if Harbor stops exposing the flag, so does this."""
+    if environment.type() != EnvironmentType.MODAL:
+        return
+    enabled = getattr(environment, "_vm_runtime_enabled", None)
+    if enabled is None:
+        raise RuntimeError(
+            "cannot tell whether Modal's VM runtime is on: Harbor no longer has "
+            "ModalEnvironment._vm_runtime_enabled; update check_modal_runtime"
+        )
+    if not enabled:
+        raise RuntimeError(
+            "on Modal the task container would share the host's network and reach the proxy's "
+            "upstream directly; run with --ek modal_vm_runtime=true"
+        )
+
+
+def gateway_candidates(routes: str, exclude: set[str] = frozenset()) -> list[str]:
+    """Addresses of the Docker host as the task container sees it, from the
+    contents of /proc/net/route: the default gateway, and the first address of
+    each directly connected subnet (the bridge's). Without an address on the
+    bridge that first address can belong to a container, so `exclude` (the
+    task container's own, and the proxy's) is left out."""
+    found: list[str] = []
+    for line in routes.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 8:
+            continue
+        dest, gateway = (socket.inet_ntoa(struct.pack("<L", int(fields[i], 16))) for i in (1, 2))
+        address = gateway if dest == "0.0.0.0" else str(ipaddress.ip_address(dest) + 1)
+        if address not in found and address != "0.0.0.0" and address not in exclude:
+            found.append(address)
+    return found
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _docker(*args: str, env: dict[str, str] | None = None, check: bool = True) -> str:
-    result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, env=env, check=False
-    )
-    if check and result.returncode != 0:
-        raise RuntimeError(f"docker {args[0]} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def _inspect(container: str) -> dict[str, Any]:
-    return json.loads(_docker("inspect", container))[0]
 
 
 class KavachOpenCode(OpenCode):
@@ -112,7 +153,7 @@ class KavachOpenCode(OpenCode):
         super().__init__(*args, **kwargs)
         # Harbor passes version=None when -ak version is not given.
         self._version = self._version or PINNED_VERSION
-        self._proxy: str | None = None
+        self._proxy_started = False
         self._session: str | None = None
 
     @override
@@ -124,19 +165,37 @@ class KavachOpenCode(OpenCode):
             "(apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends ripgrep >/dev/null 2>&1 && rm -rf /var/lib/apt/lists/*)",
             user="root",
         )
-        # Task images may ship OpenCode already, for a non-root user that
-        # cannot install packages.
-        nvm = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; "
-        result = await environment.exec(f"{nvm}opencode --version")
+        # Task images ship OpenCode already, for a non-root user that cannot
+        # install packages, and the task container has no network to install it.
+        result = await environment.exec(f"{NVM}opencode --version")
         lines = (result.stdout or "").strip().splitlines()
         if result.return_code == 0 and lines and lines[-1].strip() == self._version:
             self.logger.debug(f"opencode {self._version} is already installed")
         else:
             await super().install(environment)
-        # Fill OpenCode's models.dev cache while setup still has the network:
-        # during the run it cannot fetch it, and the copy built into 1.1.8
-        # lacks newer models, whose prices give the trajectory its cost.
-        await environment.exec(f"{nvm}opencode models >/dev/null 2>&1 || true")
+        await self._fill_models_cache(environment)
+
+    async def _fill_models_cache(self, environment: BaseEnvironment) -> None:
+        """OpenCode cannot fetch models.dev from the sealed task container, so
+        the host does. The copy built into 1.1.8 lacks newer models, whose
+        prices give the trajectory its cost."""
+        cache = self.logs_dir / "models.json"
+        try:
+            # models.dev refuses urllib's default user agent.
+            request = urllib.request.Request(MODELS_URL, headers={"User-Agent": "curl/8"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                cache.write_bytes(response.read())
+        except OSError as e:
+            self.logger.warning(f"models.dev cache not filled, the trajectory will have no cost: {e}")
+            return
+        try:
+            await environment.upload_file(cache, "/tmp/models.json")
+            # cp, not mv: the upload is root's, in a sticky directory.
+            result = await environment.exec("mkdir -p ~/.cache/opencode && cp /tmp/models.json ~/.cache/opencode/models.json")
+            if result.return_code != 0:
+                self.logger.warning(f"models.dev cache not installed: {result.stdout} {result.stderr}")
+        finally:
+            cache.unlink()
 
     def _upstream(self) -> tuple[str, str, str, str]:
         """(upstream base URL, API key, OpenCode provider id, OpenCode model)."""
@@ -202,112 +261,119 @@ class KavachOpenCode(OpenCode):
             config["permission"].update(websearch="deny", webfetch="deny")
         return config
 
-    def _netns_owner(self, environment: BaseEnvironment) -> dict[str, Any]:
-        """The container whose network namespace the task container uses: the
-        egress sidecar when egress control is on, else the task container."""
-        from harbor.environments.docker.docker import (
-            DockerEnvironment,
-            _sanitize_docker_compose_project_name,
-        )
+    def _view_port(self, environment: BaseEnvironment) -> str | None:
+        """The host port of the local view, only when its overlay is in use."""
+        overlays = getattr(environment, "extra_docker_compose_paths", [])
+        if self.options.live and any(Path(p).name == VIEW_OVERLAY for p in overlays):
+            return os.environ.get("KAVACH_VIEW_PORT")
+        return None
 
-        if not isinstance(environment, DockerEnvironment):
-            raise RuntimeError("kavach OpenCode needs Harbor's docker environment")
-        project = _sanitize_docker_compose_project_name(environment.session_id)
-        main = _docker(
-            "ps", "-q",
-            "--filter", f"label=com.docker.compose.project={project}",
-            "--filter", "label=com.docker.compose.service=main",
-        ).splitlines()
-        if len(main) != 1:
-            raise RuntimeError(f"expected one main container in {project}, found {main}")
-        info = _inspect(main[0])
-        mode = info["HostConfig"]["NetworkMode"]
-        if mode.startswith("container:"):
-            info = _inspect(mode.split(":", 1)[1])
-        return info
-
-    def _start_proxy(self, environment: BaseEnvironment, upstream: str | None, key: str) -> tuple[str, str]:
-        """Start the proxy; return (its address, host URL of the view or '')."""
-        owner = self._netns_owner(environment)
-        net_name, net = next(iter(owner["NetworkSettings"]["Networks"].items()))
-        agent_ip = net["IPAddress"]
-        name = f"kavach-proxy-{owner['Name'].strip('/')}"
-        self._proxy = name
-        args = [
-            "run", "-d", "--name", name, "--label", "kavach.bench=proxy",
-            "--network", net_name, "--add-host", "host.docker.internal:host-gateway",
-            "-v", f"{PROXY_SCRIPT}:/proxy.py:ro",
-        ]
-        command = ["python3", "-u", "/proxy.py"]
+    async def _start_proxy(self, environment: BaseEnvironment, upstream: str | None, key: str) -> str:
+        """Start proxy.py in the proxy service and wait until the task
+        container reaches it. Returns the host URL of the read-only view, or ''."""
+        command = ["python3", "-u", "/proxy.py", "--model-client", "main"]
         if upstream:
-            args += ["-e", "KAVACH_UPSTREAM_KEY"]
-            command += ["--upstream", upstream, "--model-client", agent_ip]
-        if self.options.live:
-            # Published connections arrive from the network's gateway; the
-            # task container is refused.
-            args += ["-p", f"127.0.0.1::{VIEW_PORT}"]
-            command += [
-                "--opencode", f"http://{agent_ip}:{SERVER_PORT}",
-                "--view-client", net["Gateway"],
-            ]
-        _docker("rm", "-f", name, check=False)
-        _docker(*args, self.options.proxy_image, *command, env={**os.environ, "KAVACH_UPSTREAM_KEY": key})
-        ip = _inspect(name)["NetworkSettings"]["Networks"][net_name]["IPAddress"]
-        view = ""
-        if self.options.live:
-            host = _docker("port", name, f"{VIEW_PORT}/tcp").splitlines()[0]
-            view = "http://127.0.0.1:" + host.rsplit(":", 1)[1]
-        return ip, view
-
-    def _stop_proxy(self) -> None:
-        if not self._proxy:
-            return
-        logs = subprocess.run(["docker", "logs", self._proxy], capture_output=True, text=True)
-        (self.logs_dir / "proxy.log").write_text(logs.stdout + logs.stderr)
-        _docker("rm", "-f", self._proxy, check=False)
-        self._proxy = None
-
-    async def _wait_proxy(self) -> None:
+            command += ["--upstream", upstream]
+        view_port = self._view_port(environment)
+        if view_port:
+            command += ["--opencode", f"http://main:{SERVER_PORT}", "--view-deny", "main"]
+        # The key is in this exec's environment, so only the proxy's process
+        # has it; the task container never does.
+        result = await environment.service_exec(
+            f"nohup {shlex.join(command)} >/tmp/proxy.log 2>&1 </dev/null &",
+            service=PROXY_SERVICE,
+            env={"KAVACH_UPSTREAM_KEY": key},
+        )
+        if result.return_code != 0:
+            raise RuntimeError(f"the model proxy did not start: {result.stdout} {result.stderr}")
+        self._proxy_started = True
         for _ in range(100):
-            if subprocess.run(["docker", "exec", self._proxy, "test", "-f", "/tmp/ready"],
-                              capture_output=True).returncode == 0:
-                return
+            if (await environment.exec(PROBE.format(host=PROXY_SERVICE, port=MODEL_PORT))).return_code == 0:
+                return f"http://127.0.0.1:{view_port}" if view_port else ""
             await asyncio.sleep(0.2)
         raise RuntimeError("the model proxy did not start; see proxy.log")
 
-    def _write_live(self, data: dict[str, Any]) -> None:
-        path = self.logs_dir / LIVE_FILE
+    async def _save_proxy_log(self, environment: BaseEnvironment) -> None:
+        if self._proxy_started:
+            log = await environment.service_exec("cat /tmp/proxy.log", service=PROXY_SERVICE)
+            (self.logs_dir / "proxy.log").write_text(log.stdout or "")
+
+    async def _check_sealed(self, environment: BaseEnvironment) -> None:
+        """Refuse to run when the task container reaches the internet or the
+        Docker host (its network's gateway, and the first address of each
+        directly connected subnet)."""
+        # /etc/hosts holds the container's own address; the proxy's is by name.
+        info = (await environment.exec(
+            f"cat /proc/net/route; echo '#'; cat /etc/hosts; echo '#'; getent hosts {PROXY_SERVICE}"
+        )).stdout or ""
+        routes, _, rest = info.partition("\n#\n")
+        own = {w for line in rest.splitlines() for w in line.split()[:1] if w.count(".") == 3}
+        hosts = [OUTSIDE, *gateway_candidates(routes, own)]
+        probes = " ".join(
+            f"(timeout 1 bash -c 'exec 3<>/dev/tcp/{h}/{p}' 2>/dev/null && echo {h}:{p}) &"
+            for h in hosts for p in SEALED_PORTS
+        ) + f" (timeout 3 getent hosts {OUTSIDE_NAME} >/dev/null && echo dns:{OUTSIDE_NAME}) &"
+        reached = ((await environment.exec(f"{probes} wait")).stdout or "").split()
+        if not reached:
+            return
+        message = (
+            f"the task container can reach {', '.join(reached)} (host:port, or a name it resolves): its docker-compose.yaml must put it on an "
+            "internal network, without a bridge address, shared with the proxy service (see README.md)"
+        )
+        if self.options.require_isolation:
+            raise RuntimeError(message + ", or pass --ak require_isolation=false")
+        self.logger.warning(message + "; running with open egress")
+
+    def _write_atomic(self, name: str, text: str) -> None:
+        path = self.logs_dir / name
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        tmp.write_text(text)
         tmp.replace(path)
 
-    def _find_session(self, url: str, directory: str, since_ms: int) -> str | None:
+    def _write_live(self, data: dict[str, Any]) -> None:
+        self._write_atomic(LIVE_FILE, json.dumps(data, indent=2) + "\n")
+
+    async def _find_session(self, environment: BaseEnvironment, directory: str, since_ms: int) -> str | None:
         """The run's session: from the server, or else from the run's output."""
         query = urllib.parse.urlencode({"directory": directory})
+        url = f"http://127.0.0.1:{SERVER_PORT}/session?{query}"
+        result = await environment.exec(
+            f'{NVM}node -e "fetch(process.argv[1]).then(r => r.text()).then(console.log)" {shlex.quote(url)}'
+        )
         try:
-            with urllib.request.urlopen(f"{url}/session?{query}", timeout=5) as response:
-                sessions = json.load(response)
             roots = [
-                s for s in sessions
+                s for s in json.loads(result.stdout)
                 if not s.get("parentID") and s.get("time", {}).get("created", 0) >= since_ms
             ]
             if roots:
                 return min(roots, key=lambda s: s["time"]["created"])["id"]
-        except (OSError, ValueError):
+        except (ValueError, TypeError, AttributeError):
             pass
         for event in self._parse_stdout():
             if event.get("sessionID"):
                 return event["sessionID"]
         return None
 
-    async def _publish_live(self, url: str, directory: str) -> None:
-        """Write the live file as soon as the run's session exists."""
+    async def _mirror(self, environment: BaseEnvironment, env: dict[str, str], directory: str, view_url: str) -> None:
+        """Write the live file as soon as the run's session exists, then keep
+        opencode-session.json current while it runs. One export at a time: the
+        next waits for the last, so a slow one skips ticks."""
         started = _now()
         since_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 5000
-        while not (session := await asyncio.to_thread(self._find_session, url, directory, since_ms)):
-            await asyncio.sleep(0.5)
-        self._session = session
-        self._write_live({"url": url, "session": session, "started": started, "dir": directory})
+        session = None
+        while not session:
+            try:
+                session = await self._find_session(environment, directory, since_ms)
+                if session:
+                    self._session = session
+                    self._write_live({"url": view_url, "session": session, "started": started, "dir": directory})
+            except Exception:
+                self.logger.exception("looking for the session failed; retrying")
+            if not session:
+                await asyncio.sleep(0.5)
+        while True:
+            await self._quietly(self._export(environment, env))
+            await asyncio.sleep(MIRROR_SEC)
 
     @override
     @with_prompt_template
@@ -320,33 +386,17 @@ class KavachOpenCode(OpenCode):
             "XDG_DATA_HOME": (logs / "opencode" / "xdg-data").as_posix(),
             "XDG_STATE_HOME": (logs / "opencode" / "xdg-state").as_posix(),
         }
-        nvm = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; "
-        previous_policy = environment.network_policy
-        policy_changed = False
         serving = False
-        publisher: asyncio.Task | None = None
+        mirror: asyncio.Task | None = None
         try:
-            if self.options.isolate and not environment.capabilities.dynamic_network_policy:
-                message = (
-                    "egress cannot be restricted: the task does not enable Harbor's "
-                    'egress control (add [agent] network_mode = "no-network" to task.toml)'
-                )
-                if self.options.require_isolation:
-                    raise RuntimeError(message + ", or pass --ak require_isolation=false")
-                self.logger.warning(message + "; running with open egress")
-
-            proxy_ip, view_url = self._start_proxy(environment, upstream, key)
-            await self._wait_proxy()
-            if self.options.isolate and environment.capabilities.dynamic_network_policy:
-                hosts = list(previous_policy.allowed_hosts) if previous_policy.network_mode == NetworkMode.ALLOWLIST else []
-                await environment.set_network_policy(
-                    NetworkPolicy(network_mode=NetworkMode.ALLOWLIST, allowed_hosts=[*hosts, proxy_ip])
-                )
-                policy_changed = True
+            check_modal_runtime(environment)
+            if self.options.isolate:
+                await self._check_sealed(environment)
+            view_url = await self._start_proxy(environment, upstream, key)
 
             if skills := self._build_register_skills_command():
                 await self.exec_as_agent(environment, command=skills, env=env)
-            config = json.dumps(self._build_config(f"http://{proxy_ip}:{MODEL_PORT}/v1", opencode_provider, model), indent=2)
+            config = json.dumps(self._build_config(f"http://{PROXY_SERVICE}:{MODEL_PORT}/v1", opencode_provider, model), indent=2)
             await self.exec_as_agent(
                 environment,
                 command=f"mkdir -p ~/.config/opencode && printf '%s' {shlex.quote(config)} > ~/.config/opencode/opencode.json",
@@ -359,7 +409,7 @@ class KavachOpenCode(OpenCode):
                     environment,
                     env=env,
                     command=(
-                        f"{nvm}nohup opencode serve --hostname 0.0.0.0 --port {SERVER_PORT} "
+                        f"{NVM}nohup opencode serve --hostname 0.0.0.0 --port {SERVER_PORT} "
                         f"> {shlex.quote((logs / 'opencode-serve.log').as_posix())} 2>&1 </dev/null & "
                         "echo $! > /tmp/opencode-serve.pid; "
                         f"for i in $(seq 150); do node -e \"fetch('http://127.0.0.1:{SERVER_PORT}/global/health')"
@@ -369,7 +419,7 @@ class KavachOpenCode(OpenCode):
                 )
                 serving = True
                 attach = f"--attach http://127.0.0.1:{SERVER_PORT} "
-                publisher = asyncio.create_task(self._publish_live(view_url, directory))
+                mirror = asyncio.create_task(self._mirror(environment, env, directory, view_url))
 
             # The instruction goes in on stdin, which `opencode run` appends to
             # the message. On the command line, the agent's own `pkill -f
@@ -384,24 +434,23 @@ class KavachOpenCode(OpenCode):
                 environment,
                 env=env,
                 command=(
-                    f"{nvm}opencode run {attach}--format json --model {shlex.quote(model)} "
+                    f"{NVM}opencode run {attach}--format json --model {shlex.quote(model)} "
                     f"{flags if flags else ''} "
                     f"2>&1 <{remote_prompt} | stdbuf -oL tee "
                     f"{shlex.quote((logs / self._OUTPUT_FILENAME).as_posix())}"
                 ),
             )
         finally:
-            # Each step runs even if an earlier one fails: a proxy left on the
-            # network would stop Harbor from removing it.
-            if publisher:
-                publisher.cancel()
+            # Each step runs even if an earlier one fails.
+            if mirror:
+                mirror.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await mirror
             await self._quietly(self._mark_finished())
             if serving:
                 await self._quietly(environment.exec("kill $(cat /tmp/opencode-serve.pid) 2>/dev/null; true", user="root"))
-            await self._quietly(self._export(environment, env, nvm))
-            await self._quietly(asyncio.to_thread(self._stop_proxy))
-            if policy_changed:
-                await self._quietly(environment.set_network_policy(previous_policy))
+            await self._quietly(self._export(environment, env))
+            await self._quietly(self._save_proxy_log(environment))
 
         if messages := self._error_messages():
             raise NonZeroAgentExitCodeError("OpenCode emitted error event(s): " + "; ".join(messages[:3]))
@@ -417,7 +466,9 @@ class KavachOpenCode(OpenCode):
         if path.exists():
             self._write_live({**json.loads(path.read_text()), "finished": _now()})
 
-    async def _export(self, environment: BaseEnvironment, env: dict[str, str], nvm: str) -> None:
+    async def _export(self, environment: BaseEnvironment, env: dict[str, str]) -> None:
+        """Copy the session to the trial directory; a failed or partial export
+        leaves the previous copy in place."""
         if not self._session:
             for event in self._parse_stdout():
                 if event.get("sessionID"):
@@ -425,10 +476,12 @@ class KavachOpenCode(OpenCode):
                     break
         if not self._session:
             return
-        target = (self.environment_logs_dir / EXPORT_FILE).as_posix()
         result = await environment.exec(
-            f"{nvm}opencode export {shlex.quote(self._session)} > {shlex.quote(target)}",
-            env=env,
+            f"{NVM}opencode export {shlex.quote(self._session)} 2>/dev/null", env=env, timeout_sec=120
         )
-        if result.return_code != 0:
-            self.logger.warning(f"opencode export failed: {result.stderr}")
+        try:
+            json.loads(result.stdout)
+        except (ValueError, TypeError):
+            self.logger.warning(f"opencode export failed: {result.stdout!r:.200} {result.stderr}")
+            return
+        self._write_atomic(EXPORT_FILE, result.stdout)

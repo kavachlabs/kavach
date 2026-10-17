@@ -13,6 +13,10 @@ set -euo pipefail
 live=$1/agent/opencode-live.json
 [[ -f $live ]] || live=$1/opencode-live.json
 [[ -f $live ]] || { echo "no opencode-live.json in $1 (not started yet?)" >&2; exit 1; }
+python3 -c 'import json, sys; sys.exit(not json.load(open(sys.argv[1])).get("url"))' "$live" || {
+  echo "this attempt has no live view (it needs the local view overlay, see agents/README.md); show.sh $1 opens its mirrored session" >&2
+  exit 1
+}
 read -r url session dir finished web < <(python3 -c '
 import base64, json, sys
 d = json.load(open(sys.argv[1]))

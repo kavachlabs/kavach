@@ -8,10 +8,9 @@ timeout_sec = 120.0
 
 [agent]
 timeout_sec = 600.0
-# Turns on Harbor's egress control for the agent phase; the agent then
-# allows only its model proxy. Setup (installing OpenCode) keeps the
-# environment's public network.
-network_mode = "no-network"
+# No network while the agent works: main's Compose network is internal and
+# shared only with the model proxy service, which holds the API key
+# (environment/docker-compose.yaml; bench/agent/harbor/agents/README.md).
 
 [environment]
 network_mode = "public"
