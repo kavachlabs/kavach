@@ -60,6 +60,26 @@ type RunRequest struct {
 	// daytona, modal or vercel. The last three need their keys in the env
 	// file or the process environment.
 	Environment string `json:"environment"`
+	// Env, when non-nil, is the whole environment Harbor runs with, besides
+	// a minimal base: the process environment and the env file are not
+	// passed. It holds a visitor's keys, so it is never serialized.
+	Env map[string]string `json:"-"`
+}
+
+// baseEnv are the variables an isolated Harbor still needs to run.
+var baseEnv = []string{"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR"}
+
+func isolatedEnv(env map[string]string) []string {
+	var out []string
+	for _, k := range baseEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, k+"="+v)
+		}
+	}
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // ReadEnv parses a dotenv file; ok is false when it cannot be read.
@@ -163,10 +183,14 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 		return "", err
 	}
 	args := []string{"run", "-c", cfgFile, "-y"}
-	if r.EnvFile != "" && exists(r.EnvFile) {
+	if req.Env == nil && r.EnvFile != "" && exists(r.EnvFile) {
 		args = append(args, "--env-file", r.EnvFile)
 	}
-	if err := r.spawn(req.Name, exec.Command(r.Harbor, args...)); err != nil {
+	cmd := exec.Command(r.Harbor, args...)
+	if req.Env != nil {
+		cmd.Env = isolatedEnv(req.Env)
+	}
+	if err := r.spawn(req.Name, cmd); err != nil {
 		return "", err
 	}
 	return req.Name, nil
@@ -183,7 +207,10 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 	cmd.Stdout, cmd.Stderr = log, log
 	if r.Root != "" {
 		cmd.Dir = r.Root
-		cmd.Env = append(os.Environ(), "PYTHONPATH="+r.Root)
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = append(cmd.Env, "PYTHONPATH="+r.Root)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -272,7 +299,12 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		return nil, fmt.Errorf("%w: environment %q is not docker, daytona, modal or vercel", ErrInvalid, req.Environment)
 	}
 	if provider != nil {
-		if problem := r.Problem(*provider); problem != "" {
+		isSet := r.KeySet
+		if req.Env != nil {
+			isSet = func(k string) bool { return req.Env[k] != "" }
+		}
+		problem := r.problem(*provider, isSet)
+		if problem != "" {
 			return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
 		}
 	}
@@ -504,6 +536,9 @@ func (r *Runner) alive(id string) bool {
 func (r *Runner) paused(id string) bool {
 	return r.launched(id) && exists(r.file(id, ".paused"))
 }
+
+// Alive reports whether a Harbor for the job is running.
+func (r *Runner) Alive(id string) bool { return r.alive(id) }
 
 // Wait blocks until a run this process started has exited.
 func (r *Runner) Wait(id string) {

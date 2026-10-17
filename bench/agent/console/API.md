@@ -73,6 +73,95 @@ else the runs hold (agent transcripts, patches) is published as it is, so
 read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
 `web/app.js` agree on where each response is kept.
 
+## Trial mode
+
+`bench api -trial [-addr 0.0.0.0:8080] [-origin https://try.kavachlabs.dev]
+[-trust-cf]` serves the console publicly so visitors can try Kavach with
+their own keys. `-addr` beyond loopback is refused without `-trial`. Nothing
+else changes without the flag. Settings come from the environment:
+
+| Variable | Default |
+| --- | --- |
+| `TRIAL_MODELS` | `openrouter/z-ai/glm-5.3`; comma-separated allowlist. All of a run's models must share a provider, whose usual key variable (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `NVIDIA_API_KEY`, `ZAI_API_KEY`) carries the visitor's key |
+| `TRIAL_TASKS` | every task folder under `--tasks`; entries are folder names or base names |
+| `TRIAL_MAX_ATTEMPTS` | 2 |
+| `TRIAL_MAX_RUNNING` | 3 live runs, all visitors together; more gets 429 |
+| `TRIAL_INVITE_CODES` | none; comma-separated |
+| `TRIAL_INVITE_RUNS` | 5 runs per code |
+| `TRIAL_SHOWCASE` | none; job ids anyone may list and read besides trial runs |
+| `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` needs a `turnstile_token` that Cloudflare's siteverify accepts |
+
+**Sessions.** A visitor has no account. `POST /api/trial/keys` or
+`/api/trial/invite` sets the cookie `kv_session` (32 random bytes in hex;
+`HttpOnly`, `SameSite=Lax`, `Secure` over https or `X-Forwarded-Proto:
+https`). Sessions live in memory and expire after 24 hours idle; a restart
+forgets them and their keys.
+
+**Keys** are held in the session's memory only. They are never written to
+disk (not in a job folder, `.bench/<id>.json`, the log or the owner file),
+never logged and never returned. A run's Harbor gets them in its process
+environment: the minimal base (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`,
+`TMPDIR`, `PYTHONPATH`) plus the visitor's variables, without `--env-file`,
+so nothing else of the console's environment reaches it. Every `/api/*`
+response and event is also scrubbed of any visitor key, or key of the server,
+in case Harbor or an agent printed one (it shows as `[redacted]`).
+
+`GET /api/trial/session` (no cookie needed; reads never create a session):
+
+```json
+{
+  "has_keys": true, "provider": "daytona", "invite": false,
+  "runs": ["brisk-cobalt-heron-x7k2p9q"],
+  "limits": {"models": ["openrouter/z-ai/glm-5.3"], "tasks": ["redis-10068-control", "redis-10068-kavach"], "max_attempts": 2},
+  "turnstile_site_key": "",
+  "invite_runs_left": 4
+}
+```
+
+`invite_runs_left` appears only for an invite session. `provider` of an invite
+session is the first of `daytona`, `modal` the server has keys for.
+
+`POST /api/trial/keys` `{"model_key", "provider": "daytona"|"modal",
+"daytona_api_key", "modal_token_id", "modal_token_secret"}` stores the keys
+the provider needs (each 8-512 visible ASCII characters, no spaces or
+newlines; unknown fields are rejected) and replies like GET. 400 otherwise.
+`DELETE /api/trial/keys` forgets keys and invite; 204.
+
+`POST /api/trial/invite` `{"code"}` makes the session an invite session, which
+runs on the server's keys (the env file, else the process environment),
+passed to Harbor the same way as a visitor's: only the model key and the
+provider's. 403 for an unknown code (compared in constant time) or one
+without runs left. A code's runs started are kept in
+`<jobs>/.bench/trial-invites.json` under the SHA-256 of the code.
+
+**Starting a run.** `POST /api/jobs` needs a session with keys or an invite
+(401 otherwise) and takes `{"tasks", "models", "attempts", "turnstile_token"}`.
+`models` defaults to the first allowed one. The server forces the rest:
+`environment` is the session's provider, `agent` the repository's OpenCode
+agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
+other fields in the body are ignored. 400 for a model, task or attempts count
+outside the limits; 400/403 for a missing/failed Turnstile token; 429 when
+the session already has a live run or `TRIAL_MAX_RUNNING` is reached; 403
+when the invite is spent. A bad key is an ordinary failed run: the job turns
+`stopped` or its trials `error`, with Harbor's output (redacted) in `error`.
+
+**Ownership and visibility.** Each run records the SHA-256 of its session's id
+(in memory and `<jobs>/.bench/<id>.owner`, so it survives a restart). GETs of
+jobs and trials stay public, as share links (`#/jobs/<id>`), but only for
+trial runs and `TRIAL_SHOWCASE`: `GET /api/jobs` lists only those and any
+other job or trial is 404. `stoppable` is true only for the owner, and
+`resumable`, `retryable` and `sync` are always false/absent. `POST
+/api/jobs/{id}/stop` is for the owner (else 403). `/api/settings`, `pause`,
+`resume`, `retry`, `sync` and `/api/tasks/{task}/environment` answer 404;
+`/api/status` and `/api/tasks` carry no local paths; the invariants view
+shows patches rather than starting containers. The event stream is filtered
+the same way; it reflects the cookie it was opened with.
+
+**Requests.** The host check is off. A write with an `Origin` must match the
+request's host or `-origin`. Each address may make 20 writes (POST, DELETE) a
+minute (429 and `Retry-After`); the address is `CF-Connecting-IP` with
+`-trust-cf`, else the connection's.
+
 ## Conventions
 
 - Everything is JSON. Times are RFC 3339; a time that is not known is `null`.

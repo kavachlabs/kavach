@@ -80,10 +80,14 @@ func (r *Runner) Getenv(k string) string {
 // and via names the file that does it when no variables do. Otherwise
 // missing lists what the first set lacks.
 func (r *Runner) Credentials(p Provider) (missing []string, via string) {
+	return credentials(p, r.KeySet)
+}
+
+func credentials(p Provider, isSet func(string) bool) (missing []string, via string) {
 	for _, set := range p.Sets {
 		ok := true
 		for _, k := range set {
-			ok = ok && r.KeySet(k)
+			ok = ok && isSet(k)
 		}
 		if ok {
 			return nil, ""
@@ -95,7 +99,7 @@ func (r *Runner) Credentials(p Provider) (missing []string, via string) {
 		}
 	}
 	for _, k := range p.Sets[0] {
-		if !r.KeySet(k) {
+		if !isSet(k) {
 			missing = append(missing, k)
 		}
 	}
@@ -104,7 +108,11 @@ func (r *Runner) Credentials(p Provider) (missing []string, via string) {
 
 // Problem says why a run on p cannot start, or "" if it can.
 func (r *Runner) Problem(p Provider) string {
-	if missing, _ := r.Credentials(p); len(missing) > 0 {
+	return r.problem(p, r.KeySet)
+}
+
+func (r *Runner) problem(p Provider, isSet func(string) bool) string {
+	if missing, _ := credentials(p, isSet); len(missing) > 0 {
 		return fmt.Sprintf("%s needs %s in the env file or bench's environment", p.Name, p.Need())
 	}
 	if err := r.extraErr(p); err != nil {

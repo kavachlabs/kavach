@@ -23,6 +23,8 @@ type event struct {
 type hub struct {
 	reader   *harbor.Reader
 	interval time.Duration
+	// visible, when set, says which jobs listeners may see.
+	visible func(id string) bool
 
 	mu     sync.Mutex
 	subs   map[chan event]bool
@@ -93,6 +95,9 @@ func (h *hub) snapshot(prev map[string][]byte) map[string][]byte {
 		}
 	}
 	for _, j := range jobs {
+		if h.visible != nil && !h.visible(j.ID) {
+			continue
+		}
 		trials := j.Trials
 		j.Trials = nil
 		note("job/"+j.ID, "job", j)
@@ -137,13 +142,27 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
+	// A trial server shows each viewer only its jobs, and as they may see them.
+	var viewer string
+	if s.trial != nil {
+		viewer = s.trial.viewer(r)
+	}
+	send := func(e event) {
+		if s.trial != nil {
+			e = s.trial.shapeEvent(viewer, e)
+		}
+		writeEvent(w, e)
+	}
 	// Every job as it is now, so a client has no gap between its GET and
 	// the first change.
 	jobs, _ := s.reader.Jobs()
 	for _, j := range jobs {
+		if s.events.visible != nil && !s.events.visible(j.ID) {
+			continue
+		}
 		j.Trials = nil
 		b, _ := json.Marshal(j)
-		writeEvent(w, event{"job", b})
+		send(event{"job", b})
 	}
 	flusher.Flush()
 
@@ -157,7 +176,7 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			writeEvent(w, e)
+			send(e)
 			flusher.Flush()
 		case <-ping.C:
 			fmt.Fprint(w, ": ping\n\n")
