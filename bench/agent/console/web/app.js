@@ -712,6 +712,22 @@ function statusDot(name, check) {
     h("span", { class: `dot ${check.ok ? "" : "bad"}` }), word);
 }
 
+// syncPill is a run's backup to R2. A copy on a static host has none.
+function syncPill(sync) {
+  if (STATIC || !sync) return null;
+  const held = sync.skipped ? `${sync.skipped} file${sync.skipped === 1 ? "" : "s"} held back by the secret guard` : "";
+  const [label, dot, tip] = {
+    off: ["R2 off", "off", "Not backed up: set the R2 keys in Settings"],
+    pending: ["R2 pending", "off", "Not backed up yet"],
+    syncing: ["R2 syncing", "run", "Uploading to R2"],
+    synced: ["R2 ✓", "", `Backed up to R2 ${sync.at ? new Date(sync.at).toLocaleString() : ""} (${sync.files} files)`],
+    failed: ["R2 failed", "bad", sync.error || "The last sync failed"],
+  }[sync.state] || [sync.state, "off", ""];
+  const tipHeld = held ? `${tip}. ${held}: ${(sync.skipped_files || []).map((f) => f.path).join(", ")}` : tip;
+  return h("span", { class: "status-pill", title: tipHeld },
+    h("span", { class: `dot ${dot}` }), held ? `${label} · ${sync.skipped} held back` : label);
+}
+
 function renderTop() {
   const right = document.getElementById("right");
   const title = document.getElementById("title-text");
@@ -729,6 +745,7 @@ function renderTop() {
       h("span", { class: `dot ${dot}` }),
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
     if (job.environment && ENVIRONMENTS[job.environment]) kids.push(h("span", { class: "status-pill", title: "Where this run's attempts execute" }, ENVIRONMENTS[job.environment]));
+    kids.push(syncPill(job.sync));
     if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
@@ -943,7 +960,7 @@ function sideOpen() {
 
 function hasConfiguredKey() {
   if (state.settings.data && state.settings.data.keys) {
-    return state.settings.data.keys.some((k) => k.set);
+    return state.settings.data.keys.some((k) => k.set && !k.name.startsWith("R2_"));
   }
   return Boolean(state.status && state.status.env_file);
 }
@@ -1436,6 +1453,13 @@ function settingsEnvironmentTab() {
       hint: e.ready ? (e.via ? `Set via ${e.via}` : e.keys.filter((k) => k.set).map((k) => k.name).join(", ")) : `${e.problem[0].toUpperCase()}${e.problem.slice(1)}`,
       control: h("span", { class: `key-badge ${e.ready ? "ok" : "bad"}` }, e.ready ? "Ready" : "Not ready"),
     }))),
+    st.sync ? settingsGroup("Run backup", [settingsRow({
+      label: "Cloudflare R2",
+      hint: st.sync.enabled
+        ? `Finished runs are copied to the bucket ${st.sync.bucket}. Files that hold an API key are left out.`
+        : `Off: ${st.sync.reason}. Add the R2 keys in API keys to back finished runs up.`,
+      control: h("span", { class: `key-badge ${st.sync.enabled ? "ok" : "warn"}` }, st.sync.enabled ? "On" : "Off"),
+    })]) : null,
     settingsGroup("Folders", [
       st.root ? pathRow("Repository", st.root) : null,
       pathRow("Benchmark tasks", st.tasks_dir, `${st.tasks} task${st.tasks === 1 ? "" : "s"} found.`),

@@ -192,6 +192,37 @@ environment, e.g. `uv tool install --with 'harbor[daytona]' harbor` (also
 otherwise. Your key is billed by the provider; bench never prints or returns
 its value.
 
+### Backing runs up to R2
+
+Harbor can only write a run to a folder on the machine that started it, even
+when the attempts run on Daytona, Modal or Vercel. The console copies each run
+to a Cloudflare R2 bucket after its Harbor exits, so results survive the
+machine and can be read elsewhere. To set it up:
+
+1. In the Cloudflare dashboard, R2, create a bucket named `kavach-bench-runs`
+   (or any name; set `R2_BUCKET` to it).
+2. R2, Manage API tokens, create a token with **Object Read & Write**, scoped
+   to that bucket. Note the account ID, the access key ID and the secret
+   access key.
+3. Put them in `bench/agent/.env` (the console's API keys page writes it) or
+   export them before starting `bench`:
+
+| Variable | Value |
+| --- | --- |
+| `R2_ACCOUNT_ID` | the Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | the token's access key ID |
+| `R2_SECRET_ACCESS_KEY` | the token's secret access key |
+| `R2_BUCKET` | optional; default `kavach-bench-runs` |
+
+Without the first three, sync is off and runs behave as before. When it is
+on, `bench api`, `bench web` and the terminal console sync every run that has
+changed when they start, and each run as its Harbor exits (a paused run waits
+until its Harbor has finished for good). `bench sync` does the same once, without a server. It
+uploads new and changed files only and never deletes from the bucket, so a
+file removed locally stays there. A file that holds one of your API keys is
+not uploaded; the run's page lists it. The details are in the console's
+[API.md](../console/API.md#backup-to-r2).
+
 ## A trial
 
 1. The agent works in `/work` in the agent image, as the image's user `agent`.

@@ -45,6 +45,7 @@ type Server struct {
 	cfg    Config
 	reader *harbor.Reader
 	runner *harbor.Runner
+	syncer *harbor.Syncer
 	models *modelList
 	events *hub
 	mux    *http.ServeMux
@@ -64,10 +65,13 @@ func New(cfg Config) *Server {
 	}
 	runner := &harbor.Runner{Harbor: cfg.Harbor, JobsDir: cfg.JobsDir, TasksDir: cfg.TasksDir, EnvFile: cfg.EnvFile, Root: cfg.Root}
 	reader := &harbor.Reader{Dir: cfg.JobsDir, Runs: runner, Docker: cfg.Docker, CacheDir: cfg.CacheDir}
+	syncer := &harbor.Syncer{Runner: runner, Reader: reader}
+	reader.Sync, runner.OnExit, runner.OnStart = syncer, syncer.Queue, syncer.Cancel
 	s := &Server{
 		cfg:    cfg,
 		reader: reader,
 		runner: runner,
+		syncer: syncer,
 		models: &modelList{url: cfg.ModelsURL, client: &http.Client{Timeout: 20 * time.Second}},
 		events: &hub{reader: reader, interval: time.Second},
 		mux:    http.NewServeMux(),
@@ -85,6 +89,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.stopJob)
 	s.mux.HandleFunc("POST /api/jobs/{id}/pause", s.pauseJob)
 	s.mux.HandleFunc("POST /api/jobs/{id}/resume", s.resumeJob)
+	s.mux.HandleFunc("POST /api/jobs/{id}/sync", s.syncJob)
 	s.mux.HandleFunc("POST /api/trials/{job}/{trial}/retry", s.retryTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}", s.getTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
@@ -102,6 +107,13 @@ func New(cfg Config) *Server {
 	}
 	return s
 }
+
+// Syncer is the server's R2 backup of finished jobs.
+func (s *Server) Syncer() *harbor.Syncer { return s.syncer }
+
+// StartSync backs up every finished job that changed since its last sync,
+// then keeps checking. A server that only reads (bench export) does not.
+func (s *Server) StartSync() { s.syncer.StartSweeps() }
 
 // ServeHTTP serves the API. The server listens on 127.0.0.1 only, but a web
 // page in the user's browser can still reach it, and POST /api/jobs spends
@@ -148,6 +160,25 @@ type Status struct {
 	JobsWarning string `json:"jobs_warning,omitempty"`
 	// Environments says which remote providers have their keys; names only.
 	Environments []EnvironmentStatus `json:"environments"`
+	// Sync is the backup of finished runs to R2.
+	Sync SyncStatus `json:"sync"`
+}
+
+// SyncStatus says whether runs are backed up to R2 and with what; the keys
+// are masked as in /api/settings.
+type SyncStatus struct {
+	Enabled bool `json:"enabled"`
+	// Reason says why it is off.
+	Reason string    `json:"reason,omitempty"`
+	Bucket string    `json:"bucket"`
+	Keys   []SyncKey `json:"keys"`
+}
+
+// SyncKey is one R2 credential.
+type SyncKey struct {
+	Name   string `json:"name"`
+	Set    bool   `json:"set"`
+	Masked string `json:"masked"`
 }
 
 // EnvironmentStatus is whether a run on a remote provider can start: its
@@ -196,6 +227,7 @@ func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.status
 	// Not cached: the keys change when settings are saved.
 	st.Environments = s.environments()
+	st.Sync = s.syncStatus()
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -211,6 +243,22 @@ func (s *Server) environments() []EnvironmentStatus {
 		out = append(out, e)
 	}
 	return out
+}
+
+func (s *Server) syncStatus() SyncStatus {
+	cfg := s.runner.R2()
+	st := SyncStatus{Bucket: cfg.Bucket, Keys: []SyncKey{}}
+	if reason := s.syncer.Off(); reason != "" {
+		st.Reason = reason
+	} else {
+		st.Enabled = true
+	}
+	for _, k := range []struct{ name, val string }{
+		{"R2_ACCOUNT_ID", cfg.AccountID}, {"R2_ACCESS_KEY_ID", cfg.AccessKeyID}, {"R2_SECRET_ACCESS_KEY", cfg.SecretAccessKey},
+	} {
+		st.Keys = append(st.Keys, SyncKey{k.name, k.val != "", maskSecret(k.name, k.val)})
+	}
+	return st
 }
 
 func check(ctx context.Context, name string, args ...string) Check {
@@ -473,6 +521,27 @@ func (s *Server) stopJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJob(w, http.StatusAccepted, id)
 }
 
+func (s *Server) syncJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if reason := s.syncer.Off(); reason != "" {
+		writeError(w, http.StatusConflict, "R2 sync is off: %s", reason)
+		return
+	}
+	switch err := s.syncer.Check(id); {
+	case errors.Is(err, harbor.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	case errors.Is(err, harbor.ErrSyncBusy):
+		writeError(w, http.StatusConflict, "%s is running or paused; it syncs when its Harbor has finished", id)
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	s.syncer.Queue(id)
+	s.writeJob(w, http.StatusAccepted, id)
+}
+
 func (s *Server) pauseJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.runner.Pause(id); err != nil {
@@ -563,6 +632,9 @@ var knownKeys = []struct {
 	{"DAYTONA_JWT_TOKEN", "Daytona JWT Token", "Instead of the API key; needs the organization ID too"},
 	{"DAYTONA_ORGANIZATION_ID", "Daytona Organization ID", "Used with the Daytona JWT token"},
 	{"VERCEL_TOKEN", "Vercel Token", "Runs the trials on Vercel Sandbox"},
+	{"R2_ACCOUNT_ID", "R2 Account ID", "Backs finished runs up to Cloudflare R2; needs the two R2 keys too"},
+	{"R2_ACCESS_KEY_ID", "R2 Access Key ID", "An R2 API token with Object Read & Write on the bucket"},
+	{"R2_SECRET_ACCESS_KEY", "R2 Secret Access Key", "The secret of that token"},
 }
 
 func (s *Server) envFilePath() string {
@@ -592,6 +664,9 @@ func maskSecret(name, val string) string {
 		if slices.Contains(p.Keys(), name) {
 			return "••••" + val[len(val)-4:]
 		}
+	}
+	if strings.HasPrefix(name, "R2_") {
+		return "••••" + val[len(val)-4:]
 	}
 	prefix := val[:min(8, len(val)-4)]
 	suffix := val[len(val)-4:]

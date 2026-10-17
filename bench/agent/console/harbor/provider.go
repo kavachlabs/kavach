@@ -63,11 +63,17 @@ func (p Provider) Need() string {
 // over the process environment, so a key the file leaves empty is empty even
 // when bench's own environment has it. Values are never returned.
 func (r *Runner) KeySet(k string) bool {
+	return r.Getenv(k) != ""
+}
+
+// Getenv is the value Harbor sees for k: the env file's, else the process
+// environment's.
+func (r *Runner) Getenv(k string) string {
 	vals, _ := ReadEnv(r.EnvFile)
 	if v, ok := vals[k]; ok {
-		return v != ""
+		return v
 	}
-	return os.Getenv(k) != ""
+	return os.Getenv(k)
 }
 
 // Credentials says whether p can authenticate: missing is empty if it can,

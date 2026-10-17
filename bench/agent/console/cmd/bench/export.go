@@ -149,9 +149,10 @@ func (e *exporter) export(ids []string, landing string) (int, error) {
 	return e.files, nil
 }
 
-// readOnly clears what offers to change a run: the copy has no server.
+// readOnly clears what offers to change a run, and the backup state, which
+// is about this machine: the copy has no server.
 func readOnly(j *harbor.Job) {
-	j.Stoppable, j.Resumable, j.Retryable = false, false, false
+	j.Stoppable, j.Resumable, j.Retryable, j.Sync = false, false, false, nil
 }
 
 // app writes the web app, with index.html marked as a copy that opens on

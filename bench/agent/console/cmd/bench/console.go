@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/kavachlabs/kavach/bench/agent/console/api"
 	"github.com/kavachlabs/kavach/bench/agent/console/tui"
 )
 
@@ -42,7 +41,7 @@ func cmdConsole(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "bench: %v\n", err)
 			return 1
 		}
-		srv := &http.Server{Handler: api.New(cfg)}
+		srv := &http.Server{Handler: syncingServer(cfg)}
 		go srv.Serve(ln)
 		defer srv.Close()
 	}

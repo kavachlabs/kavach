@@ -29,11 +29,16 @@ type options struct {
 }
 
 func (o *options) register(fs *flag.FlagSet) {
+	o.registerDirs(fs)
+	fs.IntVar(&o.port, "port", 4810, "port on 127.0.0.1")
+}
+
+// registerDirs registers the flags that locate what a command reads.
+func (o *options) registerDirs(fs *flag.FlagSet) {
 	fs.StringVar(&o.root, "root", "", "the kavach repository (default: found from the current directory)")
 	fs.StringVar(&o.jobs, "jobs", "", "Harbor's jobs directory (default: <root>/bench/agent/results/harbor)")
 	fs.StringVar(&o.tasks, "tasks", "", "the Harbor tasks directory (default: <root>/bench/agent/harbor/tasks)")
 	fs.StringVar(&o.harbor, "harbor", "harbor", "the harbor command")
-	fs.IntVar(&o.port, "port", 4810, "port on 127.0.0.1")
 }
 
 // config resolves the directories. The jobs directory is made absolute:
@@ -137,6 +142,13 @@ func serve(h http.Handler, port int, stderr io.Writer, ready func(url string)) e
 	return nil
 }
 
+// syncingServer is a server that also backs finished runs up to R2.
+func syncingServer(cfg api.Config) *api.Server {
+	s := api.New(cfg)
+	s.StartSync()
+	return s
+}
+
 func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("bench api", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -151,7 +163,7 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
-	if err := serve(api.New(cfg), o.port, stderr, nil); err != nil {
+	if err := serve(syncingServer(cfg), o.port, stderr, nil); err != nil {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)
 		return 1
 	}
