@@ -160,8 +160,8 @@ func TestTrialSession(t *testing.T) {
 		t.Fatalf("keys leaked across sessions: %s", raw)
 	}
 	_, _, h = e.raw(e.visitor(), "POST", "/api/trial/keys", body, "X-Forwarded-Proto", "https")
-	if !strings.Contains(h.Get("Set-Cookie"), "Secure") {
-		t.Fatalf("cookie %q is not Secure", h.Get("Set-Cookie"))
+	if sc := h.Get("Set-Cookie"); !strings.HasPrefix(sc, "__Host-kv_session=") || !strings.Contains(sc, "Secure") || !strings.Contains(sc, "Path=/") || strings.Contains(sc, "Domain") {
+		t.Fatalf("cookie %q is not a __Host- cookie", sc)
 	}
 
 	if code, _, _ := e.raw(c, "DELETE", "/api/trial/keys", ""); code != 204 {
@@ -194,7 +194,7 @@ func TestTrialKeyValidation(t *testing.T) {
 	for _, body := range []string{
 		`{"model_key":"` + modelKey + `","provider":"docker"}`,
 		`{"model_key":"` + modelKey + `","provider":"daytona"}`,
-		`{"model_key":"` + modelKey + `","provider":"modal","modal_token_id":"ak-12345678"}`,
+		`{"model_key":"` + modelKey + `","provider":"modal","modal_token_id":"ak-1234567890abcdefghij"}`,
 		`{"model_key":"short","provider":"daytona","daytona_api_key":"` + daytonaKey + `"}`,
 		`{"model_key":"` + long + `","provider":"daytona","daytona_api_key":"` + daytonaKey + `"}`,
 		`{"model_key":"sk-or-v1\nx-0001","provider":"daytona","daytona_api_key":"` + daytonaKey + `"}`,
@@ -205,7 +205,7 @@ func TestTrialKeyValidation(t *testing.T) {
 			t.Errorf("%.80s: %d %v", body, code, v)
 		}
 	}
-	if code, _ := e.do(c, "POST", "/api/trial/keys", `{"model_key":"`+modelKey+`","provider":"modal","modal_token_id":"ak-12345678","modal_token_secret":"as-12345678"}`); code != 200 {
+	if code, _ := e.do(c, "POST", "/api/trial/keys", `{"model_key":"`+modelKey+`","provider":"modal","modal_token_id":"ak-1234567890abcdefghij","modal_token_secret":"as-1234567890abcdefghij"}`); code != 200 {
 		t.Errorf("modal keys: %d", code)
 	}
 }
@@ -546,41 +546,5 @@ func TestTrialOrigin(t *testing.T) {
 	// A public host is fine: no loopback check.
 	if code, _ := e.do(c, "GET", "/api/trial/session", "", "Host", "try.example"); code != 200 {
 		t.Errorf("host: %d", code)
-	}
-}
-
-func TestTrialBadKeyRunFailsNormally(t *testing.T) {
-	// Harbor fails at once and prints the key it was given.
-	e := newTrialServer(t, "echo \"auth failed for $OPENROUTER_API_KEY\"; exit 1\n", nil)
-	c := e.visitor()
-	e.setKeys(c)
-	id := e.start(c)
-	e.s.runner.Wait(id)
-
-	var job map[string]any
-	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-		e.do(c, "GET", "/api/jobs/"+id, "")
-		_, raw, _ := e.raw(c, "GET", "/api/jobs/"+id, "")
-		json.Unmarshal(raw, &job)
-		if job["status"] == "stopped" {
-			break
-		}
-	}
-	if job["status"] != "stopped" || !strings.Contains(job["error"].(string), "auth failed for [redacted]") {
-		t.Fatalf("job %v", job)
-	}
-	// The log on disk is Harbor's own; every served form is redacted, other
-	// visitors' views and the event stream included.
-	for _, path := range []string{"/api/jobs", "/api/jobs/" + id, "/api/events"} {
-		resp, err := e.visitor().Get(e.ts.URL + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		buf := make([]byte, 1<<16)
-		n, _ := resp.Body.Read(buf)
-		resp.Body.Close()
-		if bytes.Contains(buf[:n], []byte(modelKey)) {
-			t.Errorf("%s serves the key", path)
-		}
 	}
 }

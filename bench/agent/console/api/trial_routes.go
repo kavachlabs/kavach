@@ -23,7 +23,7 @@ func (s *Server) trialRoutes() {
 	h("GET /api/jobs/{id}", s.getJob)
 	h("GET /api/jobs/{id}/compare", s.getCompare)
 	h("POST /api/jobs/{id}/stop", s.stopTrialJob)
-	h("GET /api/trials/{job}/{trial}", s.getTrial)
+	h("GET /api/trials/{job}/{trial}", s.getTrialTrial)
 	h("GET /api/trials/{job}/{trial}/steps", s.getSteps)
 	h("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	h("GET /api/trials/{job}/{trial}/grade", s.getGrade)
@@ -108,4 +108,14 @@ func (s *Server) stopTrialJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.stopJob(w, r)
+}
+
+func (s *Server) getTrialTrial(w http.ResponseWriter, r *http.Request) {
+	t, err := s.reader.Trial(r.PathValue("job"), r.PathValue("trial"))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	s.trial.shapeTrial(&t)
+	writeJSON(w, http.StatusOK, t)
 }

@@ -67,19 +67,45 @@ type RunRequest struct {
 }
 
 // baseEnv are the variables an isolated Harbor still needs to run.
-var baseEnv = []string{"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR"}
+var baseEnv = []string{"PATH", "USER", "LANG", "LC_ALL", "TMPDIR"}
 
-func isolatedEnv(env map[string]string) []string {
+// toolEnv are locations of the operator's installed tools that move with HOME
+// unless pinned: Harbor is usually a uv tool, whose Python lives under them.
+var toolEnv = []struct{ name, under string }{
+	{"UV_CACHE_DIR", ".cache/uv"}, {"UV_TOOL_DIR", ".local/share/uv/tools"}, {"UV_PYTHON_INSTALL_DIR", ".local/share/uv/python"},
+}
+
+// isolatedEnv is the environment of a run with its own keys: the base, a home
+// folder of its own so the operator's ~/.modal.toml and other credentials
+// are out of reach, the operator's tool locations, and env.
+func isolatedEnv(home string, env map[string]string) []string {
 	var out []string
 	for _, k := range baseEnv {
 		if v, ok := os.LookupEnv(k); ok {
 			out = append(out, k+"="+v)
 		}
 	}
+	out = append(out, "HOME="+home)
+	real, _ := os.UserHomeDir()
+	for _, t := range toolEnv {
+		v := os.Getenv(t.name)
+		if v == "" && real != "" {
+			v = filepath.Join(real, t.under)
+		}
+		if v != "" {
+			out = append(out, t.name+"="+v)
+		}
+	}
 	for k, v := range env {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// isolation is what a run with its own keys needs beyond a plain one.
+type isolation struct {
+	home    string   // removed when Harbor exits
+	secrets []string // redacted from Harbor's output
 }
 
 // ReadEnv parses a dotenv file; ok is false when it cannot be read.
@@ -187,10 +213,22 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 		args = append(args, "--env-file", r.EnvFile)
 	}
 	cmd := exec.Command(r.Harbor, args...)
+	var iso *isolation
 	if req.Env != nil {
-		cmd.Env = isolatedEnv(req.Env)
+		home := r.file("home/"+req.Name, "")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			return "", err
+		}
+		iso = &isolation{home: home}
+		for _, v := range req.Env {
+			iso.secrets = append(iso.secrets, v)
+		}
+		cmd.Env = isolatedEnv(home, req.Env)
 	}
-	if err := r.spawn(req.Name, cmd); err != nil {
+	if err := r.spawn(req.Name, cmd, iso); err != nil {
+		if iso != nil {
+			os.RemoveAll(iso.home)
+		}
 		return "", err
 	}
 	return req.Name, nil
@@ -198,13 +236,30 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 
 // spawn starts cmd as the job's Harbor, appending its output to the job's
 // log, and tracks it. r.mu must be held.
-func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
+//
+// shortcut: a run with iso gets its output through a pipe, to redact its
+// keys before they reach the log, so it ends if the console does; a plain
+// run writes to the file directly and outlives the console. Upgrade by
+// redacting in a helper process that outlives it.
+func (r *Runner) spawn(id string, cmd *exec.Cmd, iso *isolation) error {
 	log, err := os.OpenFile(r.file(id, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
-	defer log.Close()
+	// A run with iso keeps the log open for the redactor until Harbor exits.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			log.Close()
+		}
+	}()
 	cmd.Stdout, cmd.Stderr = log, log
+	var redact *redactWriter
+	if iso != nil {
+		redact = newRedactWriter(log, iso.secrets)
+		cmd.Stdout, cmd.Stderr = redact, redact
+		cmd.WaitDelay = 2 * time.Second
+	}
 	if r.Root != "" {
 		cmd.Dir = r.Root
 		if cmd.Env == nil {
@@ -229,8 +284,15 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 	if r.OnStart != nil {
 		r.OnStart(id)
 	}
+	handedOff = iso != nil
 	go func() {
-		if err := cmd.Wait(); err != nil {
+		err := cmd.Wait()
+		if iso != nil {
+			redact.Close()
+			log.Close()
+			os.RemoveAll(iso.home)
+		}
+		if err != nil {
 			if f, ferr := os.OpenFile(r.file(id, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
 				fmt.Fprintf(f, "\nharbor: %v\n", err)
 				f.Close()
@@ -303,7 +365,7 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		if req.Env != nil {
 			isSet = func(k string) bool { return req.Env[k] != "" }
 		}
-		problem := r.problem(*provider, isSet)
+		problem := r.problem(*provider, isSet, req.Env == nil)
 		if problem != "" {
 			return nil, fmt.Errorf("%w: %s", ErrInvalid, problem)
 		}
@@ -470,7 +532,7 @@ func (r *Runner) resumeLocked(id string) error {
 		}
 		cmd = exec.Command(r.Harbor, args...)
 	}
-	if err := r.spawn(id, cmd); err != nil {
+	if err := r.spawn(id, cmd, nil); err != nil {
 		return err
 	}
 	os.Remove(r.file(id, ".paused"))

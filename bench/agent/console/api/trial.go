@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,10 +86,14 @@ func TrialFromEnv(getenv func(string) string) *TrialConfig {
 
 const (
 	sessionCookie = "kv_session"
+	// secureCookie is the name over https: the __Host- prefix makes browsers
+	// accept it only with Secure, Path=/ and no Domain.
+	secureCookie  = "__Host-kv_session"
 	sessionIdle   = 24 * time.Hour
 	maxSessions   = 10000
+	sessionsPerIP = 10
 	maxKeyLen     = 512
-	minKeyLen     = 8
+	minKeyLen     = 20
 	maxConcurrent = 2
 )
 
@@ -104,6 +109,7 @@ var modelKeyVars = map[string]string{
 
 // session is one visitor. It lives in memory only.
 type session struct {
+	ip     string
 	last   time.Time
 	keys   *visitorKeys
 	invite string // the invite code redeemed; "" if none
@@ -121,13 +127,14 @@ type trial struct {
 	jobs   string
 	tasks  string
 
-	mu        sync.Mutex
-	sessions  map[string]*session
-	swept     time.Time
-	owners    map[string]string // job id -> SHA-256 of its session's id
-	used      map[string]int    // SHA-256 of an invite code -> runs started
-	showcase  map[string]bool
-	serverEnv []string // values of the server's own secrets, for redaction
+	mu       sync.Mutex
+	sessions map[string]*session
+	swept    time.Time
+	owners   map[string]string // job id -> SHA-256 of its session's id
+	runIP    map[string]string // job id -> the address that started it; lost on restart
+	used     map[string]int    // SHA-256 of an invite code -> runs started
+	showcase map[string]bool
+	scrub    *strings.Replacer // the server's own directories, hidden from responses
 
 	rateMu sync.Mutex
 	rate   map[string]*window
@@ -159,7 +166,7 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	}
 	t := &trial{
 		cfg: cfg, runner: runner, jobs: jobs, tasks: tasks,
-		sessions: map[string]*session{}, owners: map[string]string{}, used: map[string]int{},
+		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, used: map[string]int{},
 		showcase: map[string]bool{}, rate: map[string]*window{},
 	}
 	for _, id := range cfg.Showcase {
@@ -172,21 +179,27 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 		}
 	}
 	readJSONFile(t.invitesFile(), &t.used)
-	// What the server's own keys are worth hiding: every model and provider
-	// key and the R2 credentials.
-	names := []string{"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"}
-	for _, v := range modelKeyVars {
-		names = append(names, v)
+	t.scrub = pathScrubber(jobs, tasks, runner.Root)
+	return t
+}
+
+// pathScrubber replaces the server's directories, longest first, so that no
+// response names them. They are the operator's, never a visitor's input, so
+// the replacement cannot corrupt a document.
+func pathScrubber(dirs ...string) *strings.Replacer {
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, home)
 	}
-	for _, p := range harbor.Providers {
-		names = append(names, p.Keys()...)
-	}
-	for _, n := range names {
-		if v := runner.Getenv(n); len(v) >= minKeyLen {
-			t.serverEnv = append(t.serverEnv, v)
+	dirs = slices.DeleteFunc(dirs, func(d string) bool { return len(d) < 2 })
+	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
+	var pairs []string
+	for _, d := range dirs {
+		pairs = append(pairs, d, "")
+		if q, _ := json.Marshal(d); string(q) != `"`+d+`"` {
+			pairs = append(pairs, string(q[1:len(q)-1]), "")
 		}
 	}
-	return t
+	return strings.NewReplacer(pairs...)
 }
 
 func readJSONFile(path string, v any) {
@@ -218,13 +231,16 @@ func (t *trial) allowedTasks() []string {
 // lookup returns the visitor's session and its id, or nil. A session idle for
 // a day is gone.
 func (t *trial) lookup(r *http.Request) (string, *session) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return "", nil
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.lookupLocked(c.Value)
+	for _, name := range []string{secureCookie, sessionCookie} {
+		if c, err := r.Cookie(name); err == nil {
+			if id, s := t.lookupLocked(c.Value); s != nil {
+				return id, s
+			}
+		}
+	}
+	return "", nil
 }
 
 func (t *trial) lookupLocked(id string) (string, *session) {
@@ -246,29 +262,64 @@ func (t *trial) lookupLocked(id string) (string, *session) {
 	return id, s
 }
 
-// ensure returns the visitor's session, starting one (and setting the
-// cookie) if they have none.
-func (t *trial) ensure(w http.ResponseWriter, r *http.Request) (string, *session, bool) {
-	if id, s := t.lookup(r); s != nil {
-		return id, s, true
+func secure(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+func sessionCookieFor(r *http.Request, id string) *http.Cookie {
+	c := &http.Cookie{
+		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: secure(r), MaxAge: int(sessionIdle / time.Second),
 	}
+	if c.Secure {
+		c.Name = secureCookie
+	}
+	return c
+}
+
+// mint starts a new session for the visitor and sets its cookie. It never
+// reuses an id, so a cookie planted before the keys were entered is worth
+// nothing, and it drops the session the request came with. A client address
+// holds at most sessionsPerIP sessions, and a full table drops the one idle
+// longest, so no visitor can fill it for everyone else.
+func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
+	ip := t.clientIP(r)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, name := range []string{secureCookie, sessionCookie} {
+		if c, err := r.Cookie(name); err == nil {
+			delete(t.sessions, c.Value)
+		}
+	}
+	evict := func(match func(*session) bool) {
+		oldest := ""
+		for id, s := range t.sessions {
+			if match(s) && (oldest == "" || s.last.Before(t.sessions[oldest].last)) {
+				oldest = id
+			}
+		}
+		delete(t.sessions, oldest)
+	}
+	count := 0
+	for _, s := range t.sessions {
+		if s.ip == ip {
+			count++
+		}
+	}
+	if count >= sessionsPerIP {
+		evict(func(s *session) bool { return s.ip == ip })
+	}
 	if len(t.sessions) >= maxSessions {
-		writeError(w, http.StatusServiceUnavailable, "too many sessions; try again later")
-		return "", nil, false
+		evict(func(*session) bool { return true })
 	}
 	b := make([]byte, 32)
 	rand.Read(b)
 	id := hex.EncodeToString(b)
-	s := &session{last: time.Now()}
+	s := &session{ip: ip, last: time.Now()}
 	t.sessions[id] = s
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-		MaxAge: int(sessionIdle / time.Second),
-	})
-	return id, s, true
+	w.Header().Del("Set-Cookie")
+	http.SetCookie(w, sessionCookieFor(r, id))
+	return s
 }
 
 // sessionView is GET /api/trial/session; it holds no secret.
@@ -360,12 +411,9 @@ func (s *Server) postTrialKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, sess, ok := s.trial.ensure(w, r)
-	if !ok {
-		return
-	}
+	sess := s.trial.mint(w, r)
 	s.trial.mu.Lock()
-	sess.keys, sess.invite = k, ""
+	sess.keys = k
 	s.trial.mu.Unlock()
 	writeJSON(w, http.StatusOK, s.trial.view(sess))
 }
@@ -405,12 +453,9 @@ func (s *Server) postTrialInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "this invite code has no runs left")
 		return
 	}
-	_, sess, ok := s.trial.ensure(w, r)
-	if !ok {
-		return
-	}
+	sess := s.trial.mint(w, r)
 	s.trial.mu.Lock()
-	sess.invite, sess.keys = match, nil
+	sess.invite = match
 	s.trial.mu.Unlock()
 	writeJSON(w, http.StatusOK, s.trial.view(sess))
 }
@@ -430,10 +475,15 @@ func readJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // inviteProvider is the remote provider invite runs use: the first one the
-// server has keys for. t.mu need not be held.
+// server has its keys for as variables. A credentials file such as
+// ~/.modal.toml does not count: the run's HOME is not the operator's.
+// t.mu need not be held.
 func (t *trial) inviteProvider() string {
 	for _, p := range harbor.Providers {
-		if (p.Name == "daytona" || p.Name == "modal") && t.runner.Problem(p) == "" {
+		if p.Name != "daytona" && p.Name != "modal" {
+			continue
+		}
+		if missing, via := t.runner.Credentials(p); len(missing) == 0 && via == "" && t.runner.Problem(p) == "" {
 			return p.Name
 		}
 	}
@@ -551,7 +601,7 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	}
 	rr.Env, rr.Environment = env, provider
 
-	name, re := t.startRun(sess, id, invite, rr)
+	name, re := t.startRun(sess, id, t.clientIP(r), invite, rr)
 	if re != nil {
 		writeError(w, re.code, "%s", re.msg)
 		return
@@ -561,12 +611,20 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 
 // startRun applies the run limits and starts Harbor, all under t.mu so that
 // two requests cannot both pass a limit.
-func (t *trial) startRun(sess *session, id, invite string, rr harbor.RunRequest) (string, *trialRunError) {
+func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequest) (string, *trialRunError) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, run := range sess.runs {
 		if t.runner.Alive(run) {
 			return "", &trialRunError{http.StatusTooManyRequests, "you already have a run in progress; stop it or wait for it to finish"}
+		}
+	}
+	for run, rip := range t.runIP {
+		switch {
+		case !t.runner.Alive(run):
+			delete(t.runIP, run)
+		case rip == ip:
+			return "", &trialRunError{http.StatusTooManyRequests, "another run from your network address is in progress; wait for it to finish"}
 		}
 	}
 	running := 0
@@ -593,7 +651,7 @@ func (t *trial) startRun(sess *session, id, invite string, rr harbor.RunRequest)
 		return "", &trialRunError{http.StatusInternalServerError, "starting harbor: " + err.Error()}
 	}
 	owner := digest(id)
-	t.owners[name] = owner
+	t.owners[name], t.runIP[name] = owner, ip
 	sess.runs = append(sess.runs, name)
 	var saveErr error
 	if err := os.WriteFile(filepath.Join(t.jobs, ".bench", name+".owner"), []byte(owner), 0o644); err != nil {
@@ -650,15 +708,19 @@ func (t *trial) verifyTurnstile(ctx context.Context, token, ip string) *trialRun
 	return nil
 }
 
+// clientIP is the connection's address. Behind a tunnel on the same machine
+// (-trust-cf), the connection is loopback and the real address is the
+// CF-Connecting-IP header; from anywhere else the header is the client's
+// own claim and is ignored.
 func (t *trial) clientIP(r *http.Request) string {
-	if t.cfg.TrustCF {
-		if ip := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); ip != "" {
-			return ip
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); t.cfg.TrustCF && ip != nil && ip.IsLoopback() {
+		if h := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); net.ParseIP(h) != nil {
+			return h
+		}
 	}
 	return host
 }
@@ -711,6 +773,9 @@ func (t *trial) ownedBy(viewer, id string) bool {
 
 // shapeEvent applies shape to a job event for one viewer.
 func (t *trial) shapeEvent(viewer string, e event) event {
+	if e.name == "trial" {
+		return t.shapeTrialEvent(e)
+	}
 	if e.name != "job" {
 		return e
 	}
@@ -723,11 +788,85 @@ func (t *trial) shapeEvent(viewer string, e event) event {
 	return e
 }
 
+// shapeTrialEvent applies shapeTrial to a trial event.
+func (t *trial) shapeTrialEvent(e event) event {
+	var tr harbor.Trial
+	if json.Unmarshal(e.data, &tr) != nil {
+		return e
+	}
+	t.shapeTrial(&tr)
+	e.data, _ = json.Marshal(tr)
+	return e
+}
+
 // shape makes a job as a visitor may see it: it can be stopped only by its
 // owner and never paused, resumed, retried or synced.
 func (t *trial) shape(j *harbor.Job, owner bool) {
 	j.Stoppable = j.Stoppable && owner
 	j.Resumable, j.Retryable, j.Sync = false, false, nil
+	j.Error = classifyJobError(j.Error)
+}
+
+// shapeTrial removes from a trial what only the operator can use or may see:
+// the addresses and files of its OpenCode (they name the server's machine),
+// and the text of its error, which Harbor wrote and may quote a key.
+func (t *trial) shapeTrial(tr *harbor.Trial) {
+	if tr.OpenCode != nil {
+		oc := *tr.OpenCode
+		oc.URL, oc.Web, oc.Export = "", "", ""
+		tr.OpenCode = &oc
+	}
+	tr.Error = classifyTrialError(tr.Error)
+}
+
+var (
+	exitStatus = regexp.MustCompile(`harbor: exit status (\d+)`)
+	authFailed = regexp.MustCompile(`(?i)\b(401|403)\b|unauthori[sz]ed|invalid[ _]api[ _]key|incorrect api key|authentication|invalid[ _]token|forbidden|permission denied`)
+	sandboxLog = regexp.MustCompile(`(?i)daytona|modal`)
+)
+
+const (
+	modelKeyRejected   = "the model provider rejected the key"
+	sandboxKeyRejected = "the sandbox provider rejected the key"
+)
+
+// classifyJobError turns the tail of Harbor's output, which the reader puts
+// in a stopped job's error, into a short message that cannot quote a key
+// or name a path. The log is already redacted of the run's keys; this keeps
+// anything else out of public view.
+func classifyJobError(s string) string {
+	switch {
+	case s == "":
+		return ""
+	case strings.HasPrefix(s, "Harbor stopped writing"):
+		return s
+	case authFailed.MatchString(s) && sandboxLog.MatchString(s):
+		return sandboxKeyRejected
+	case authFailed.MatchString(s):
+		return modelKeyRejected
+	}
+	if m := exitStatus.FindStringSubmatch(s); m != nil {
+		return "Harbor exited with an error (code " + m[1] + ")"
+	}
+	return "Harbor exited with an error"
+}
+
+// classifyTrialError keeps the kind of a trial's error (CancelledError,
+// AgentTimeoutError) and drops its message.
+func classifyTrialError(s string) string {
+	switch {
+	case s == "":
+		return ""
+	case authFailed.MatchString(s) && sandboxLog.MatchString(s):
+		return sandboxKeyRejected
+	case authFailed.MatchString(s):
+		return modelKeyRejected
+	}
+	kind, _, _ := strings.Cut(strings.SplitN(s, "\n", 2)[0], ":")
+	if f := strings.Fields(kind); len(f) == 1 && len(f[0]) <= 64 {
+		return f[0]
+	}
+	return "the attempt failed"
 }
 
 // jobID is the job a request path is about, or "".
@@ -767,55 +906,32 @@ func (t *trial) serve(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		w = t.redact(w)
+		// A visitor in use stays signed in; only idle sessions expire.
+		if id, sess := t.lookup(r); sess != nil {
+			http.SetCookie(w, sessionCookieFor(r, id))
+		}
+		w = scrubber{w, t.scrub}
 	}
 	s.mux.ServeHTTP(w, r)
 }
 
-// redactor replaces every secret it knows in what is written. A secret is
+// scrubber hides the server's directories in what is written. A path is
 // replaced whole within one Write; the API writes each JSON document or
 // event in one.
-type redactor struct {
+type scrubber struct {
 	http.ResponseWriter
 	repl *strings.Replacer
 }
 
-func (w redactor) Write(b []byte) (int, error) {
+func (w scrubber) Write(b []byte) (int, error) {
 	_, err := w.ResponseWriter.Write([]byte(w.repl.Replace(string(b))))
 	return len(b), err
 }
 
-func (w redactor) Flush() {
+func (w scrubber) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-func (w redactor) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-// redact hides the keys of every session and of the server in what is served,
-// in case Harbor or an agent printed one into a log or a trajectory.
-func (t *trial) redact(w http.ResponseWriter) http.ResponseWriter {
-	t.mu.Lock()
-	secrets := slices.Clone(t.serverEnv)
-	for _, s := range t.sessions {
-		if k := s.keys; k != nil {
-			secrets = append(secrets, k.model, k.daytona, k.modalID, k.modalSecret)
-		}
-	}
-	t.mu.Unlock()
-	var pairs []string
-	for _, v := range secrets {
-		if len(v) < minKeyLen {
-			continue
-		}
-		pairs = append(pairs, v, "[redacted]")
-		if q, _ := json.Marshal(v); string(q) != `"`+v+`"` {
-			pairs = append(pairs, string(q[1:len(q)-1]), "[redacted]")
-		}
-	}
-	if len(pairs) == 0 {
-		return w
-	}
-	return redactor{w, strings.NewReplacer(pairs...)}
-}
+func (w scrubber) Unwrap() http.ResponseWriter { return w.ResponseWriter }

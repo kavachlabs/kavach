@@ -364,6 +364,9 @@ func (s *Server) writeJob(w http.ResponseWriter, r *http.Request, code int, id s
 	}
 	if s.trial != nil {
 		s.trial.shape(&j, s.trial.owns(r, id))
+		for i := range j.Trials {
+			s.trial.shapeTrial(&j.Trials[i])
+		}
 	}
 	out := withTrials{j, j.Trials}
 	if out.Trials == nil {

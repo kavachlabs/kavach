@@ -168,11 +168,19 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	if listen == "" {
 		listen = loopbackAddr(o.port)
 	}
-	if host, _, err := net.SplitHostPort(listen); err != nil {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
 		fmt.Fprintf(stderr, "bench api: -addr: %v\n", err)
 		return 2
-	} else if ip := net.ParseIP(host); !*trial && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	}
+	ip := net.ParseIP(host)
+	local := host == "localhost" || (ip != nil && ip.IsLoopback())
+	switch {
+	case !*trial && !local:
 		fmt.Fprintln(stderr, "bench api: -addr beyond loopback needs -trial: the API starts paid runs")
+		return 2
+	case *trial && *trustCF && !local:
+		fmt.Fprintln(stderr, "bench api: -trust-cf needs a loopback -addr: behind a tunnel on this machine, the header can be forged by anyone who reaches the port")
 		return 2
 	}
 	cfg, err := o.config()

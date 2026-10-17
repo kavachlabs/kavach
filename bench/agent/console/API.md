@@ -92,19 +92,44 @@ else changes without the flag. Settings come from the environment:
 | `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` needs a `turnstile_token` that Cloudflare's siteverify accepts |
 
 **Sessions.** A visitor has no account. `POST /api/trial/keys` or
-`/api/trial/invite` sets the cookie `kv_session` (32 random bytes in hex;
-`HttpOnly`, `SameSite=Lax`, `Secure` over https or `X-Forwarded-Proto:
-https`). Sessions live in memory and expire after 24 hours idle; a restart
-forgets them and their keys.
+`/api/trial/invite` starts a session and sets its cookie (32 random bytes in
+hex; `HttpOnly`, `SameSite=Lax`). Over https, or with `X-Forwarded-Proto:
+https`, the cookie is `__Host-kv_session` and `Secure` (`Path=/`, no
+`Domain`); over plain http, as in local development, `kv_session`. Both calls
+always mint a new id and drop the session the request came with, so nothing
+carries over, not even the list of runs (those runs can no longer be
+stopped). Each request that uses a session refreshes the cookie's `Max-Age`;
+a session expires after 24 hours idle. One network address holds at most 10
+sessions (a new one replaces its oldest), and a full table (10000) drops the
+one idle longest.
+
+Sessions live in memory: **a restart forgets every session and its keys**.
+Visitors enter their keys again, and can no longer stop runs that began
+before the restart (the runs themselves continue, and stay readable).
 
 **Keys** are held in the session's memory only. They are never written to
 disk (not in a job folder, `.bench/<id>.json`, the log or the owner file),
-never logged and never returned. A run's Harbor gets them in its process
-environment: the minimal base (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`,
-`TMPDIR`, `PYTHONPATH`) plus the visitor's variables, without `--env-file`,
-so nothing else of the console's environment reaches it. Every `/api/*`
-response and event is also scrubbed of any visitor key, or key of the server,
-in case Harbor or an agent printed one (it shows as `[redacted]`).
+never logged and never returned; each is 20-512 visible ASCII characters. A
+run's Harbor gets them in its process environment: the minimal base (`PATH`,
+`USER`, `LANG`, `LC_ALL`, `TMPDIR`, `PYTHONPATH`) plus the visitor's
+variables, without `--env-file`, so nothing else of the console's
+environment reaches it. Its `HOME` is a folder of its own
+(`<jobs>/.bench/home/<id>`, mode 0700, removed when Harbor exits), so the
+operator's `~/.modal.toml` and other credential files are out of reach;
+`UV_CACHE_DIR`, `UV_TOOL_DIR` and `UV_PYTHON_INSTALL_DIR` keep pointing at
+the operator's, so a uv-installed Harbor still starts. Invite runs get the
+same, with the server's keys.
+
+Harbor's output reaches `<id>.log` through a redactor that replaces the run's
+own key values (also split across writes) with `[redacted]`, so a provider's
+error that quotes a key never lands on disk. (The pipe it needs means a
+visitor's Harbor ends if the console does.) The log is not served: a stopped
+job's `error` is a short message chosen from it: `the model provider
+rejected the key`, `the sandbox provider rejected the key`, or `Harbor
+exited with an error (code N)`. A trial's `error` is cut to its kind
+(`AgentTimeoutError`). A trial's `opencode` block has no `url`, `web` or
+`export`, and every `/api/*` response has the server's jobs, tasks and
+repository folders and the home folder removed.
 
 `GET /api/trial/session` (no cookie needed; reads never create a session):
 
@@ -130,20 +155,25 @@ newlines; unknown fields are rejected) and replies like GET. 400 otherwise.
 `POST /api/trial/invite` `{"code"}` makes the session an invite session, which
 runs on the server's keys (the env file, else the process environment),
 passed to Harbor the same way as a visitor's: only the model key and the
-provider's. 403 for an unknown code (compared in constant time) or one
+provider's. The provider is the first of `daytona`, `modal` whose keys are
+all variables; a `~/.modal.toml` does not count. 403 for an unknown code (compared in constant time) or one
 without runs left. A code's runs started are kept in
 `<jobs>/.bench/trial-invites.json` under the SHA-256 of the code.
 
 **Starting a run.** `POST /api/jobs` needs a session with keys or an invite
 (401 otherwise) and takes `{"tasks", "models", "attempts", "turnstile_token"}`.
+Unknown fields are rejected with 400, as everywhere; the fields of the
+ordinary request (`agent`, `environment`, `name`, `concurrent`, `retries`,
+`timeout_sec`) are known and overridden.
 `models` defaults to the first allowed one. The server forces the rest:
 `environment` is the session's provider, `agent` the repository's OpenCode
 agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
-other fields in the body are ignored. 400 for a model, task or attempts count
+400 for a model, task or attempts count
 outside the limits; 400/403 for a missing/failed Turnstile token; 429 when
-the session already has a live run or `TRIAL_MAX_RUNNING` is reached; 403
-when the invite is spent. A bad key is an ordinary failed run: the job turns
-`stopped` or its trials `error`, with Harbor's output (redacted) in `error`.
+the session, or another session from the same network address, already has a
+live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent. A
+bad key is an ordinary failed run: the job turns `stopped` or its trials
+`error`, with the classified message above in `error`.
 
 **Ownership and visibility.** Each run records the SHA-256 of its session's id
 (in memory and `<jobs>/.bench/<id>.owner`, so it survives a restart). GETs of
@@ -159,8 +189,11 @@ the same way; it reflects the cookie it was opened with.
 
 **Requests.** The host check is off. A write with an `Origin` must match the
 request's host or `-origin`. Each address may make 20 writes (POST, DELETE) a
-minute (429 and `Retry-After`); the address is `CF-Connecting-IP` with
-`-trust-cf`, else the connection's.
+minute (429 and `Retry-After`). The address is the connection's. With
+`-trust-cf` it is the `CF-Connecting-IP` header, but only when the connection
+is from loopback (a tunnel such as cloudflared on this machine); `-trust-cf`
+with a `-addr` beyond loopback is a startup error, since anyone could then
+forge the header.
 
 ## Conventions
 

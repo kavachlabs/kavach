@@ -80,10 +80,10 @@ func (r *Runner) Getenv(k string) string {
 // and via names the file that does it when no variables do. Otherwise
 // missing lists what the first set lacks.
 func (r *Runner) Credentials(p Provider) (missing []string, via string) {
-	return credentials(p, r.KeySet)
+	return credentials(p, r.KeySet, true)
 }
 
-func credentials(p Provider, isSet func(string) bool) (missing []string, via string) {
+func credentials(p Provider, isSet func(string) bool, useFile bool) (missing []string, via string) {
 	for _, set := range p.Sets {
 		ok := true
 		for _, k := range set {
@@ -93,7 +93,7 @@ func credentials(p Provider, isSet func(string) bool) (missing []string, via str
 			return nil, ""
 		}
 	}
-	if p.File != "" {
+	if useFile && p.File != "" {
 		if home, err := os.UserHomeDir(); err == nil && exists(filepath.Join(home, p.File)) {
 			return nil, "~/" + p.File
 		}
@@ -108,11 +108,11 @@ func credentials(p Provider, isSet func(string) bool) (missing []string, via str
 
 // Problem says why a run on p cannot start, or "" if it can.
 func (r *Runner) Problem(p Provider) string {
-	return r.problem(p, r.KeySet)
+	return r.problem(p, r.KeySet, true)
 }
 
-func (r *Runner) problem(p Provider, isSet func(string) bool) string {
-	if missing, _ := credentials(p, isSet); len(missing) > 0 {
+func (r *Runner) problem(p Provider, isSet func(string) bool, useFile bool) string {
+	if missing, _ := credentials(p, isSet, useFile); len(missing) > 0 {
 		return fmt.Sprintf("%s needs %s in the env file or bench's environment", p.Name, p.Need())
 	}
 	if err := r.extraErr(p); err != nil {
