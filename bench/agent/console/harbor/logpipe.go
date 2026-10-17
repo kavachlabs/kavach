@@ -23,15 +23,16 @@ const redactVar = "KAVACH_LOGPIPE_REDACT"
 // RunLogPipe is `bench _logpipe -log FILE -home DIR -- harbor args...`. It
 // runs Harbor with its own environment, writes Harbor's output to FILE with
 // the secrets replaced by [redacted], and exits with Harbor's exit code. It
-// forwards SIGINT and SIGTERM to Harbor alone, as Stop does, removes DIR
-// when Harbor has exited and writes what the redactor held back.
+// forwards SIGINT and SIGTERM to Harbor alone, as Stop does, and once Harbor
+// has exited writes what the redactor held back, scrubs the secrets from the
+// files under -scrub DIR and removes -home DIR.
 //
 // It is a process of its own, started like any Harbor with a group of its
 // own, so a console that exits or restarts leaves it, and the Harbor under
 // it, running; Stop reaches Harbor through it by the pid recorded for the
 // run.
 func RunLogPipe(args []string) int {
-	var logFile, home string
+	var logFile, home, scrub string
 	for len(args) > 0 && args[0] != "--" {
 		if len(args) < 2 {
 			return 2
@@ -41,13 +42,15 @@ func RunLogPipe(args []string) int {
 			logFile = args[1]
 		case "-home":
 			home = args[1]
+		case "-scrub":
+			scrub = args[1]
 		default:
 			return 2
 		}
 		args = args[2:]
 	}
 	if logFile == "" || len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: _logpipe -log FILE [-home DIR] -- harbor args...")
+		fmt.Fprintln(os.Stderr, "usage: _logpipe -log FILE [-home DIR] [-scrub DIR] -- harbor args...")
 		return 2
 	}
 	cmdline := args[1:]
@@ -95,6 +98,13 @@ func RunLogPipe(args []string) int {
 		}
 	}
 	redact.Close()
+	if scrub != "" {
+		// Harbor and its agent wrote files into the job's folder; a provider's
+		// error in a trajectory may quote a key.
+		if err := ScrubTree(scrub, secrets); err != nil {
+			fmt.Fprintf(log, "\nharbor: scrubbing %s: %v\n", scrub, err)
+		}
+	}
 	if home != "" {
 		os.RemoveAll(home)
 	}

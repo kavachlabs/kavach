@@ -178,8 +178,9 @@ const LiveAgent = "bench.agent.harbor.agents:KavachOpenCode"
 
 // run is a Harbor process this Runner started and must reap.
 type run struct {
-	cmd  *exec.Cmd
-	done chan struct{}
+	cmd    *exec.Cmd
+	done   chan struct{}
+	killed bool // set before done closes: the process died of a signal
 }
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -237,7 +238,7 @@ func (r *Runner) logPipe(id, home string, env map[string]string, cmdline []strin
 		exe, _ := os.Executable()
 		helper = []string{exe, LogPipeCommand}
 	}
-	args := append(slices.Clone(helper[1:]), "-log", r.file(id, ".log"), "-home", home, "--")
+	args := append(slices.Clone(helper[1:]), "-log", r.file(id, ".log"), "-home", home, "-scrub", filepath.Join(r.JobsDir, id), "--")
 	cmd := exec.Command(helper[0], append(args, cmdline...)...)
 	cmd.Env = isolatedEnv(home, env)
 	names := make([]string, 0, len(env))
@@ -293,7 +294,11 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 		r.OnStart(id)
 	}
 	go func() {
-		if err := cmd.Wait(); err != nil {
+		err := cmd.Wait()
+		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			rn.killed = true
+		}
+		if err != nil {
 			if f, ferr := os.OpenFile(r.file(id, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
 				fmt.Fprintf(f, "\nharbor: %v\n", err)
 				f.Close()
@@ -426,19 +431,30 @@ func (r *Runner) Stop(id string) error {
 	if !validName(id) {
 		return ErrNotRunning
 	}
-	if rn := r.get(id); rn != nil {
+	rn := r.get(id)
+	if rn != nil {
 		select {
 		case <-rn.done:
-			return ErrNotRunning
 		default:
 			return rn.cmd.Process.Signal(os.Interrupt)
 		}
 	}
-	pid, ok := r.pid(id)
-	if !ok {
+	if pid, ok := r.pid(id); ok {
+		return syscall.Kill(pid, syscall.SIGINT)
+	}
+	pids := r.orphans(id, rn)
+	if len(pids) == 0 {
 		return ErrNotRunning
 	}
-	return syscall.Kill(pid, syscall.SIGINT)
+	// The helper is gone and its Harbor lives on in the helper's process
+	// group. Harbor alone gets the signal, as with a helper.
+	var first error
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, syscall.SIGINT); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // Pause stops a run so that Resume can continue it. Harbor has no pause of
@@ -584,16 +600,17 @@ func (r *Runner) alive(id string) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if rn := r.runs[id]; rn != nil {
+	rn := r.runs[id]
+	if rn != nil {
 		select {
 		case <-rn.done:
-			return false
 		default:
 			return true
 		}
+	} else if _, ok := r.pid(id); ok {
+		return true
 	}
-	_, ok := r.pid(id)
-	return ok
+	return len(r.orphans(id, rn)) > 0
 }
 
 func (r *Runner) paused(id string) bool {
@@ -651,7 +668,8 @@ func (r *Runner) state(id string) (launched, alive bool, out string) {
 }
 
 func (r *Runner) stateLocked(id string) (launched, alive bool, out string) {
-	if rn := r.runs[id]; rn != nil {
+	rn := r.runs[id]
+	if rn != nil {
 		select {
 		case <-rn.done:
 		default:
@@ -660,6 +678,7 @@ func (r *Runner) stateLocked(id string) (launched, alive bool, out string) {
 	} else {
 		_, alive = r.pid(id)
 	}
+	alive = alive || len(r.orphans(id, rn)) > 0
 	return true, alive, strings.TrimSpace(tailOf(r.file(id, ".log")))
 }
 
@@ -682,6 +701,55 @@ func (r *Runner) pid(id string) (int, bool) {
 		return 0, false
 	}
 	return pid, true
+}
+
+// orphans lists the processes still running Harbor for the job after the
+// process its pid file names, the helper of a run with its own keys, has
+// gone: killed outright, it leaves Harbor in the process group the helper
+// led. A process counts only if it is in that group and its command line
+// names the job's config, as pid requires, so a reused group does not.
+// rn is the run this process started, if any; a helper that exited by itself
+// leaves nothing, and neither does a finished job, so neither is searched.
+func (r *Runner) orphans(id string, rn *run) []int {
+	if rn != nil && !rn.killed {
+		return nil
+	}
+	var res jobResult
+	if readJSON(filepath.Join(r.JobsDir, id, "result.json"), &res) == nil && res.FinishedAt != nil {
+		return nil
+	}
+	b, err := os.ReadFile(r.file(id, ".pid"))
+	if err != nil {
+		return nil
+	}
+	group, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || group <= 1 {
+		return nil
+	}
+	out, err := exec.Command("ps", "-A", "-o", "pid=,pgid=,command=").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		pgid, err2 := strconv.Atoi(f[1])
+		cmdline := strings.TrimSpace(line)
+		for range 2 {
+			cmdline = strings.TrimSpace(cmdline[strings.IndexAny(cmdline, " \t"):])
+		}
+		if err1 != nil || err2 != nil || pgid != group || pid == group || pid == os.Getpid() {
+			continue
+		}
+		if strings.Contains(cmdline, r.file(id, ".json")) || strings.HasSuffix(cmdline, filepath.Join(r.JobsDir, id)) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 func (r *Runner) started(id string) *time.Time {

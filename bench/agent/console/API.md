@@ -143,8 +143,21 @@ quotes a key never lands on disk. The helper is detached like any Harbor, in a
 process group of its own, so a console that exits or restarts leaves the run
 going. The pid recorded for the run is the helper's: it forwards `SIGINT` and
 `SIGTERM` to Harbor alone, which is what Stop sends, then writes what it held
-back, removes the run's home folder and exits with Harbor's code. At start the
-server removes the home folders of runs that are not running. The log is not served: a stopped
+back, replaces the run's key values (also JSON-escaped) with `[redacted]` in
+every file under the job's folder, in place, a file at a time through a
+temporary file and a rename with the old mode, removes the run's home folder
+and exits with Harbor's code. At start the server removes the home folders
+of runs that are not running. If the helper is killed outright (`kill -9`,
+the OOM killer) Harbor lives on in the helper's process group: the run still
+counts as live, and Stop interrupts the processes of that group whose command
+line names the run's config. Nothing scrubs the job folder then, and the
+home folder stays until the sweep; the console's per-run scrub below
+covers served files for as long as it runs.
+
+**Restart the console only through its own process** (for systemd,
+`KillMode=process`). The helpers are detached so a restart leaves the runs
+going, but `pkill bench`, which matches the helpers too, or a signal to the
+whole control group, sends them SIGTERM, and that stops every visitor run. The log is not served: a stopped
 job's `error` is a short message chosen from it: `the model provider
 rejected the key`, `the sandbox provider rejected the key`, or `Harbor
 exited with an error (code N)`. A trial's `error` is cut to its kind
@@ -152,7 +165,7 @@ exited with an error (code N)`. A trial's `error` is cut to its kind
 `export`.
 
 As a second line of defence, what is served is also scrubbed: each trial run's
-own key values, while this process lives, are replaced by `[redacted]` in that
+own key values, while it is live in this process, are replaced by `[redacted]` in that
 run's responses and events, and the server's own keys (the env file's and the
 environment's model and provider keys and the R2 credentials) in all of them.
 Only values of 20 characters or more are replaced. The server's folders in

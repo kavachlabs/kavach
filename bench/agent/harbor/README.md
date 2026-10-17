@@ -205,6 +205,9 @@ reaches the log. Run a public trial only behind Cloudflare Tunnel
 (`cloudflared` on the same machine, `-addr 127.0.0.1:PORT -trust-cf`): its
 limits depend on the real client address, which only the tunnel supplies (see
 the note in [API.md](../console/API.md#trial-mode)).
+Restart the console only through its own process (systemd `KillMode=process`):
+a visitor's Harbor is run by detached helper processes named `bench _logpipe`,
+and `pkill bench` or a signal to the whole control group stops those runs.
 
 ### Backing runs up to R2
 

@@ -73,9 +73,14 @@ func pathChar(c byte) bool {
 }
 
 // pathStart reports whether a path may begin at b[j]: the byte before is not
-// part of a name, except the n of a JSON \n and the like.
+// part of a name, except the n of a JSON \n and the like, or the slashes of a
+// URL scheme.
 func pathStart(b []byte, j int) bool {
 	if j == 0 || !pathChar(b[j-1]) {
+		return true
+	}
+	// file:///home/x: the slash that begins the path follows the scheme's.
+	if j >= 3 && string(b[j-3:j]) == "://" {
 		return true
 	}
 	return j >= 2 && b[j-2] == '\\' && b[j-1] >= 'a' && b[j-1] <= 'z'

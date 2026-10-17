@@ -192,8 +192,11 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	for _, p := range harbor.Providers {
 		names = append(names, p.Keys()...)
 	}
+	// Both the env file's value and the environment's: Harbor sees only one,
+	// but either may have been written somewhere.
+	fileVals, _ := harbor.ReadEnv(runner.EnvFile)
 	for _, n := range names {
-		t.serverSecrets = append(t.serverSecrets, runner.Getenv(n))
+		t.serverSecrets = append(t.serverSecrets, fileVals[n], os.Getenv(n))
 	}
 	runner.SweepHomes()
 	return t
@@ -628,6 +631,13 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 	for _, run := range sess.runs {
 		if t.runner.Alive(run) {
 			return "", &trialRunError{http.StatusTooManyRequests, "you already have a run in progress; stop it or wait for it to finish"}
+		}
+	}
+	// A finished run's files were scrubbed by its helper; its secrets are no
+	// longer needed here.
+	for run := range t.jobSecrets {
+		if !t.runner.Alive(run) {
+			delete(t.jobSecrets, run)
 		}
 	}
 	for run, rip := range t.runIP {
