@@ -249,8 +249,33 @@ export function h(tag, attrs, ...kids) {
   return el;
 }
 
+// STATIC is set in a copy written by bench export: some runs, read-only, on
+// a static host. Its meta tag names the run it opens on.
+const staticMeta = document.querySelector('meta[name="bench-static"]');
+export const STATIC = staticMeta !== null;
+const LANDING = staticMeta ? staticMeta.content : "";
+
+// apiURL is where an API request goes: to bench api, or in a copy to the
+// file bench export wrote for it (staticPath in cmd/bench/export.go).
+export function apiURL(path) {
+  if (!STATIC) return "/api" + path;
+  const [p, q = ""] = path.split("?");
+  const params = new URLSearchParams(q);
+  const base = "api" + decodeURI(p);
+  if (params.has("i")) return `${base}/${params.get("i")}.txt`;
+  if (params.has("path")) return `${base}/${fnv1a(params.get("path"))}.txt`;
+  return `${base}/index.json`;
+}
+
+// fnv1a is the 32-bit FNV-1a hash of s's UTF-8 bytes, in hex.
+function fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (const b of new TextEncoder().encode(s)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+
 export async function api(path, opts) {
-  const resp = await fetch("/api" + path, opts);
+  const resp = await fetch(apiURL(path), opts);
   const text = await resp.text();
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -380,6 +405,8 @@ const jobTitle = (job) => {
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   if (parts[0] === "jobs" && parts[1]) return { view: parts[2] === "compare" ? "compare" : "runs", job: parts[1] };
+  // A copy has no new-run form: it opens on its landing run's results.
+  if (STATIC) return { view: "compare", job: LANDING };
   return { view: "new", task: parts[0] === "new" ? parts[1] || "" : "" };
 }
 
@@ -872,7 +899,7 @@ function makeResizeSash(side) {
 
 function renderNav() {
   const nav = document.getElementById("nav");
-  const kids = [h("a", { href: "#/new" }, h("span", {}, "+ New benchmark run"), h("span", { class: "dim m" }, "#/new"))];
+  const kids = STATIC ? [] : [h("a", { href: "#/new" }, h("span", {}, "+ New benchmark run"), h("span", { class: "dim m" }, "#/new"))];
   if (current.job) {
     const enc = encodeURIComponent(current.job);
     kids.push(h("a", { href: `#/jobs/${enc}` }, "Matrix & Step Inspector", h("span", { class: "dim m" }, current.job)));
@@ -963,7 +990,7 @@ function renderSide() {
 
   const keyOk = hasConfiguredKey();
   const st = state.status;
-  const foot = h("div", { class: "side-foot" },
+  const foot = STATIC ? staticFoot() : h("div", { class: "side-foot" },
     st ? h("div", { class: "side-env-row" },
       h("span", { class: "side-env-items" },
         h("span", { title: st.docker.ok ? `Docker ${st.docker.version}` : st.docker.error },
@@ -986,11 +1013,11 @@ function renderSide() {
       h("span", { class: `key-badge ${keyOk ? "ok" : "warn"}` }, keyOk ? "Keys ready" : "Add API key")));
 
   const scrollKids = [
-    h("a", { href: "#/new", class: `new-run-link ${current.view === "new" ? "on" : ""}` },
+    STATIC ? null : h("a", { href: "#/new", class: `new-run-link ${current.view === "new" ? "on" : ""}` },
       h("span", {}, "+ New benchmark run"),
       h("span", { class: "faint m" }, "/new")),
     sideSection("runs", "Runs", state.jobs ? state.jobs.length : null),
-  ];
+  ].filter(Boolean);
 
   const runsShut = state.folded.has("runs");
   if (runsShut) {
@@ -1012,9 +1039,10 @@ function renderSide() {
       mark));
   }
 
-  scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
+  // A task's link opens the new-run form, which a copy doesn't have.
+  if (!STATIC) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  const tasksShut = state.folded.has("tasks");
+  const tasksShut = STATIC || state.folded.has("tasks");
   if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
   // Incidents first, then features; each task names the benchmark it came from.
   const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
@@ -1053,6 +1081,18 @@ function renderSide() {
   side.replaceChildren(scrollEl, foot, makeResizeSash("left"));
   scrollEl.scrollTop = top;
   if (hadFocus) side.querySelector(".side-settings-btn").focus({ preventScroll: true });
+}
+
+// staticFoot is the sidebar's foot in a copy: what it is, in place of the
+// machine's status and Settings.
+function staticFoot() {
+  return h("div", { class: "side-foot side-static" },
+    h("span", {}, "A read-only copy of these runs, made with ",
+      h("code", {}, "bench export"), "."),
+    h("span", {},
+      h("a", { href: "https://github.com/kavachlabs/kavach/tree/main/bench/agent" }, "The benchmark on GitHub"),
+      " · ",
+      h("a", { href: "https://www.thekavachlabs.com" }, "Kavach Labs")));
 }
 
 // Settings modal: a rail of tabs on the left and one panel on the right.
@@ -1573,7 +1613,9 @@ export function renderView() {
   if (current.view === "new") return renderNew(view);
   if (state.jobErr) {
     const msg = state.jobErr === "notfound"
-      ? [h("b", {}, `No run named ${current.job}.`), " It isn't under ", h("code", {}, state.status ? state.status.jobs_dir : "the jobs directory"), ". ", h("a", { href: "#/new" }, "Start a new run"), "."]
+      ? STATIC
+        ? [h("b", {}, `No run named ${current.job}.`), " This copy doesn't include it."]
+        : [h("b", {}, `No run named ${current.job}.`), " It isn't under ", h("code", {}, state.status ? state.status.jobs_dir : "the jobs directory"), ". ", h("a", { href: "#/new" }, "Start a new run"), "."]
       : [h("b", {}, "Couldn't load this run: "), state.jobErr];
     return view.replaceChildren(h("div", { class: "empty" }, msg));
   }
@@ -3017,7 +3059,7 @@ function patchView(t) {
     d.dataset.loaded = "1";
     let body;
     try {
-      const resp = await fetch(`/api/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}/patch`);
+      const resp = await fetch(apiURL(`/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}/patch`));
       if (resp.status === 404) body = h("div", { class: "dim" }, "No patch was saved: the task has no collect hook, or Harbor never reached it.");
       else if (!resp.ok) body = h("div", { class: "bad" }, `Couldn't load the patch: ${resp.status}`);
       else {
@@ -3047,6 +3089,7 @@ function sessionState(t) {
 }
 
 function openInOpenCode(t, job) {
+  if (STATIC) return null; // the session is on the machine that ran it
   const oc = t.opencode;
   if (t.status === "running" && oc && oc.url && !oc.finished) {
     return h("a", { class: "btn blue", href: oc.web || oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
@@ -3322,7 +3365,7 @@ function attemptCard(t, job, multi = false) {
   lines.push(cardMeta(t));
   const oc = openInOpenCode(t, job);
   const links = h("div", { class: "links" },
-    oc.tagName === "SPAN" ? null : oc,
+    !oc || oc.tagName === "SPAN" ? null : oc,
     finished(t) ? patchView(t) : null,
     h("a", { href: `#/jobs/${encodeURIComponent(job.id)}`, onclick: () => { state.sel = trialKey(t); } }, "Steps →"));
   // Only strip button styling from top-level links/summaries, preserving inner buttons like Copy!
@@ -3415,12 +3458,16 @@ document.addEventListener("click", (e) => {
 });
 window.addEventListener("hashchange", onRoute);
 
-loadStatus();
-loadSettings();
+// A copy has no server: no status, settings or live events, and its runs
+// don't change.
+if (!STATIC) {
+  loadStatus();
+  loadSettings();
+  connectEvents();
+  setInterval(loadStatus, 15000);
+}
 loadTasks();
 loadJobs();
-connectEvents();
-setInterval(loadStatus, 15000);
 enterView(() => {
   renderAll();
   if (current.job) return refreshJob();
