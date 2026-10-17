@@ -191,7 +191,7 @@ func (e *exporter) job(id string) error {
 		if t.ID == "" {
 			continue
 		}
-		if err := e.trial(id, t.ID); err != nil {
+		if err := e.trial(id, t.ID, t.Arm); err != nil {
 			return fmt.Errorf("attempt %s: %w", t.ID, err)
 		}
 	}
@@ -201,7 +201,7 @@ func (e *exporter) job(id string) error {
 // trial writes what the attempt inspector reads. An attempt lacks some of
 // it (no patch, no contract); what the server answers 404 is left out, and
 // the copy answers 404 too.
-func (e *exporter) trial(job, id string) error {
+func (e *exporter) trial(job, id, arm string) error {
 	base := "/api/trials/" + url.PathEscape(job) + "/" + url.PathEscape(id)
 	for _, p := range []string{"", "/patch", "/grade", "/incident"} {
 		if err := e.copy(base + p); err != nil {
@@ -248,10 +248,15 @@ func (e *exporter) trial(job, id string) error {
 			}
 		}
 	}
-	if len(names) == 0 {
-		return nil // no contract checks: the inspector has no invariants tab
+	// The tab is there when the attempt ran contract checks, and on every
+	// Kavach arm (app.js's hasInv), which asks with no names.
+	if len(names) == 0 && arm != "kavach" && arm != "kavach-implement" {
+		return nil
 	}
-	inv := base + "/invariants?names=" + url.QueryEscape(strings.Join(names, ","))
+	inv := base + "/invariants"
+	if len(names) > 0 {
+		inv += "?names=" + url.QueryEscape(strings.Join(names, ","))
+	}
 	var defs harbor.Invariants
 	if err := e.getJSON(inv, &defs); err != nil {
 		if errors.Is(err, errNotFound) {
