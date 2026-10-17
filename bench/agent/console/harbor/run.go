@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,12 +103,6 @@ func isolatedEnv(home string, env map[string]string) []string {
 	return out
 }
 
-// isolation is what a run with its own keys needs beyond a plain one.
-type isolation struct {
-	home    string   // removed when Harbor exits
-	secrets []string // redacted from Harbor's output
-}
-
 // ReadEnv parses a dotenv file; ok is false when it cannot be read.
 func ReadEnv(path string) (vals map[string]string, ok bool) {
 	vals = map[string]string{}
@@ -167,6 +162,9 @@ type Runner struct {
 	// OnStart, when set, is called with the job's id as a Harbor process
 	// starts, with the Runner locked: it must not call back into it.
 	OnStart func(id string)
+	// LogPipe is the command, with its leading arguments, that runs the
+	// helper RunLogPipe serves; default: this executable and _logpipe.
+	LogPipe []string
 
 	mu   sync.Mutex
 	runs map[string]*run
@@ -213,53 +211,63 @@ func (r *Runner) Start(req RunRequest) (string, error) {
 		args = append(args, "--env-file", r.EnvFile)
 	}
 	cmd := exec.Command(r.Harbor, args...)
-	var iso *isolation
+	home := ""
 	if req.Env != nil {
-		home := r.file("home/"+req.Name, "")
+		home = r.file("home/"+req.Name, "")
 		if err := os.MkdirAll(home, 0o700); err != nil {
 			return "", err
 		}
-		iso = &isolation{home: home}
-		for _, v := range req.Env {
-			iso.secrets = append(iso.secrets, v)
-		}
-		cmd.Env = isolatedEnv(home, req.Env)
+		cmd = r.logPipe(req.Name, home, req.Env, append([]string{r.Harbor}, args...))
 	}
-	if err := r.spawn(req.Name, cmd, iso); err != nil {
-		if iso != nil {
-			os.RemoveAll(iso.home)
+	if err := r.spawn(req.Name, cmd); err != nil {
+		if home != "" {
+			os.RemoveAll(home)
 		}
 		return "", err
 	}
 	return req.Name, nil
 }
 
+// logPipe is the command that runs Harbor (cmdline) for a run with its own
+// keys: bench's hidden helper (see RunLogPipe), with env as its environment.
+// Like a plain Harbor it outlives the console.
+func (r *Runner) logPipe(id, home string, env map[string]string, cmdline []string) *exec.Cmd {
+	helper := r.LogPipe
+	if len(helper) == 0 {
+		exe, _ := os.Executable()
+		helper = []string{exe, LogPipeCommand}
+	}
+	args := append(slices.Clone(helper[1:]), "-log", r.file(id, ".log"), "-home", home, "--")
+	cmd := exec.Command(helper[0], append(args, cmdline...)...)
+	cmd.Env = isolatedEnv(home, env)
+	names := make([]string, 0, len(env))
+	for k := range env {
+		names = append(names, k)
+	}
+	cmd.Env = append(cmd.Env, redactVar+"="+strings.Join(names, ","))
+	return cmd
+}
+
+// SweepHomes removes the home folders of runs with their own keys that are
+// no longer running: a helper killed outright leaves its folder behind.
+func (r *Runner) SweepHomes() {
+	entries, _ := os.ReadDir(r.file("home", ""))
+	for _, e := range entries {
+		if !r.alive(e.Name()) {
+			os.RemoveAll(r.file("home/"+e.Name(), ""))
+		}
+	}
+}
+
 // spawn starts cmd as the job's Harbor, appending its output to the job's
 // log, and tracks it. r.mu must be held.
-//
-// shortcut: a run with iso gets its output through a pipe, to redact its
-// keys before they reach the log, so it ends if the console does; a plain
-// run writes to the file directly and outlives the console. Upgrade by
-// redacting in a helper process that outlives it.
-func (r *Runner) spawn(id string, cmd *exec.Cmd, iso *isolation) error {
+func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 	log, err := os.OpenFile(r.file(id, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
-	// A run with iso keeps the log open for the redactor until Harbor exits.
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			log.Close()
-		}
-	}()
+	defer log.Close()
 	cmd.Stdout, cmd.Stderr = log, log
-	var redact *redactWriter
-	if iso != nil {
-		redact = newRedactWriter(log, iso.secrets)
-		cmd.Stdout, cmd.Stderr = redact, redact
-		cmd.WaitDelay = 2 * time.Second
-	}
 	if r.Root != "" {
 		cmd.Dir = r.Root
 		if cmd.Env == nil {
@@ -284,15 +292,8 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd, iso *isolation) error {
 	if r.OnStart != nil {
 		r.OnStart(id)
 	}
-	handedOff = iso != nil
 	go func() {
-		err := cmd.Wait()
-		if iso != nil {
-			redact.Close()
-			log.Close()
-			os.RemoveAll(iso.home)
-		}
-		if err != nil {
+		if err := cmd.Wait(); err != nil {
 			if f, ferr := os.OpenFile(r.file(id, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
 				fmt.Fprintf(f, "\nharbor: %v\n", err)
 				f.Close()
@@ -532,7 +533,7 @@ func (r *Runner) resumeLocked(id string) error {
 		}
 		cmd = exec.Command(r.Harbor, args...)
 	}
-	if err := r.spawn(id, cmd, nil); err != nil {
+	if err := r.spawn(id, cmd); err != nil {
 		return err
 	}
 	os.Remove(r.file(id, ".paused"))

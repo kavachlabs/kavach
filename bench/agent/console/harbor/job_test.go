@@ -31,6 +31,9 @@ import (
 var jobsDir string
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == LogPipeCommand {
+		os.Exit(RunLogPipe(os.Args[2:]))
+	}
 	if spec := os.Getenv("BENCH_TEST_START"); spec != "" {
 		os.Exit(startAndExit(spec))
 	}

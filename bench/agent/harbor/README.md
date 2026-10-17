@@ -201,7 +201,10 @@ The console starts their Harbor with exactly those keys in its process
 environment, not `--env-file`, and holds them in memory only; it does not
 pass on its own environment (R2 keys, its own model key). Such a Harbor gets
 a home folder of its own and its output is redacted of those keys before it
-reaches the log.
+reaches the log. Run a public trial only behind Cloudflare Tunnel
+(`cloudflared` on the same machine, `-addr 127.0.0.1:PORT -trust-cf`): its
+limits depend on the real client address, which only the tunnel supplies (see
+the note in [API.md](../console/API.md#trial-mode)).
 
 ### Backing runs up to R2
 

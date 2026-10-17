@@ -134,7 +134,12 @@ type trial struct {
 	runIP    map[string]string // job id -> the address that started it; lost on restart
 	used     map[string]int    // SHA-256 of an invite code -> runs started
 	showcase map[string]bool
-	scrub    *strings.Replacer // the server's own directories, hidden from responses
+	paths    []pathRule // the server's own directories, hidden from responses
+	// secrets of the server, and of each trial run while this process lives,
+	// replaced in what is served in case Harbor or an agent wrote one into
+	// a file.
+	serverSecrets []string
+	jobSecrets    map[string][]string
 
 	rateMu sync.Mutex
 	rate   map[string]*window
@@ -166,7 +171,7 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	}
 	t := &trial{
 		cfg: cfg, runner: runner, jobs: jobs, tasks: tasks,
-		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, used: map[string]int{},
+		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, jobSecrets: map[string][]string{}, used: map[string]int{},
 		showcase: map[string]bool{}, rate: map[string]*window{},
 	}
 	for _, id := range cfg.Showcase {
@@ -179,27 +184,19 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 		}
 	}
 	readJSONFile(t.invitesFile(), &t.used)
-	t.scrub = pathScrubber(jobs, tasks, runner.Root)
+	t.paths = pathRules(jobs, tasks, runner.Root)
+	names := []string{"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"}
+	for _, v := range modelKeyVars {
+		names = append(names, v)
+	}
+	for _, p := range harbor.Providers {
+		names = append(names, p.Keys()...)
+	}
+	for _, n := range names {
+		t.serverSecrets = append(t.serverSecrets, runner.Getenv(n))
+	}
+	runner.SweepHomes()
 	return t
-}
-
-// pathScrubber replaces the server's directories, longest first, so that no
-// response names them. They are the operator's, never a visitor's input, so
-// the replacement cannot corrupt a document.
-func pathScrubber(dirs ...string) *strings.Replacer {
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, home)
-	}
-	dirs = slices.DeleteFunc(dirs, func(d string) bool { return len(d) < 2 })
-	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
-	var pairs []string
-	for _, d := range dirs {
-		pairs = append(pairs, d, "")
-		if q, _ := json.Marshal(d); string(q) != `"`+d+`"` {
-			pairs = append(pairs, string(q[1:len(q)-1]), "")
-		}
-	}
-	return strings.NewReplacer(pairs...)
 }
 
 func readJSONFile(path string, v any) {
@@ -286,8 +283,13 @@ func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
 	ip := t.clientIP(r)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// The visitor keeps ownership of the runs they started, and nothing else.
+	var carried []string
 	for _, name := range []string{secureCookie, sessionCookie} {
 		if c, err := r.Cookie(name); err == nil {
+			if old := t.sessions[c.Value]; old != nil && carried == nil {
+				carried = old.runs
+			}
 			delete(t.sessions, c.Value)
 		}
 	}
@@ -317,6 +319,15 @@ func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
 	id := hex.EncodeToString(b)
 	s := &session{ip: ip, last: time.Now()}
 	t.sessions[id] = s
+	owner := digest(id)
+	for _, run := range carried {
+		// A run whose record cannot be rewritten stays with the old id, which
+		// nobody holds any more.
+		if os.WriteFile(filepath.Join(t.jobs, ".bench", run+".owner"), []byte(owner), 0o644) == nil {
+			t.owners[run] = owner
+			s.runs = append(s.runs, run)
+		}
+	}
 	w.Header().Del("Set-Cookie")
 	http.SetCookie(w, sessionCookieFor(r, id))
 	return s
@@ -652,6 +663,9 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 	}
 	owner := digest(id)
 	t.owners[name], t.runIP[name] = owner, ip
+	for _, v := range rr.Env {
+		t.jobSecrets[name] = append(t.jobSecrets[name], v)
+	}
 	sess.runs = append(sess.runs, name)
 	var saveErr error
 	if err := os.WriteFile(filepath.Join(t.jobs, ".bench", name+".owner"), []byte(owner), 0o644); err != nil {
@@ -785,6 +799,7 @@ func (t *trial) shapeEvent(viewer string, e event) event {
 	}
 	t.shape(&j, t.ownedBy(viewer, j.ID))
 	e.data, _ = json.Marshal(j)
+	e.data = t.scrubSecrets(j.ID, e.data)
 	return e
 }
 
@@ -796,6 +811,7 @@ func (t *trial) shapeTrialEvent(e event) event {
 	}
 	t.shapeTrial(&tr)
 	e.data, _ = json.Marshal(tr)
+	e.data = t.scrubSecrets(tr.Job, e.data)
 	return e
 }
 
@@ -910,21 +926,43 @@ func (t *trial) serve(s *Server, w http.ResponseWriter, r *http.Request) {
 		if id, sess := t.lookup(r); sess != nil {
 			http.SetCookie(w, sessionCookieFor(r, id))
 		}
-		w = scrubber{w, t.scrub}
+		job := jobID(r.URL.Path)
+		w = scrubber{w, func(b []byte) []byte { return scrubPaths(t.paths, t.scrubSecrets(job, b)) }}
 	}
 	s.mux.ServeHTTP(w, r)
 }
 
-// scrubber hides the server's directories in what is written. A path is
-// replaced whole within one Write; the API writes each JSON document or
-// event in one.
+// scrubSecrets replaces the server's secrets and the job's in b.
+func (t *trial) scrubSecrets(job string, b []byte) []byte {
+	t.mu.Lock()
+	values := append(slices.Clone(t.serverSecrets), t.jobSecrets[job]...)
+	t.mu.Unlock()
+	var pairs []string
+	for _, v := range values {
+		if len(v) < minKeyLen {
+			continue
+		}
+		pairs = append(pairs, v, "[redacted]")
+		if q, _ := json.Marshal(v); string(q) != `"`+v+`"` {
+			pairs = append(pairs, string(q[1:len(q)-1]), "[redacted]")
+		}
+	}
+	if len(pairs) == 0 {
+		return b
+	}
+	return []byte(strings.NewReplacer(pairs...).Replace(string(b)))
+}
+
+// scrubber hides, in what is written, the secrets of the server and of the
+// job the request names, and the server's directories. A value is found
+// within one Write; the API writes each JSON document or event in one.
 type scrubber struct {
 	http.ResponseWriter
-	repl *strings.Replacer
+	fn func([]byte) []byte
 }
 
 func (w scrubber) Write(b []byte) (int, error) {
-	_, err := w.ResponseWriter.Write([]byte(w.repl.Replace(string(b))))
+	_, err := w.ResponseWriter.Write(w.fn(b))
 	return len(b), err
 }
 

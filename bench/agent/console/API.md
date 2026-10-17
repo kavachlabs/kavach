@@ -78,7 +78,21 @@ read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
 `bench api -trial [-addr 0.0.0.0:8080] [-origin https://try.kavachlabs.dev]
 [-trust-cf]` serves the console publicly so visitors can try Kavach with
 their own keys. `-addr` beyond loopback is refused without `-trial`. Nothing
-else changes without the flag. Settings come from the environment:
+else changes without the flag.
+
+> **Deploy a public trial behind Cloudflare Tunnel.** Run `cloudflared` on the
+> same machine, point it at the server's loopback address, and start the
+> server with `-addr 127.0.0.1:PORT -trust-cf -origin https://your.host`. The
+> server then never listens on a public interface: every request comes from
+> the tunnel, which adds the real client address as `CF-Connecting-IP`, and
+> the per-address rate limit, session limit and one-run limit depend on that
+> address. Without the tunnel the header is whatever a client writes, so
+> `-trust-cf` honours it only from a loopback connection, and refuses to
+> start with a `-addr` beyond loopback. A server on a public `-addr` without
+> `-trust-cf` sees only the proxy's address, if any, and limits everyone as
+> one visitor.
+
+Settings come from the environment:
 
 | Variable | Default |
 | --- | --- |
@@ -96,9 +110,10 @@ else changes without the flag. Settings come from the environment:
 hex; `HttpOnly`, `SameSite=Lax`). Over https, or with `X-Forwarded-Proto:
 https`, the cookie is `__Host-kv_session` and `Secure` (`Path=/`, no
 `Domain`); over plain http, as in local development, `kv_session`. Both calls
-always mint a new id and drop the session the request came with, so nothing
-carries over, not even the list of runs (those runs can no longer be
-stopped). Each request that uses a session refreshes the cookie's `Max-Age`;
+always mint a new id and drop the session the request came with. Only the
+list of the visitor's runs carries over (the runs' owner records are rewritten
+to the new id), so they keep Stop on a live run; keys, invite and everything
+else are the new ones. Each request that uses a session refreshes the cookie's `Max-Age`;
 a session expires after 24 hours idle. One network address holds at most 10
 sessions (a new one replaces its oldest), and a full table (10000) drops the
 one idle longest.
@@ -120,16 +135,30 @@ operator's `~/.modal.toml` and other credential files are out of reach;
 the operator's, so a uv-installed Harbor still starts. Invite runs get the
 same, with the server's keys.
 
-Harbor's output reaches `<id>.log` through a redactor that replaces the run's
-own key values (also split across writes) with `[redacted]`, so a provider's
-error that quotes a key never lands on disk. (The pipe it needs means a
-visitor's Harbor ends if the console does.) The log is not served: a stopped
+A visitor's or an invite's Harbor is started by a helper, `bench _logpipe`
+(hidden), which runs Harbor with the keys in its own environment, never in
+argv, and writes Harbor's output to `<id>.log` with the run's key values (also
+split across writes) replaced by `[redacted]`, so a provider's error that
+quotes a key never lands on disk. The helper is detached like any Harbor, in a
+process group of its own, so a console that exits or restarts leaves the run
+going. The pid recorded for the run is the helper's: it forwards `SIGINT` and
+`SIGTERM` to Harbor alone, which is what Stop sends, then writes what it held
+back, removes the run's home folder and exits with Harbor's code. At start the
+server removes the home folders of runs that are not running. The log is not served: a stopped
 job's `error` is a short message chosen from it: `the model provider
 rejected the key`, `the sandbox provider rejected the key`, or `Harbor
 exited with an error (code N)`. A trial's `error` is cut to its kind
 (`AgentTimeoutError`). A trial's `opencode` block has no `url`, `web` or
-`export`, and every `/api/*` response has the server's jobs, tasks and
-repository folders and the home folder removed.
+`export`.
+
+As a second line of defence, what is served is also scrubbed: each trial run's
+own key values, while this process lives, are replaced by `[redacted]` in that
+run's responses and events, and the server's own keys (the env file's and the
+environment's model and provider keys and the R2 credentials) in all of them.
+Only values of 20 characters or more are replaced. The server's folders in
+every `/api/*` response are replaced by `<jobs>`, `<tasks>`, `<root>` and `~`
+for the home folder, only where one is a whole path prefix, so `/rootfs` is
+left alone when the home folder is `/root`.
 
 `GET /api/trial/session` (no cookie needed; reads never create a session):
 
