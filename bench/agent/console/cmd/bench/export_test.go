@@ -74,6 +74,25 @@ func TestExport(t *testing.T) {
 			t.Errorf("attempt %s: %v", tr.ID, err)
 		}
 	}
+	// A Kavach arm's inspector has an Invariants tab even with no contract
+	// checks, and asks for the definitions with no names.
+	kavach := 0
+	for _, j := range list {
+		var job harbor.Job
+		readJSON(t, filepath.Join(out, "api/jobs", j.ID, "index.json"), &job)
+		for _, tr := range job.Trials {
+			if tr.ID == "" || tr.Arm != "kavach" && tr.Arm != "kavach-implement" {
+				continue
+			}
+			kavach++
+			if _, err := os.Stat(filepath.Join(out, "api/trials", tr.Job, tr.ID, "invariants/index.json")); err != nil {
+				t.Errorf("kavach attempt %s has no invariants: %v", tr.ID, err)
+			}
+		}
+	}
+	if kavach == 0 {
+		t.Error("no kavach attempt was exported, so the invariants check proved nothing")
+	}
 
 	filepath.WalkDir(out, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".json") {
