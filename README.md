@@ -28,6 +28,21 @@ two small protocols directly ([INTEGRATING.md](INTEGRATING.md)).
 
 ## Try it
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/kavach-demo-dark.gif">
+    <img alt="Kavach ledger walkthrough: recording a nil-pointer crash, replaying without a broker, and catching a narrow fix across 56 variants" src="assets/kavach-demo-light.gif" width="100%">
+  </picture>
+  <br>
+  <sub>
+    1080p 60fps video:
+    <a href="assets/kavach-hero-dark.mp4">Hero cut (dark, 0:24)</a> ·
+    <a href="assets/kavach-hero-light.mp4">Hero cut (light, 0:24)</a> ·
+    <a href="assets/kavach-motion-dark.mp4">Full walkthrough (dark, 0:47)</a> ·
+    <a href="assets/kavach-motion-light.mp4">Full walkthrough (light, 0:47)</a>
+  </sub>
+</p>
+
 The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
 The commands below use its Go version; every SDK under [sdk](sdk) has a port
 with the same bug. The CLI and the recorder are written in Go, so building them
