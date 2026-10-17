@@ -46,7 +46,7 @@ COPY --chown=agent bench/agent/harness/agent.sh /opt/harness/agent.sh
 WORKDIR /work
 
 FROM base AS control
-RUN make -j4 >/tmp/make.log 2>&1 || (tail -50 /tmp/make.log; exit 1)
+RUN make -j4 >/tmp/make.log 2>&1 && rm /tmp/make.log || (tail -50 /tmp/make.log; exit 1)
 COPY bench/agent/tasks/redis-11734/task.md /tmp/task.md
 USER root
 RUN sed '/^## Kavach arm only/,$d' /tmp/task.md > /task/TASK.md && rm /tmp/task.md
@@ -57,7 +57,7 @@ COPY --from=tools /out /opt/kavach
 ENV PATH=/opt/kavach/bin:$PATH KAVACH_SDK=/opt/kavach/sdk/c KAVACH_LIB=/opt/kavach/lib/libkavach.a
 COPY bench/agent/tasks/redis-11734/redis-kavach.patch /tmp/redis-kavach.patch
 RUN git apply /tmp/redis-kavach.patch && git add -A && git commit -qm "kavach integration" \
- && make -j4 >/tmp/make.log 2>&1 || (tail -50 /tmp/make.log; exit 1)
+ && make -j4 >/tmp/make.log 2>&1 && rm /tmp/make.log || (tail -50 /tmp/make.log; exit 1)
 USER root
 RUN mkdir -p /opt/redis-old && cp /work/src/redis-server /opt/redis-old/
 COPY bench/agent/tasks/redis-11734/task.md /task/TASK.md
@@ -72,7 +72,7 @@ RUN git config --global --add safe.directory '*'
 # .gitignore leaves out of the repository.
 RUN cp -a /work /grade-kavach && cp -a /work /grade-control \
  && cd /grade-control && git reset -q --hard HEAD~1 && make distclean >/dev/null 2>&1 \
- && make -j4 >/tmp/make.log 2>&1 || (tail -50 /tmp/make.log; exit 1)
+ && make -j4 >/tmp/make.log 2>&1 && rm /tmp/make.log || (tail -50 /tmp/make.log; exit 1)
 COPY bench/agent/tasks/redis-11734/redis-kavach.patch /task/redis-kavach.patch
 COPY bench/agent/tasks/redis-11734/hidden/test.patch /task/hidden-test.patch
 COPY bench/agent/tasks/redis-11734/grade.sh /opt/harness/grade.sh
