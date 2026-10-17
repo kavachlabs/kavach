@@ -72,9 +72,12 @@ build and no network). `sync-tasks.py` writes the references
 into the `task.toml` files and `sync-tasks.py --check` fails when one is stale,
 which is what happens after any change to a Dockerfile or to the Go, SDK or
 task files it copies. The workflow `.github/workflows/bench-images.yml`
-builds and pushes the missing ones on every push to main (linux/amd64 and
-linux/arm64, merged into one manifest list; kombu-virtual-queue-dead-lettering
-is amd64 only because its base image is).
+builds and pushes the missing ones (linux/amd64 and linux/arm64, merged into
+one manifest list; kombu-virtual-queue-dead-lettering is amd64 only because
+its base image is). It builds only when run by hand on main
+(`gh workflow run bench-images.yml`, or Actions, bench-images, Run
+workflow), so run it after merging a change that makes `--check` write new
+references; pull requests only run the check.
 
 Locally, nothing is pulled while the image exists:
 

@@ -3,12 +3,12 @@ name: bench-images
 # Builds the benchmark task images (bench/agent/harbor/README.md, "Images")
 # that the Harbor tasks pull, because Daytona, Modal and Vercel have no
 # repository to build them from. An image is named by a hash of its inputs
-# (bench/agent/harbor/image-tag.py), so a push builds only what changed.
+# (bench/agent/harbor/image-tag.py), so a run builds only what changed. It
+# builds only when started by hand (Actions, bench-images, Run workflow);
+# pull requests just check that the task.toml references are current.
 # Each architecture builds on a native runner (these images compile Rust, Go
 # and C, which QEMU would make slow) and the two are merged into one manifest.
 on:
-  push:
-    branches: [main]
   pull_request:
     paths:
       - 'bench/agent/**'
@@ -35,7 +35,7 @@ jobs:
       - run: python3 bench/agent/harbor/test_image_tag.py
 
   plan:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: check
     runs-on: ubuntu-latest
     permissions:
