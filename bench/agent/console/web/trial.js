@@ -45,12 +45,74 @@ export function renderTrialView(view, name) {
 
 const link = (href, text) => h("a", { href, target: "_blank", rel: "noopener" }, text);
 
+// cmp holds each finished run's /compare rows, fetched once for the landing.
+const cmp = new Map();
+function loadCompares(jobs) {
+  const todo = jobs.slice(0, 12).filter((j) => !cmp.has(j.id));
+  let left = todo.length;
+  for (const j of todo) {
+    cmp.set(j.id, null);
+    fetch(`/api/jobs/${encodeURIComponent(j.id)}/compare`)
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [])
+      .then((rows) => {
+        cmp.set(j.id, rows || []);
+        if (--left === 0 && /^#?\/?$/.test(location.hash)) renderView();
+      });
+  }
+}
+
+// armTotals sums the graded attempts of one arm over some runs' compare rows.
+function armTotals(ids, arm) {
+  let passes = 0, attempts = 0;
+  for (const id of ids) for (const r of cmp.get(id) || []) if ((r.arm || "control") === arm) { passes += r.passes; attempts += r.attempts; }
+  return { passes, attempts };
+}
+
+// verdictCard is an example of Kavach's output, plus, once the finished runs'
+// numbers are in, their real totals. The example's rows are illustrative.
+function verdictCard(ids) {
+  const k = armTotals(ids, "kavach"), c = armTotals(ids, "control");
+  const real = k.attempts && c.attempts
+    ? h("p", { class: "vc-real" }, h("b", {}, "From the finished runs below"), h("br"),
+      `Kavach arm: ${k.passes}/${k.attempts} fixed · control: ${c.passes}/${c.attempts}`)
+    : null;
+  const row = (what, res, ok) => h("div", { class: "vc-row" }, h("span", {}, what), h("span", { class: ok ? "ok" : "bad" }, res));
+  return h("figure", { class: "vc", "aria-label": "Example of a Kavach verdict" },
+    h("div", { class: "vc-bar" }, h("span", { class: "vc-dots", "aria-hidden": "true" }), h("span", {}, "kavach diff incident.kavach --json"), h("span", { class: "vc-tag" }, "example")),
+    h("div", { class: "vc-cols" },
+      h("div", { class: "vc-col" },
+        h("h4", {}, "Control arm"),
+        h("p", { class: "vc-line" }, "agent: ", h("span", { class: "ok" }, "tests pass ✓")),
+        h("p", { class: "vc-line faint" }, "ships the patch")),
+      h("div", { class: "vc-col vc-k" },
+        h("h4", {}, "Kavach arm"),
+        row("Recorded incident", "fixed ✓", true),
+        row("Variant 2/10 · moved earlier", "fixed ✓", true),
+        row("Variant 3/10 · field removed", "still_failing ✗", false),
+        h("div", { class: "vc-verdict" }, h("span", {}, "verdict"), h("code", {}, "variant_failed(3)@12")))),
+    h("figcaption", {}, "The agent's tests passed; Kavach replayed variants of the incident and found the fix too narrow."),
+    real);
+}
+
+// armLine is a run's pass count per arm, once its compare rows are loaded.
+function armLine(j) {
+  const rows = cmp.get(j.id);
+  if (!rows || !rows.length) return null;
+  const arms = ["kavach", "control"].filter((a) => rows.some((r) => (r.arm || "control") === a));
+  return h("span", { class: "tl-arms" }, arms.map((a) => {
+    const t = armTotals([j.id], a);
+    return h("span", { class: `tl-arm ${a}` }, a, " ", h("b", {}, t.attempts ? `${t.passes}/${t.attempts}` : "–"));
+  }));
+}
+
 function landing() {
   const ready = trialReady();
   const done = (state.jobs || []).filter((j) => j.status === "done");
   const mine = new Set((trial.session && trial.session.runs) || []);
   const yours = (state.jobs || []).filter((j) => mine.has(j.id));
   const showcase = done.filter((j) => !mine.has(j.id));
+  loadCompares(showcase);
 
   const step = (n, title, text) => h("li", { class: "tl-step" },
     h("span", { class: "tl-n", "aria-hidden": "true" }, n),
@@ -58,6 +120,7 @@ function landing() {
     h("p", {}, text));
 
   return h("div", { class: "tl" },
+    h("div", { class: "tl-top" },
     h("section", { class: "tl-hero" },
       h("span", { class: "logo-mark", role: "img", "aria-label": "Kavach" }),
       h("p", { class: "tl-eyebrow" }, "Public trial"),
@@ -71,6 +134,7 @@ function landing() {
         ready ? null : h("a", { class: "tl-btn", href: "#/trial/invite" }, "Have an invite code?"),
         ready && trial.session.has_keys ? h("button", { type: "button", class: "tl-btn", onclick: forgetKeys }, "Forget my keys") : null),
       h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), TRUST)),
+    verdictCard(showcase.map((j) => j.id))),
 
     h("section", { class: "tl-sec" },
       h("h2", {}, "How the trial works"),
@@ -98,6 +162,7 @@ function runsSection(title, sub, jobs, empty) {
     return h("a", { class: "tl-card", href: `#/jobs/${encodeURIComponent(j.id)}/compare` },
       h("b", {}, tasks),
       h("span", { class: "tl-card-sub" }, models || j.agent),
+      armLine(j),
       h("span", { class: "tl-card-foot" },
         h("span", { class: "m faint" }, `${j.trials_done}/${j.trials_total} attempts`),
         h("span", { class: "tl-card-go" }, "Results →")));
