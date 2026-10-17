@@ -924,6 +924,9 @@ func (m *Model) jobsBody(width int) []string {
 		case harbor.JobDone:
 			status = sGreen.Render(j.Status)
 		}
+		if j.Sync != nil && j.Sync.State != harbor.SyncOff {
+			status += sDim.Render(" · r2 " + j.Sync.State)
+		}
 		started := ""
 		if j.Started != nil {
 			started = j.Started.Local().Format("Jan 2 15:04")

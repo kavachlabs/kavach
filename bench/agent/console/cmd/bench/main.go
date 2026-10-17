@@ -22,6 +22,7 @@ var commands = []command{
 	{"api", "serve the console's HTTP API on 127.0.0.1 (see API.md)", cmdAPI},
 	{"", "open the terminal console (serving the API itself if none is running)", cmdConsole},
 	{"web", "open the web console, serving the API unless a server already runs", cmdWeb},
+	{"sync", "back finished runs up to R2 once, and exit", cmdSync},
 	{"export", "write a read-only copy of the web console and some runs, for a static host", cmdExport},
 }
 

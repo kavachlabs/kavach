@@ -29,6 +29,10 @@ func TestStaticPath(t *testing.T) {
 }
 
 func TestExport(t *testing.T) {
+	// Backup state is about this machine: a copy shows none, whatever is set.
+	t.Setenv("R2_ACCOUNT_ID", "acct")
+	t.Setenv("R2_ACCESS_KEY_ID", "AK")
+	t.Setenv("R2_SECRET_ACCESS_KEY", "SK")
 	jobs := filepath.Join(t.TempDir(), "jobs")
 	if err := os.CopyFS(jobs, os.DirFS("../../harbor/testdata/jobs")); err != nil {
 		t.Fatal(err)
@@ -70,6 +74,16 @@ func TestExport(t *testing.T) {
 			t.Errorf("attempt %s: %v", tr.ID, err)
 		}
 	}
+
+	filepath.WalkDir(out, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".json") {
+			return err
+		}
+		if b, _ := os.ReadFile(p); bytes.Contains(b, []byte(`"sync"`)) {
+			t.Errorf("%s holds sync state", p)
+		}
+		return nil
+	})
 
 	// The jobs directory is outside the repository here; its paths still
 	// don't reach the copy.

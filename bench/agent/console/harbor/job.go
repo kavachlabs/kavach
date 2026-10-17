@@ -93,7 +93,9 @@ type Job struct {
 	Resumable   bool    `json:"resumable"` // started by bench, stopped or paused, not finished
 	Retryable   bool    `json:"retryable"` // started by bench, not running, with a job folder: its attempts can be run again
 	Error       string  `json:"error,omitempty"`
-	Trials      []Trial `json:"trials,omitempty"`
+	// Sync is the job's backup to R2; absent when the reader has no Syncer.
+	Sync   *SyncState `json:"sync,omitempty"`
+	Trials []Trial    `json:"trials,omitempty"`
 }
 
 // Trial is one attempt of one model on one task.
@@ -176,6 +178,8 @@ func armRank(arm string) int {
 type Reader struct {
 	Dir  string
 	Runs *Runner // the runs this process started; may be nil
+	// Sync, when set, supplies each job's Sync state.
+	Sync *Syncer
 
 	// Docker and CacheDir, when set, let RealSource fetch the real files a
 	// trial's invariants live in.
@@ -437,6 +441,7 @@ func (r *Reader) readJob(id string) Job {
 		j.Status = JobStopped
 		j.Error = "Harbor exited after the last trial without finishing the job"
 	}
+	j.Sync = r.Sync.State(id)
 	return j
 }
 

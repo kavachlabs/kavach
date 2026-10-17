@@ -22,6 +22,39 @@ cd bench/agent/console && go run ./cmd/bench api [--jobs DIR] [--tasks DIR] [--r
 `<root>/bench/agent/.env` is passed to Harbor as `--env-file` if it exists.
 The console never reads it.
 
+## Backup to R2
+
+Harbor writes every run to the jobs folder on this machine, whatever
+`environment` the attempts use. The server copies each run to a Cloudflare R2
+bucket once its Harbor has exited (finished, failed or stopped, and again
+after a resume or a retry ends), and, when it starts and every ten minutes
+after, any run whose files changed since its last copy. A paused run is not
+copied: it is about to be resumed, so it waits for its eventual exit. A copy in
+progress stops when a new Harbor starts for the run, and is redone when that
+Harbor exits. One run is copied at a time, in the background.
+
+It is off unless `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+are set in `bench/agent/.env` or the server's environment (`R2_BUCKET`
+defaults to `kavach-bench-runs`). Setup is in
+[harbor/README.md](../harbor/README.md#backing-runs-up-to-r2).
+
+- Objects are `harbor/<job id>/<path in the job folder>`, signed with SigV4
+  against `https://<account>.r2.cloudflarestorage.com`.
+- Only new and changed files are uploaded. `<jobs>/.bench/sync/<id>.json`
+  keeps each file's size, modification time and SHA-256, outside the job
+  folder. A file deleted locally stays in the bucket: it is a backup, not a
+  mirror. Symlinks and anything that is not a regular file are skipped.
+- A file that holds the value of any key in the env file or the environment
+  (a name with `KEY`, `TOKEN`, `SECRET` or `PASSWORD`; values of eight
+  characters or more), or matches `sk-or-v1-…` or `sk-ant-…`, is **not**
+  uploaded. The job's `sync.skipped_files` names it and says which key or
+  pattern, never a secret or any part of one. It is checked again when the
+  file changes.
+
+`bench sync [--job ID,ID]` copies the finished runs once, without a server
+(to fill the bucket with runs that already exist), and prints one line per
+run. A run that is running or paused is left alone.
+
 ## A read-only copy
 
 The server starts paid runs and writes API keys, so it is never put on the
@@ -83,6 +116,7 @@ read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
   "resumable": false,
   "retryable": false,
   "error": "…",
+  "sync": {"state": "synced", "at": "2026-10-11T11:41:02+05:30", "files": 214, "skipped": 0},
   "trials": [ Trial, … ]
 }
 ```
@@ -108,6 +142,13 @@ read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
   - for a job bench started whose Harbor exited without writing
     `result.json`, the end of Harbor's output, such as a bad model name;
   - for a job judged stopped from its files, why.
+- `sync`: the job's backup to R2 (see above). `state` is `off` (no R2 keys),
+  `pending` (not copied yet), `syncing`, `synced` or `failed`. `at` is when the
+  last copy finished and `files` how many of the job's files are in the bucket.
+  `error` is the short reason for `failed`. `skipped` counts files the secret
+  guard held back, and `skipped_files` lists up to 20 as
+  `{"path": "agent/env.log", "reason": "contains the value of OPENROUTER_API_KEY"}`.
+  `bench export` leaves it out.
 - `trials`: in `GET /api/jobs/{id}` and in the replies to POSTs, always an
   array, `[]` when there are none. The job list and `job` events leave it
   out. It includes a queued placeholder for each planned trial that has not
@@ -261,7 +302,16 @@ Cached for 10 seconds.
     {"name": "daytona", "ready": false, "keys": [{"name": "DAYTONA_API_KEY", "set": false}]},
     {"name": "modal", "ready": true, "keys": [{"name": "MODAL_TOKEN_ID", "set": true}, {"name": "MODAL_TOKEN_SECRET", "set": true}]},
     {"name": "vercel", "ready": false, "keys": [{"name": "VERCEL_TOKEN", "set": false}]}
-  ]
+  ],
+  "sync": {
+    "enabled": true,
+    "bucket": "kavach-bench-runs",
+    "keys": [
+      {"name": "R2_ACCOUNT_ID", "set": true, "masked": "••••9f3a"},
+      {"name": "R2_ACCESS_KEY_ID", "set": true, "masked": "••••c2d1"},
+      {"name": "R2_SECRET_ACCESS_KEY", "set": true, "masked": "••••77be"}
+    ]
+  }
 }
 ```
 
@@ -283,6 +333,10 @@ Cached for 10 seconds.
   a value; a key left empty in `.env` is unset even if the server's
   environment has it, as Harbor loads `.env` over it. Unlike the rest, it is
   read on every request: saving a key in `/api/settings` shows at once.
+- `sync`: whether runs are backed up to R2. When `enabled` is false,
+  `reason` says which variables are missing. The keys are masked to their
+  last four characters, as in `/api/settings`. Like `environments`, it is read
+  on every request.
 - `jobs_warning`: present when attempts in `jobs_dir` can't be graded. On a
   Mac, Colima shares only the home folder with Docker, so a jobs folder
   outside it reaches the verifier empty. The consoles show the warning and
@@ -746,6 +800,14 @@ A job stopped before Harbor wrote its folder is started again from its
 
 Reply: 202 and the Job, now `running`. 409 when the job is running,
 finished, or bench did not start it.
+
+### POST /api/jobs/{id}/sync
+
+Queues a copy of the job to R2 now, after any already running. It is for a
+run whose files changed outside the server, or whose last copy `failed`.
+
+Reply: 202 and the Job. 404 for an unknown job. 409 when R2 sync is off, or
+the job's Harbor is running or paused (it is copied once it has finished).
 
 ### POST /api/trials/{job}/{trial}/retry
 

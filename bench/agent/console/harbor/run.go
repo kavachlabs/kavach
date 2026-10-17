@@ -115,6 +115,12 @@ type Runner struct {
 	// own: the model key stays out of the task container and each attempt
 	// can be watched in OpenCode.
 	Root string
+	// OnExit, when set, is called with the job's id after each Harbor
+	// process this Runner started has exited.
+	OnExit func(id string)
+	// OnStart, when set, is called with the job's id as a Harbor process
+	// starts, with the Runner locked: it must not call back into it.
+	OnStart func(id string)
 
 	mu   sync.Mutex
 	runs map[string]*run
@@ -193,6 +199,9 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 		r.runs = map[string]*run{}
 	}
 	r.runs[id] = rn
+	if r.OnStart != nil {
+		r.OnStart(id)
+	}
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			if f, ferr := os.OpenFile(r.file(id, ".log"), os.O_WRONLY|os.O_APPEND, 0); ferr == nil {
@@ -201,6 +210,9 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 			}
 		}
 		close(rn.done)
+		if r.OnExit != nil {
+			r.OnExit(id)
+		}
 	}()
 	return nil
 }
@@ -468,6 +480,25 @@ func prepareResume(dir, id string) error {
 		}
 	}
 	return nil
+}
+
+// alive reports whether a Harbor for the job is running.
+func (r *Runner) alive(id string) bool {
+	if !r.launched(id) {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rn := r.runs[id]; rn != nil {
+		select {
+		case <-rn.done:
+			return false
+		default:
+			return true
+		}
+	}
+	_, ok := r.pid(id)
+	return ok
 }
 
 func (r *Runner) paused(id string) bool {
