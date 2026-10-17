@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
 // command is one bench subcommand.
@@ -34,6 +36,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	name := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
+	}
+	if name == harbor.LogPipeCommand { // hidden: how a visitor's Harbor is run
+		return harbor.RunLogPipe(args)
 	}
 	if name == "help" {
 		fmt.Fprint(stdout, usage())

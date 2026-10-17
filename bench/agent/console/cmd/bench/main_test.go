@@ -20,6 +20,14 @@ func TestUsage(t *testing.T) {
 	if code := run([]string{"api", "-port", "x"}, &out, &errb); code != 2 {
 		t.Errorf("bad flag: exit %d", code)
 	}
+	errb.Reset()
+	if code := run([]string{"api", "-addr", "0.0.0.0:0"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "-trial") {
+		t.Errorf("public address without -trial: exit %d\n%s", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"api", "-trial", "-trust-cf", "-addr", "0.0.0.0:0"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "-trust-cf") {
+		t.Errorf("-trust-cf on a public address: exit %d\n%s", code, errb.String())
+	}
 }
 
 func TestJobsWarning(t *testing.T) {

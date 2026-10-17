@@ -6,6 +6,7 @@ import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
+import { TRIAL_VIEWS, renderTrialNew, renderTrialView } from "./trial.js";
 import { NARROW, UI_PREFS_KEY, initialPanes, prefsJSON, readPrefs, sideOpen as sideOpenOn, statusRedraw, toggleFold, toggleRight, toggleSide } from "./uistate.js";
 
 // Where the theme a person picked is kept; index.html reads it too.
@@ -255,6 +256,25 @@ const staticMeta = document.querySelector('meta[name="bench-static"]');
 export const STATIC = staticMeta !== null;
 const LANDING = staticMeta ? staticMeta.content : "";
 
+// TRIAL is the public trial server: people bring their own keys and start a
+// few runs. It tells the page by a meta tag, or by answering the session.
+export let TRIAL = !STATIC && document.querySelector('meta[name="bench-trial"]') !== null;
+export const trial = { session: null };
+
+export async function loadTrialSession() {
+  try {
+    const resp = await fetch("/api/trial/session");
+    if (resp.ok) {
+      trial.session = await resp.json();
+      TRIAL = true;
+    }
+  } catch {}
+}
+if (!STATIC) await loadTrialSession();
+
+// trialReady is whether this session may start a run.
+export const trialReady = () => TRIAL && !!trial.session && (trial.session.has_keys || trial.session.invite);
+
 // apiURL is where an API request goes: to bench api, or in a copy to the
 // file bench export wrote for it (staticPath in cmd/bench/export.go).
 export function apiURL(path) {
@@ -405,6 +425,11 @@ const jobTitle = (job) => {
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   if (parts[0] === "jobs" && parts[1]) return { view: parts[2] === "compare" ? "compare" : "runs", job: parts[1] };
+  if (TRIAL) {
+    if (parts[0] === "trial" && TRIAL_VIEWS.includes(parts[1])) return { view: parts[1] };
+    if (parts[0] === "new") return { view: "new", task: parts[1] || "" };
+    return { view: "landing" };
+  }
   // A copy has no new-run form: it opens on its landing run's results.
   if (STATIC) return { view: "compare", job: LANDING };
   return { view: "new", task: parts[0] === "new" ? parts[1] || "" : "" };
@@ -499,6 +524,7 @@ async function loadJobs() {
   }
   renderSide();
   renderTop();
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) renderView();
 }
 
 async function ensureModelsLoaded() {
@@ -714,7 +740,7 @@ function statusDot(name, check) {
 
 // syncPill is a run's backup to R2. A copy on a static host has none.
 function syncPill(sync) {
-  if (STATIC || !sync) return null;
+  if (STATIC || TRIAL || !sync) return null;
   const held = sync.skipped ? `${sync.skipped} file${sync.skipped === 1 ? "" : "s"} held back by the secret guard` : "";
   const [label, dot, tip] = {
     off: ["R2 off", "off", "Not backed up: set the R2 keys in Settings"],
@@ -733,6 +759,12 @@ function renderTop() {
   const title = document.getElementById("title-text");
   let text = "New run";
   const kids = [];
+  document.querySelector(".app").classList.toggle("trial-bare", TRIAL && (current.view === "new" || TRIAL_VIEWS.includes(current.view)));
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) {
+    title.textContent = current.view === "landing" ? "kavach bench · trial" : "Trial setup";
+    document.title = "Try Kavach bench";
+    return right.replaceChildren(h("a", { class: "btn wide", href: "#/" }, "Home"), themeToggle());
+  }
   if (!state.live && state.statusErr) {
     kids.push(h("span", { class: "status-pill bad" }, h("span", { class: "dot bad" }), "server unreachable"));
   }
@@ -746,6 +778,7 @@ function renderTop() {
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
     if (job.environment && ENVIRONMENTS[job.environment]) kids.push(h("span", { class: "status-pill", title: "Where this run's attempts execute" }, ENVIRONMENTS[job.environment]));
     kids.push(syncPill(job.sync));
+    if (TRIAL) kids.push(h("a", { class: "btn wide", href: "#/" }, "Home"), shareButton());
     if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
@@ -761,7 +794,7 @@ function renderTop() {
     }
   } else if (current.view !== "new") {
     text = current.job;
-  } else {
+  } else if (!TRIAL) {
     if (state.status) {
       kids.push(statusDot("docker", state.status.docker), statusDot("harbor", state.status.harbor));
       if (state.jobs) kids.push(h("span", { class: "wide" }, `${state.jobs.length} run${state.jobs.length === 1 ? "" : "s"} saved`));
@@ -771,7 +804,7 @@ function renderTop() {
   kids.push(themeToggle());
 
   // Antigravity symmetrical right-hand Auxiliary Pane toggle icon on #/new and #/jobs/<id>
-  if (current.view === "new" || current.view === "runs") {
+  if ((current.view === "new" && !TRIAL) || current.view === "runs") {
     kids.push(h("button", {
       id: "aux-toggle",
       type: "button",
@@ -918,6 +951,7 @@ function makeResizeSash(side) {
 function renderNav() {
   const nav = document.getElementById("nav");
   const kids = STATIC ? [] : [h("a", { href: "#/new" }, h("span", {}, "+ New benchmark run"), h("span", { class: "dim m" }, "#/new"))];
+  if (TRIAL) kids.unshift(h("a", { href: "#/" }, h("span", {}, "Home")));
   if (current.job) {
     const enc = encodeURIComponent(current.job);
     kids.push(h("a", { href: `#/jobs/${enc}` }, "Matrix & Step Inspector", h("span", { class: "dim m" }, current.job)));
@@ -1008,7 +1042,7 @@ function renderSide() {
 
   const keyOk = hasConfiguredKey();
   const st = state.status;
-  const foot = STATIC ? staticFoot() : h("div", { class: "side-foot" },
+  const foot = STATIC ? staticFoot() : TRIAL ? trialFoot() : h("div", { class: "side-foot" },
     st ? h("div", { class: "side-env-row" },
       h("span", { class: "side-env-items" },
         h("span", { title: st.docker.ok ? `Docker ${st.docker.version}` : st.docker.error },
@@ -1058,9 +1092,9 @@ function renderSide() {
   }
 
   // A task's link opens the new-run form, which a copy doesn't have.
-  if (!STATIC) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
+  if (!STATIC && !TRIAL) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  const tasksShut = STATIC || state.folded.has("tasks");
+  const tasksShut = STATIC || TRIAL || state.folded.has("tasks");
   if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
   // Incidents first, then features; each task names the benchmark it came from.
   const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
@@ -1666,7 +1700,8 @@ function renderAll() {
 
 export function renderView() {
   const view = document.getElementById("view");
-  if (current.view === "new") return renderNew(view);
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) return renderTrialView(view, current.view);
+  if (current.view === "new") return TRIAL ? renderTrialNew(view) : renderNew(view);
   if (state.jobErr) {
     const msg = state.jobErr === "notfound"
       ? STATIC
@@ -3182,7 +3217,7 @@ function openInOpenCode(t, job) {
 }
 
 function runControl(job) {
-  if (job.resumable) {
+  if (job.resumable && !TRIAL) {
     const warning = state.status && state.status.jobs_warning;
     return h("span", { class: "note" },
       h("button", { type: "button", class: "btn blue", disabled: !!warning, onclick: () => jobAction("resume") }, "Resume run"),
@@ -3191,6 +3226,7 @@ function runControl(job) {
   }
   if (job.status === "pausing") return h("span", { class: "note" }, "Pausing: Harbor is cancelling the attempts in progress.");
   if (job.status !== "running") return null;
+  if (!job.stoppable && TRIAL) return null;
   if (!job.stoppable) {
     return h("span", { class: "note" },
       h("button", { type: "button", class: "btn", disabled: true }, "Pause run"), " ",
@@ -3201,7 +3237,7 @@ function runControl(job) {
   const ask = (what) => { state.confirm = what; renderView(); document.getElementById("confirm-yes").focus(); };
   if (state.confirm !== "pause" && state.confirm !== "stop") {
     return [
-      h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
+      TRIAL ? null : h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
       h("button", { type: "button", class: "btn", onclick: () => ask("stop") }, "Stop run…"),
       state.actionErr ? h("span", { class: "bad" }, " ", state.actionErr) : null,
     ];
@@ -3225,7 +3261,7 @@ function runControl(job) {
 
 // retryControl offers to run a failed attempt again once its run has ended.
 function retryControl(t, job) {
-  if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
+  if (TRIAL || !job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
   if (state.confirm !== `retry:${t.id}`) {
     return h("button", { type: "button", class: "btn", onclick: () => {
       state.confirm = `retry:${t.id}`;
@@ -3519,10 +3555,12 @@ window.addEventListener("hashchange", onRoute);
 // A copy has no server: no status, settings or live events, and its runs
 // don't change.
 if (!STATIC) {
-  loadStatus();
-  loadSettings();
+  if (!TRIAL) {
+    loadStatus();
+    loadSettings();
+    setInterval(loadStatus, 15000);
+  }
   connectEvents();
-  setInterval(loadStatus, 15000);
 }
 loadTasks();
 loadJobs();
@@ -3530,3 +3568,21 @@ enterView(() => {
   renderAll();
   if (current.job) return refreshJob();
 });
+
+// The trial's "Copy share link" on a run's page.
+function shareButton() {
+  const b = h("button", { type: "button", class: "btn", title: "Copy a link to this run", onclick: async () => {
+    try { await navigator.clipboard.writeText(location.href); b.textContent = "Link copied"; } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = "Copy share link"; }, 1800);
+  } }, "Copy share link");
+  return b;
+}
+
+// trialFoot is the sidebar's foot in the trial: the keys' state, in place of
+// the machine's status and Settings.
+function trialFoot() {
+  const s = trial.session || {};
+  return h("div", { class: "side-foot side-static" },
+    h("span", {}, s.has_keys ? "Your keys are held for this session." : s.invite ? "Invite accepted." : "No keys yet."),
+    h("a", { href: trialReady() ? "#/new" : "#/" }, trialReady() ? "Start another run" : "Set up a trial"));
+}

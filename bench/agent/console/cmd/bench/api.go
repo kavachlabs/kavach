@@ -114,13 +114,16 @@ func findRoot() (string, error) {
 	}
 }
 
-// serve serves h on 127.0.0.1:port until SIGINT or SIGTERM, calling ready,
-// if set, with the server's URL once it listens. It never binds another
-// address: the API starts paid runs.
-func serve(h http.Handler, port int, stderr io.Writer, ready func(url string)) error {
+// loopbackAddr is 127.0.0.1:port.
+func loopbackAddr(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
+
+// serve serves h on addr until SIGINT or SIGTERM, calling ready, if set,
+// with the server's URL once it listens. Callers bind 127.0.0.1 unless the
+// server is a trial: the API starts paid runs.
+func serve(h http.Handler, addr string, stderr io.Writer, ready func(url string)) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -154,7 +157,30 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var o options
 	o.register(fs)
+	trial := fs.Bool("trial", false, "serve a public trial: visitors run with their own keys (see API.md, Trial mode)")
+	addr := fs.String("addr", "", "address to listen on (default 127.0.0.1:<port>); beyond loopback only with -trial")
+	origin := fs.String("origin", "", "with -trial: the public origin writes may come from, e.g. https://try.kavachlabs.dev")
+	trustCF := fs.Bool("trust-cf", false, "with -trial: take a client's address from CF-Connecting-IP")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	listen := *addr
+	if listen == "" {
+		listen = loopbackAddr(o.port)
+	}
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		fmt.Fprintf(stderr, "bench api: -addr: %v\n", err)
+		return 2
+	}
+	ip := net.ParseIP(host)
+	local := host == "localhost" || (ip != nil && ip.IsLoopback())
+	switch {
+	case !*trial && !local:
+		fmt.Fprintln(stderr, "bench api: -addr beyond loopback needs -trial: the API starts paid runs")
+		return 2
+	case *trial && *trustCF && !local:
+		fmt.Fprintln(stderr, "bench api: -trust-cf needs a loopback -addr: behind a tunnel on this machine, the header can be forged by anyone who reaches the port")
 		return 2
 	}
 	cfg, err := o.config()
@@ -162,8 +188,12 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)
 		return 2
 	}
+	if *trial {
+		cfg.Trial = api.TrialFromEnv(os.Getenv)
+		cfg.Trial.Origin, cfg.Trial.TrustCF = *origin, *trustCF
+	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
-	if err := serve(syncingServer(cfg), o.port, stderr, nil); err != nil {
+	if err := serve(syncingServer(cfg), listen, stderr, nil); err != nil {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)
 		return 1
 	}

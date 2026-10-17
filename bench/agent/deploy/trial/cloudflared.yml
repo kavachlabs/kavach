@@ -1,0 +1,9 @@
+# /etc/cloudflared/config.yml: try.kavachlabs.dev → the console on loopback.
+# Create the tunnel with `cloudflared tunnel create kavach-trial`, then
+# `cloudflared tunnel route dns kavach-trial try.kavachlabs.dev`.
+tunnel: kavach-trial
+credentials-file: /etc/cloudflared/kavach-trial.json
+ingress:
+  - hostname: try.kavachlabs.dev
+    service: http://127.0.0.1:8480
+  - service: http_status:404

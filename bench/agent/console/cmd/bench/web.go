@@ -44,7 +44,7 @@ func cmdWeb(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
-	err = serve(syncingServer(cfg), o.port, stderr, func(url string) { launch(url, stdout, stderr) })
+	err = serve(syncingServer(cfg), loopbackAddr(o.port), stderr, func(url string) { launch(url, stdout, stderr) })
 	if err != nil {
 		fmt.Fprintf(stderr, "bench web: %v\n", err)
 		return 1

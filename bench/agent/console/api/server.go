@@ -38,6 +38,8 @@ type Config struct {
 	// of a trial; without them it shows the patches.
 	Docker   harbor.Docker
 	CacheDir string
+	// Trial, when set, makes the server a public trial; see trial.go.
+	Trial *TrialConfig
 }
 
 // Server is the API's http.Handler.
@@ -49,6 +51,7 @@ type Server struct {
 	models *modelList
 	events *hub
 	mux    *http.ServeMux
+	trial  *trial // nil unless Config.Trial is set
 
 	statusMu   sync.Mutex
 	status     Status
@@ -63,6 +66,10 @@ func New(cfg Config) *Server {
 	if cfg.ModelsURL == "" {
 		cfg.ModelsURL = openRouterModels
 	}
+	if cfg.Trial != nil {
+		// Reading real source files starts containers for any visitor.
+		cfg.Docker = nil
+	}
 	runner := &harbor.Runner{Harbor: cfg.Harbor, JobsDir: cfg.JobsDir, TasksDir: cfg.TasksDir, EnvFile: cfg.EnvFile, Root: cfg.Root}
 	reader := &harbor.Reader{Dir: cfg.JobsDir, Runs: runner, Docker: cfg.Docker, CacheDir: cfg.CacheDir}
 	syncer := &harbor.Syncer{Runner: runner, Reader: reader}
@@ -75,6 +82,12 @@ func New(cfg Config) *Server {
 		models: &modelList{url: cfg.ModelsURL, client: &http.Client{Timeout: 20 * time.Second}},
 		events: &hub{reader: reader, interval: time.Second},
 		mux:    http.NewServeMux(),
+	}
+	if cfg.Trial != nil {
+		s.trial = newTrial(*cfg.Trial, runner, cfg.JobsDir, cfg.TasksDir)
+		s.events.visible = s.trial.visible
+		s.trialRoutes()
+		return s
 	}
 	s.mux.HandleFunc("GET /api/status", s.getStatus)
 	s.mux.HandleFunc("GET /api/settings", s.getSettings)
@@ -120,6 +133,10 @@ func (s *Server) StartSync() { s.syncer.StartSweeps() }
 // money: requests must name a loopback host (against DNS rebinding), and
 // writes from a browser must come from the same origin.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.trial != nil {
+		s.trial.serve(s, w, r)
+		return
+	}
 	if !loopback(r.Host) {
 		writeError(w, http.StatusForbidden, "host %q is not a loopback address", r.Host)
 		return
@@ -329,11 +346,11 @@ func (s *Server) getJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
-	s.writeJob(w, http.StatusOK, r.PathValue("id"))
+	s.writeJob(w, r, http.StatusOK, r.PathValue("id"))
 }
 
 // writeJob writes a job with its trials.
-func (s *Server) writeJob(w http.ResponseWriter, code int, id string) {
+func (s *Server) writeJob(w http.ResponseWriter, r *http.Request, code int, id string) {
 	j, err := s.reader.Job(id)
 	if err != nil {
 		writeReadError(w, err)
@@ -344,6 +361,12 @@ func (s *Server) writeJob(w http.ResponseWriter, code int, id string) {
 	type withTrials struct {
 		harbor.Job
 		Trials []harbor.Trial `json:"trials"`
+	}
+	if s.trial != nil {
+		s.trial.shape(&j, s.trial.owns(r, id))
+		for i := range j.Trials {
+			s.trial.shapeTrial(&j.Trials[i])
+		}
 	}
 	out := withTrials{j, j.Trials}
 	if out.Trials == nil {
@@ -509,7 +532,7 @@ func (s *Server) postJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "starting harbor: %v", err)
 		return
 	}
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func (s *Server) stopJob(w http.ResponseWriter, r *http.Request) {
@@ -518,7 +541,7 @@ func (s *Server) stopJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "%s: %v", id, err)
 		return
 	}
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func (s *Server) syncJob(w http.ResponseWriter, r *http.Request) {
@@ -539,7 +562,7 @@ func (s *Server) syncJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.syncer.Queue(id)
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func (s *Server) pauseJob(w http.ResponseWriter, r *http.Request) {
@@ -548,7 +571,7 @@ func (s *Server) pauseJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "%s: %v", id, err)
 		return
 	}
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func (s *Server) resumeJob(w http.ResponseWriter, r *http.Request) {
@@ -562,7 +585,7 @@ func (s *Server) resumeJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "resuming harbor: %v", err)
 		return
 	}
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func (s *Server) retryTrial(w http.ResponseWriter, r *http.Request) {
@@ -579,7 +602,7 @@ func (s *Server) retryTrial(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "retrying %s: %v", trial, err)
 		return
 	}
-	s.writeJob(w, http.StatusAccepted, id)
+	s.writeJob(w, r, http.StatusAccepted, id)
 }
 
 func writeReadError(w http.ResponseWriter, err error) {
