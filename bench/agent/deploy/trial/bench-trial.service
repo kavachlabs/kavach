@@ -1,0 +1,22 @@
+# The public trial console, behind cloudflared on loopback (see README.md).
+[Unit]
+Description=Kavach bench trial console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=kavach
+WorkingDirectory=/opt/kavach/bench/agent
+EnvironmentFile=/etc/kavach/trial.env
+Environment=PATH=/home/kavach/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/kavach/bin/bench api -trial -port 8480 -root /opt/kavach -jobs /var/lib/kavach/jobs -origin https://try.kavachlabs.dev -trust-cf
+# Runs are detached from the console: a restart leaves them running.
+KillMode=process
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kavach /home/kavach
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
