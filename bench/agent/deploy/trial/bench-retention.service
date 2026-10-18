@@ -1,5 +1,5 @@
-# Deletes trial runs older than RETENTION_DAYS (default 30), except showcase
-# runs and runs in progress (retention.sh). Started by bench-retention.timer.
+# Deletes trial runs older than 30 days, except showcase runs and runs in
+# progress (retention.sh). Started by bench-retention.timer.
 [Unit]
 Description=Kavach trial run retention
 After=local-fs.target
@@ -8,13 +8,18 @@ After=local-fs.target
 Type=oneshot
 User=kavach
 Group=kavach
-# For TRIAL_SHOWCASE (and RETENTION_DAYS if set); systemd reads it as root.
-EnvironmentFile=-/etc/kavach/trial.env
+# trial.env holds every secret and is root's, so it is not loaded here: root
+# copies out only TRIAL_SHOWCASE (the + runs this line without User= and the
+# sandbox) into a file in root's /run, which the script reads.
+# trial.json (root:kavach 0640) the script reads itself.
+ExecStartPre=+/bin/sh -c 'umask 022; f=/run/bench-retention.showcase; if [ -e /etc/kavach/trial.env ]; then sed -n "s/^[[:space:]]*TRIAL_SHOWCASE=//p" /etc/kavach/trial.env >"$$f.new" && mv -f "$$f.new" "$$f"; else : >"$$f"; fi'
+Environment=TRIAL_SHOWCASE_FILE=/run/bench-retention.showcase
 ExecStart=/bin/sh /opt/kavach/bench/agent/deploy/trial/retention.sh --jobs /var/lib/kavach/jobs
+ExecStopPost=+/bin/rm -f /run/bench-retention.showcase
 Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/kavach
+ReadWritePaths=/var/lib/kavach/jobs
 PrivateTmp=true
