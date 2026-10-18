@@ -10,12 +10,14 @@ The console listens on 127.0.0.1 only and cloudflared reaches it there. Its
 client addresses come from `CF-Connecting-IP`, which it believes only from
 loopback (`-trust-cf`); the VM needs no open port but SSH.
 
+Running it day to day (reboots, retention, monitoring, spend caps, incidents): [OPERATIONS.md](OPERATIONS.md).
+
 ## Set up
 
 1. On the VM, as root: `sh setup.sh <git ref>` (from a checkout, or fetch
    the script first). It installs Harbor with its Daytona and Modal extras
    for the `kavach` user, cloudflared, the repository at `/opt/kavach`, and
-   the systemd unit.
+   the systemd units, and hardens the VM (`harden.sh`).
 2. Build bench for the VM and copy it over:
 
    ```sh
