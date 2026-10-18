@@ -1,0 +1,20 @@
+# Deletes trial runs older than RETENTION_DAYS (default 30), except showcase
+# runs and runs in progress (retention.sh). Started by bench-retention.timer.
+[Unit]
+Description=Kavach trial run retention
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=kavach
+Group=kavach
+# For TRIAL_SHOWCASE (and RETENTION_DAYS if set); systemd reads it as root.
+EnvironmentFile=-/etc/kavach/trial.env
+ExecStart=/bin/sh /opt/kavach/bench/agent/deploy/trial/retention.sh --jobs /var/lib/kavach/jobs
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kavach
+PrivateTmp=true
