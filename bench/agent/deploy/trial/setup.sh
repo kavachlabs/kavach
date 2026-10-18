@@ -6,6 +6,9 @@
 # /etc/kavach/trial.env and start the services. It is safe to run again.
 set -eu
 REF=${1:-main}
+# needrestart only lists services to restart: an install on a running trial
+# must not restart bench-trial or cloudflared.
+export NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive
 HARBOR_VERSION=0.24.0
 
 apt-get update
@@ -18,7 +21,7 @@ if [ ! -d /opt/kavach/.git ]; then
 fi
 git -C /opt/kavach fetch origin "$REF"
 git -C /opt/kavach checkout --detach FETCH_HEAD
-mkdir -p /opt/kavach/bin /var/lib/kavach/jobs /etc/kavach
+mkdir -p /opt/kavach/bin /var/lib/kavach/jobs/.bench /etc/kavach
 chown -R kavach:kavach /var/lib/kavach
 
 # Harbor, with the remote sandbox providers, for the kavach user.

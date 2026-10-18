@@ -11,6 +11,9 @@ step() { printf '\n==> %s\n' "$*"; }
 
 [ "$(id -u)" -eq 0 ] || { echo "harden.sh: run as root" >&2; exit 1; }
 export DEBIAN_FRONTEND=noninteractive
+# needrestart only lists services to restart, so an install never restarts
+# bench-trial or cloudflared (runs and sessions would go with them).
+export NEEDRESTART_MODE=l
 
 step "Installing unattended-upgrades and fail2ban"
 apt-get update -q
@@ -42,6 +45,7 @@ cat >/etc/fail2ban/jail.d/kavach-sshd.local <<'EOF'
 [sshd]
 enabled = true
 backend = systemd
+ignoreip = 127.0.0.1/8 ::1
 maxretry = 5
 findtime = 10m
 bantime = 1h
@@ -101,5 +105,9 @@ cat <<'EOF'
 ==> Done. Before closing this session, open a NEW terminal and check that
     `ssh root@<vm>` still logs in with your key. If it does not, fix it
     from this session (rm /etc/ssh/sshd_config.d/00-kavach-hardening.conf,
-    then systemctl reload ssh).
+    then systemctl reload ssh). Locked out with no session left: Hetzner
+    Cloud Console -> the server -> Console (>_) is a terminal that needs
+    no SSH. It logs in with root's password; a server made with an SSH key
+    has none, so set one first under Rescue -> Reset root password. There,
+    fail2ban-client set sshd unbanip <ip> lifts a ban.
 EOF
