@@ -1,0 +1,25 @@
+{
+  "name": "kavach-skills",
+  "version": "0.1.0",
+  "description": "Agent skills for deterministic crash replay, 56-variant fix verification, contract-first feature implementation, and invariant mutation testing with Kavach.",
+  "author": {
+    "name": "Kavach Labs",
+    "url": "https://www.thekavachlabs.com"
+  },
+  "homepage": "https://www.thekavachlabs.com",
+  "repository": "https://github.com/kavachlabs/kavach",
+  "license": "Apache-2.0",
+  "keywords": [
+    "kavach",
+    "replay",
+    "verification",
+    "deterministic-simulation-testing",
+    "property-based-testing",
+    "contracts",
+    "invariants",
+    "mcp",
+    "coding-agents"
+  ],
+  "skills": "./skills",
+  "commands": "./commands"
+}

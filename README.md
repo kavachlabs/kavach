@@ -30,15 +30,16 @@ Kavach records every input, clock read, and random read a service makes. When a 
 
 ## Install
 
-Install prebuilt `kavach` and `kavach-recorder` binaries on Linux or macOS (`amd64` / `arm64`), with no Go toolchain required:
+Install prebuilt `kavach` and `kavach-recorder` binaries **plus all four Kavach agent skills** on Linux or macOS (`amd64` / `arm64`) in a single command (no Go toolchain required):
 
 ```bash
 curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 ```
 
-Or build from source with Go 1.24+:
+Or install only the agent skills via `npx skills`, or build the CLI from source with Go 1.24+:
 
 ```bash
+npx skills add kavachlabs/kavach
 go install github.com/kavachlabs/kavach/cmd/kavach@latest
 go install github.com/kavachlabs/kavach/cmd/kavach-recorder@latest
 ```
@@ -104,19 +105,25 @@ only, not of the SDK.
 ## With an AI agent
 
 `kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server with five tools, `kavach_list_incidents`, `kavach_replay`,
-`kavach_diff`, `kavach_contract_show` and `kavach_contract_check`, returning
+server with five tools (`kavach_list_incidents`, `kavach_replay`,
+`kavach_diff`, `kavach_contract_show`, and `kavach_contract_check`) returning
 the same verdicts as the CLI as structured JSON:
 
 ```bash
 claude mcp add kavach -- kavach mcp
+npx skills add kavachlabs/kavach
 ```
 
-[AGENTS.md](AGENTS.md) is the loop an agent should follow. For new features,
-[`/kavach-implement`](commands/kavach-implement.md) is an agent command that
-works contract-first: the agent records traffic on the current build, writes
-invariants from the spec, and asks a person to approve the contract. It then
-implements until `kavach contract check` passes.
+Kavach ships with four [Agent Skills](skills/README.md) (installed automatically by `install.sh` or `npx skills add kavachlabs/kavach`):
+
+| Skill | What it teaches your agent |
+| --- | --- |
+| [`/kavach-fix`](skills/kavach-fix/SKILL.md) | Reproduce a `.kavach` crash fixture and generalize the fix until `kavach diff` returns `fixed` across all incident and regression variants. |
+| [`/kavach-implement`](skills/kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline traffic, declare spec invariants, stop for human `kavach contract approve`, and iterate until `pass`. |
+| [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Instrument a handler or build a `kavach-host` harness in any of the 12 language SDKs. |
+| [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Discover domain invariants and mutation-test each one in milliseconds with `kavach replay` and `kavach diff`. |
+
+See [AGENTS.md](AGENTS.md) for the complete verdict loop and rules.
 
 ## Using it in a service
 

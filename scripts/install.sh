@@ -1,19 +1,34 @@
 #!/bin/sh
-# Installs kavach and kavach-recorder on Linux or macOS (amd64 / arm64).
+# Installs kavach, kavach-recorder, and the Kavach Agent Skills on Linux or macOS (amd64 / arm64).
 #
 # Usage:
 #   curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/kavachlabs/kavach/main/scripts/install.sh | sh
 #
+# Flags:
+#   --skills-only       Install only the agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants)
+#   --no-skills         Install only the kavach and kavach-recorder binaries
+#
 # Environment variables:
-#   KAVACH_INSTALL_DIR  Destination directory (default: /usr/local/bin if writable, else ~/.local/bin)
-#   KAVACH_VERSION      Release tag to install, e.g. v0.1.0 (default: latest release)
-#   KAVACH_FROM_SOURCE  If set to 1, install via 'go install' instead of downloading binaries
+#   KAVACH_INSTALL_DIR  Binary destination directory (default: /usr/local/bin if writable, else ~/.local/bin)
+#   KAVACH_SKILLS_DIR   Explicit skills destination directory (default: ~/.claude/skills, plus ~/.codex/skills if present)
+#   KAVACH_SKIP_SKILLS  If set to 1, skip installing agent skills
+#   KAVACH_VERSION      Release tag to install, e.g. v0.1.1 (default: latest release)
+#   KAVACH_FROM_SOURCE  If set to 1, install binaries via 'go install' instead of downloading release archives
 #   KAVACH_ARCHIVE_DIR  Local directory containing release tarballs and SHA256SUMS (for offline/CI tests)
 
 set -eu
 
 REPO="kavachlabs/kavach"
+SKILLS_ONLY=0
+SKIP_SKILLS="${KAVACH_SKIP_SKILLS:-0}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --skills-only) SKILLS_ONLY=1 ;;
+    --no-skills)   SKIP_SKILLS=1 ;;
+  esac
+done
 
 say() {
   printf 'kavach-install: %s\n' "$*" >&2
@@ -99,7 +114,77 @@ install_from_source() {
   GOBIN="$dest" go install "github.com/${REPO}/cmd/kavach-recorder@${ref}"
 }
 
+copy_skills_to() {
+  src_skills="$1"
+  target_dir="$2"
+  mkdir -p "$target_dir"
+  for skill_path in "${src_skills}"/kavach-*; do
+    if [ -d "$skill_path" ] && [ -f "${skill_path}/SKILL.md" ]; then
+      skill_name="$(basename "$skill_path")"
+      rm -rf "${target_dir}/${skill_name}"
+      cp -R "$skill_path" "${target_dir}/${skill_name}"
+    fi
+  done
+  say "installed agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants) to ${target_dir}"
+}
+
+install_skills() {
+  tmp="$1"
+  src_skills="${tmp}/skills"
+
+  if [ ! -d "$src_skills" ]; then
+    say "fetching agent skills from ${REPO}..."
+    if fetch "https://codeload.github.com/${REPO}/tar.gz/refs/heads/main" "${tmp}/repo.tar.gz"; then
+      mkdir -p "${tmp}/repo"
+      tar -xzf "${tmp}/repo.tar.gz" -C "${tmp}/repo" --strip-components=1
+      src_skills="${tmp}/repo/skills"
+    fi
+  fi
+
+  if [ ! -d "$src_skills" ]; then
+    say "warning: agent skills directory not found; skipping skills install"
+    return 0
+  fi
+
+  if [ -n "${KAVACH_SKILLS_DIR:-}" ]; then
+    copy_skills_to "$src_skills" "$KAVACH_SKILLS_DIR"
+    return 0
+  fi
+
+  installed_any=0
+  claude_home="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+  codex_home="${CODEX_HOME:-${HOME}/.codex}"
+  opencode_home="${HOME}/.config/opencode"
+
+  if [ -d "$claude_home" ] || command -v claude >/dev/null 2>&1; then
+    copy_skills_to "$src_skills" "${claude_home}/skills"
+    installed_any=1
+  fi
+
+  if [ -d "$codex_home" ] || command -v codex >/dev/null 2>&1; then
+    copy_skills_to "$src_skills" "${codex_home}/skills"
+    installed_any=1
+  fi
+
+  if [ -d "$opencode_home" ] || command -v opencode >/dev/null 2>&1; then
+    copy_skills_to "$src_skills" "${opencode_home}/skills"
+    installed_any=1
+  fi
+
+  if [ "$installed_any" = "0" ]; then
+    copy_skills_to "$src_skills" "${claude_home}/skills"
+  fi
+}
+
 main() {
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT INT TERM
+
+  if [ "$SKILLS_ONLY" = "1" ]; then
+    install_skills "$tmp"
+    return 0
+  fi
+
   dest="$(choose_install_dir)"
   mkdir -p "$dest"
 
@@ -108,8 +193,6 @@ main() {
   else
     os="$(detect_os)"
     arch="$(detect_arch)"
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT INT TERM
 
     if [ -n "${KAVACH_ARCHIVE_DIR:-}" ]; then
       tag="${KAVACH_VERSION:-v0.1.0-dev}"
@@ -152,6 +235,11 @@ main() {
   fi
 
   say "installed kavach and kavach-recorder to ${dest}"
+
+  if [ "$SKIP_SKILLS" != "1" ]; then
+    install_skills "$tmp"
+  fi
+
   case ":${PATH}:" in
     *":${dest}:"*) ;;
     *)
