@@ -265,6 +265,62 @@ class AgentChecks(unittest.TestCase):
             opencode_live.check_modal_runtime(env(EnvironmentType.MODAL))
 
 
+@unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
+class PullBeforeUp(unittest.TestCase):
+    def strategy(self, signature_ok=True):
+        from types import SimpleNamespace
+
+        calls = []
+
+        class Strategy:
+            _env = SimpleNamespace(task_env_config=SimpleNamespace(build_timeout_sec=1800.0))
+
+            async def _compose_exec(self, subcommand, timeout_sec=None):
+                calls.append((subcommand, timeout_sec))
+                return "result"
+
+        if not signature_ok:
+            async def other(self, subcommand):
+                return None
+
+            Strategy._compose_exec = other
+        return Strategy, calls
+
+    def test_pulls_under_the_build_timeout_before_up(self):
+        strategy, calls = self.strategy()
+        self.assertTrue(opencode_live.pull_before_up(strategy))
+        for sub, timeout in ([["build"], 1800], [["up", "-d"], 120], [["down"], 30]):
+            self.assertEqual(asyncio.run(strategy()._compose_exec(sub, timeout)), "result")
+        self.assertEqual(
+            calls,
+            [(["build"], 1800), (["pull", "--ignore-buildable"], 1800), (["up", "-d"], 120), (["down"], 30)],
+        )
+
+    def test_applies_once(self):
+        strategy, calls = self.strategy()
+        self.assertTrue(opencode_live.pull_before_up(strategy))
+        with self.assertNoLogs("opencode_live", "INFO"):
+            self.assertTrue(opencode_live.pull_before_up(strategy))
+        asyncio.run(strategy()._compose_exec(["up", "-d"], 120))
+        self.assertEqual(len(calls), 2)
+
+    def test_logs_when_applied(self):
+        strategy, _ = self.strategy()
+        with self.assertLogs("opencode_live", "INFO") as logs:
+            opencode_live.pull_before_up(strategy)
+        self.assertIn("pull", logs.output[0])
+
+    def test_does_nothing_if_the_method_changed(self):
+        strategy, calls = self.strategy(signature_ok=False)
+        before = strategy._compose_exec
+        self.assertFalse(opencode_live.pull_before_up(strategy))
+        self.assertIs(strategy._compose_exec, before)
+
+    def test_does_nothing_on_another_harbor(self):
+        with mock.patch("importlib.metadata.version", return_value="0.25.0"):
+            self.assertFalse(opencode_live.pull_before_up())
+
+
 class Upstream(BaseHTTPRequestHandler):
     seen = []
 

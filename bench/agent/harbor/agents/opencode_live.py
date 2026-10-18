@@ -29,7 +29,10 @@ import asyncio
 import contextlib
 import copy
 import ipaddress
+import importlib.metadata
+import inspect
 import json
+import logging
 import os
 import shlex
 import socket
@@ -139,6 +142,45 @@ def gateway_candidates(routes: str, exclude: set[str] = frozenset()) -> list[str
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def pull_before_up(strategy: type | None = None) -> bool:
+    """Harbor 0.24's Daytona DinD strategy runs `docker compose up -d` with a
+    120 s limit, and the image pull happens inside it, so a large prebuilt image
+    dies mid-extract. Run `docker compose pull` first, under the task's
+    build_timeout_sec. Modal's strategy already gives `up` that limit.
+    Returns whether the patch is in place; does nothing on another Harbor or if
+    the method is not what it was in 0.24.0."""
+    if strategy is None:
+        try:
+            if not importlib.metadata.version("harbor").startswith("0.24."):
+                return False
+            from harbor.environments.daytona.environment import _DaytonaDinD as strategy
+        except (ImportError, importlib.metadata.PackageNotFoundError):
+            return False
+    original = getattr(strategy, "_compose_exec", None)
+    if getattr(original, "_kavach_pulls", False):
+        return True
+    if not inspect.iscoroutinefunction(original) or list(inspect.signature(original).parameters) != [
+        "self", "subcommand", "timeout_sec"
+    ]:
+        return False
+
+    async def compose_exec(self, subcommand, timeout_sec=None):
+        if subcommand == ["up", "-d"] and timeout_sec == 120:
+            # A failed pull is left to `up`, which reports it.
+            await original(
+                self, ["pull", "--ignore-buildable"], round(self._env.task_env_config.build_timeout_sec)
+            )
+        return await original(self, subcommand, timeout_sec)
+
+    compose_exec._kavach_pulls = True
+    strategy._compose_exec = compose_exec
+    logging.getLogger(__name__).info("docker compose pull runs before up on Daytona, under build_timeout_sec")
+    return True
+
+
+pull_before_up()
 
 
 class KavachOpenCode(OpenCode):

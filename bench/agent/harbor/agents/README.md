@@ -269,6 +269,12 @@ the same thing on every provider (Harbor 0.24.0, `harbor/environments`):
   task's file (`daytona/environment.py` 552, `modal.py` 589,
   `vercel/compose.py` ~409), which cuts `main` off from the proxy as well and
   cannot be combined with `networks:`.
+- Harbor 0.24's Daytona strategy runs `docker compose up -d` with a 120 s limit
+  (`daytona/environment.py` 773), and the image pull happens inside it, so a
+  large prebuilt image dies mid-extract. `opencode_live.pull_before_up` runs
+  `docker compose pull --ignore-buildable` first under `build_timeout_sec`; it
+  applies only on Harbor 0.24.x with `_DaytonaDinD._compose_exec` as it is
+  there. Modal's strategy already gives `up` that limit.
 
 So the task's Compose file does the sealing, with the same Compose features
 everywhere: `main` is only on `sealed`, an `internal: true` network with no
