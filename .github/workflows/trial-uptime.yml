@@ -1,14 +1,16 @@
 name: trial-uptime
 
-# Probes the public trial every 15 minutes. While it is down, one open issue
-# labelled trial-down collects a comment per failed probe; the first good
-# probe closes it. Scheduled workflows run only from the default branch.
+# Probes the public trial every 15 minutes. Two failed probes in a row open
+# an issue labelled trial-down; while it stays down the issue gets a comment
+# at most every 6 hours; the first good probe closes it. Scheduled workflows
+# run only from the default branch.
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
+  actions: read # the previous run's result
   contents: read
   issues: write
 
@@ -25,11 +27,14 @@ jobs:
       GH_REPO: ${{ github.repository }}
       URL: https://try.kavachlabs.dev/api/trial/session
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # The step whose failure marks a run as "trial down"; the next run
+      # looks it up by this name.
+      DOWN_STEP: Fail when the trial is down
     steps:
       - name: Probe the trial
         id: probe
         run: |
-          # Three tries, 20 s apart, so one dropped request is not an outage.
+          # Three tries, 20 s apart, so one dropped request is not a failure.
           ok=false
           for i in 1 2 3; do
             code=$(curl -sS -o body.json -w '%{http_code}' --max-time 20 -H 'Accept: application/json' "$URL" 2>curl.err) || code=000
@@ -42,13 +47,7 @@ jobs:
             [ "$i" = 3 ] || sleep 20
           done
           echo "ok=$ok" >>"$GITHUB_OUTPUT"
-          if [ "$ok" = false ]; then
-            {
-              echo 'detail<<EOF'
-              echo "$detail"
-              echo 'EOF'
-            } >>"$GITHUB_OUTPUT"
-          fi
+          [ "$ok" = true ] || printf '%s\n' "$detail" >detail.txt
 
       - name: Close the trial-down issue
         if: steps.probe.outputs.ok == 'true'
@@ -57,19 +56,38 @@ jobs:
             gh issue close "$n" --comment "Back up at $(date -u '+%Y-%m-%d %H:%M UTC'): $URL answered 200 with limits ($RUN_URL)."
           done
 
-      - name: Open or comment on the trial-down issue
+      - name: Open or update the trial-down issue
         if: steps.probe.outputs.ok != 'true'
-        env:
-          DETAIL: ${{ steps.probe.outputs.detail }}
         run: |
-          gh label create trial-down --color B60205 --description "try.kavachlabs.dev failed its uptime probe" 2>/dev/null || true
           now=$(date -u '+%Y-%m-%d %H:%M UTC')
-          fence='```'
-          body=$(printf '%s: GET %s failed three times.\n\n%s\n%s\n%s\n\n%s\n\nRunbook: bench/agent/deploy/trial/OPERATIONS.md (Incidents).' "$now" "$URL" "$fence" "$DETAIL" "$fence" "$RUN_URL")
+          # Indented, so the response shows as code whatever it contains.
+          body=$(printf '%s: GET %s failed three times.\n\n%s\n\n%s\n\nRunbook: bench/agent/deploy/trial/OPERATIONS.md (Incidents).' \
+            "$now" "$URL" "$(sed 's/^/    /' detail.txt)" "$RUN_URL")
           n=$(gh issue list --label trial-down --state open --json number --jq '.[0].number // empty')
           if [ -n "$n" ]; then
-            gh issue comment "$n" --body "$body"
-          else
-            gh issue create --title "try.kavachlabs.dev is down" --label trial-down --body "$body"
+            # Still down: a comment at most every 6 hours.
+            last=$(gh issue view "$n" --json createdAt,comments --jq '[.createdAt, .comments[].createdAt] | max')
+            if [ $(($(date -u +%s) - $(date -u -d "$last" +%s))) -ge 21600 ]; then
+              gh issue comment "$n" --body "Still down. $body"
+            else
+              echo "issue #$n is open and was updated at $last; not commenting"
+            fi
+            exit 0
           fi
-          exit 1
+          # Open one only if the previous completed run found it down too.
+          prev=$(gh run list --workflow trial-uptime.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          was=
+          if [ -n "$prev" ]; then
+            was=$(gh run view "$prev" --json jobs |
+              jq -r --arg s "$DOWN_STEP" '[.jobs[].steps[]? | select(.name == $s) | .conclusion][0] // empty')
+          fi
+          if [ "$was" != failure ]; then
+            echo "first failed probe (previous run ${prev:-none}: ${was:-not down}); an issue opens if the next probe fails too"
+            exit 0
+          fi
+          gh label create trial-down --color B60205 --description "try.kavachlabs.dev failed its uptime probe" 2>/dev/null || true
+          gh issue create --title "try.kavachlabs.dev is down" --label trial-down --body "$body"
+
+      - name: Fail when the trial is down
+        if: always() && steps.probe.outputs.ok != 'true'
+        run: exit 1
