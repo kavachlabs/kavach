@@ -7,24 +7,41 @@
 
 [![ci](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/ci.yml)
 [![sdk](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml/badge.svg?branch=main)](https://github.com/kavachlabs/kavach/actions/workflows/sdk.yml)
+[![release](https://github.com/kavachlabs/kavach/actions/workflows/release.yml/badge.svg)](https://github.com/kavachlabs/kavach/releases)
 [![codecov](https://codecov.io/gh/kavachlabs/kavach/graph/badge.svg?branch=main)](https://codecov.io/gh/kavachlabs/kavach)
 
-Kavach is an invariant verification and deterministic replay engine for high-throughput, event-driven systems.
+**Replay the crash. Prove the fix.**
 
-It replaces static unit mocks with boundary-level event journaling. When a cross-system invariant is violated, Kavach slices the causal event sequence and reproduces the failure deterministically under a virtual clock in sub-millisecond execution times.
+Kavach records every input, clock read, and random read a service makes. When a step panics, returns an error, or breaks a declared invariant, it flushes a compact `.kavach` fixture that replays byte for byte in microseconds—with no broker, database, or network—and rejects narrow patches that fail across perturbed variants of the incident.
 
-Kavach turns production crashes in journal-driven services, in any language,
-into deterministic tests that AI coding agents can reproduce, fix, and *verify* — by re-deriving
-state from the journal instead of replaying a tape.
+| Metric | Measured | How |
+| --- | --- | --- |
+| Recorder overhead per event (shared-memory ring) | **81.2 ns** | Median of 5 runs ([BENCHMARKS.md](BENCHMARKS.md)) |
+| Full incident replay, in-process | **61.1 µs** | 33 records, 8 steps, 2 invariants/step |
+| Fix verification across 56 variants, in-process | **5.9 ms** | `kavach diff` (`196.4 ms` end-to-end across 105 binary runs) |
+| Narrow single-event fixes rejected | **10 / 10** | Ten planted bugs in [`bench/`](bench), `1,000 / 1,000` byte-identical replays |
 
-**Scope:** deterministic replay and fix verification for single-writer,
-journal-driven services. A service takes part through an SDK, or by speaking
-two small protocols directly ([INTEGRATING.md](INTEGRATING.md)).
+**Scope:** deterministic replay, variant fix verification, and contract-first feature verification for single-writer, journal-driven services in **12 languages** ([sdk](sdk)) or over two small wire protocols ([INTEGRATING.md](INTEGRATING.md)). Explore multi-arm coding agent runs on real open-source incidents at [benchmark.kavachlabs.dev](https://benchmark.kavachlabs.dev).
 
 > **Status: pre-alpha.** The journal format ([SPEC.md](SPEC.md)), the flight
 > recorder, replay and the CLI work on the demo service. APIs and the format
 > will change before 1.0. Every performance number this project publishes is in
 > [BENCHMARKS.md](BENCHMARKS.md) with the command that measured it.
+
+## Install
+
+Install prebuilt `kavach` and `kavach-recorder` binaries on Linux or macOS (`amd64` / `arm64`), with no Go toolchain required:
+
+```bash
+curl -fsSL https://www.thekavachlabs.com/install.sh | sh
+```
+
+Or build from source with Go 1.24+:
+
+```bash
+go install github.com/kavachlabs/kavach/cmd/kavach@latest
+go install github.com/kavachlabs/kavach/cmd/kavach-recorder@latest
+```
 
 ## Try it
 
@@ -46,11 +63,11 @@ two small protocols directly ([INTEGRATING.md](INTEGRATING.md)).
 The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
 The commands below use its Go version; every SDK under [sdk](sdk) has a port
 with the same bug. The CLI and the recorder are written in Go, so building them
-needs Go; your service does not.
+from source needs Go; your service does not.
 
 ```bash
 git clone https://github.com/kavachlabs/kavach && cd kavach
-go install ./cmd/kavach ./cmd/kavach-recorder   # the recorder is a separate process the SDK starts
+go install ./cmd/kavach ./cmd/kavach-recorder   # or use install.sh above
 go build -o ledger-old ./examples/ledger/sdk
 go build -tags ledgerfix -o ledger-new ./examples/ledger/sdk   # the fixed build
 go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger/sdk  # a fix that is too narrow
@@ -164,6 +181,18 @@ shows how to speak them directly.
    hold, on the traffic and on variants of the feature steps. See
    [SPEC.md §6.4](SPEC.md#64-feature-steps-and-contracts).
 
+## In CI (GitHub Actions)
+
+Check `.kavach` fixtures into `testdata/` and run `kavachlabs/kavach` in pull requests to replay regression fixtures or verify a candidate fix across incident variants (writing a verdict table to the workflow summary):
+
+```yaml
+- uses: kavachlabs/kavach@v0.1.0
+  with:
+    fixtures: testdata/*.kavach
+    old: ./service-base
+    new: ./service-pr
+```
+
 ## Not in scope
 
 - Multi-writer or shared-state services. Kavach assumes one writer folds the
@@ -180,6 +209,8 @@ shows how to speak them directly.
 | [INTEGRATING.md](INTEGRATING.md) | Using Kavach from a language with no SDK |
 | [sdk](sdk) | The SDKs, one per language |
 | [commands](commands) | Agent commands: `/kavach-implement` |
+| [action.yml](action.yml) | Composite GitHub Action for `kavach replay` and `kavach diff` in CI |
+| [scripts/install.sh](scripts/install.sh) | Zero-dependency installer for Linux and macOS (`amd64` / `arm64`) |
 | [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
 | [examples/ledger](examples/ledger) | The demo service: [sdk](examples/ledger/sdk) with the Go SDK, [protocol](examples/ledger/protocol) in Julia with no SDK |

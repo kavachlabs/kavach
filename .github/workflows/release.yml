@@ -1,0 +1,91 @@
+name: release
+
+# Builds static kavach and kavach-recorder archives for Linux and macOS (amd64
+# and arm64) with SHA256SUMS, smoke-tests the native build, and publishes a
+# GitHub Release when triggered by a v* tag.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to embed (for manual test runs)'
+        required: false
+        default: '0.1.0-dev'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build multi-arch release archives
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            raw_tag="${GITHUB_REF_NAME}"
+            ver="${raw_tag#v}"
+          else
+            ver="${INPUT_VERSION:-0.1.0-dev}"
+            raw_tag="v${ver#v}"
+          fi
+          echo "VERSION=${ver}" >> "$GITHUB_ENV"
+          echo "TAG=${raw_tag}" >> "$GITHUB_ENV"
+
+          mkdir -p dist
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+          )
+
+          for target in "${targets[@]}"; do
+            read -r goos goarch <<<"$target"
+            stage="dist/kavach_${ver}_${goos}_${goarch}"
+            mkdir -p "$stage"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w -X main.version=${ver}" \
+              -o "${stage}/kavach" ./cmd/kavach
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "${stage}/kavach-recorder" ./cmd/kavach-recorder
+            cp LICENSE README.md "$stage/"
+            tar -C "$stage" -czf "dist/kavach_${ver}_${goos}_${goarch}.tar.gz" \
+              kavach kavach-recorder LICENSE README.md
+            rm -rf "$stage"
+          done
+
+          (cd dist && sha256sum kavach_*.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Smoke-test Linux amd64 archive and installer
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar -xzf "dist/kavach_${VERSION}_linux_amd64.tar.gz" -C "$tmp"
+          "$tmp/kavach" --version | grep -F "kavach ${VERSION}"
+          "$tmp/kavach-recorder" version | grep -F "kavach-recorder/"
+          "$tmp/kavach" inspect examples/ledger/testdata/null-amount.kavach >/dev/null
+          KAVACH_ARCHIVE_DIR="$PWD/dist" KAVACH_VERSION="v${VERSION}" KAVACH_INSTALL_DIR="$tmp/bin" \
+            sh ./scripts/install.sh
+          "$tmp/bin/kavach" --version | grep -F "kavach ${VERSION}"
+          "$tmp/bin/kavach-recorder" version | grep -F "kavach-recorder/"
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/kavach_*.tar.gz
+            dist/SHA256SUMS

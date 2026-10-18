@@ -70,6 +70,9 @@ Exit status: 0 when the replay is ok or fixed (for diff: the verdict is fixed),
 1 when it is not, 2 for usage errors, 3 when a fixture or binary is unusable.
 `
 
+// version is the CLI release version, overridable via -ldflags "-X main.version=...".
+var version = kavach.Version
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -104,9 +107,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdContract(u, args, os.Stdin, stdout, stderr)
 	case "mcp":
 		return cmdMCP(args, os.Stdin, stdout, stderr)
-	case "version":
+	case "version", "--version", "-version", "-v":
 		u.printBanner(stdout)
-		fmt.Fprintf(stdout, "kavach %s (journal format %d.%d)\n", kavach.Version, journal.Major, journal.Minor)
+		fmt.Fprintf(stdout, "kavach %s (journal format %d.%d)\n", version, journal.Major, journal.Minor)
 		return exitPass
 	case "help", "-h", "--help":
 		u.printBanner(stdout)
