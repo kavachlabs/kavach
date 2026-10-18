@@ -71,6 +71,11 @@ func TestUsageErrors(t *testing.T) {
 	if code, out, _ := runCLI(t, "help"); code != exitPass || !strings.Contains(out, "kavach inspect") {
 		t.Fatalf("help: %d\n%s", code, out)
 	}
+	for _, flag := range []string{"version", "--version", "-version", "-v"} {
+		if code, out, _ := runCLI(t, flag); code != exitPass || !strings.Contains(out, "kavach ") {
+			t.Fatalf("%s: %d\n%s", flag, code, out)
+		}
+	}
 	if code, _, errs := runCLI(t, "replay", fixture, "--bin", ""); code != exitError || !strings.Contains(errs, "KAVACH_BIN") {
 		t.Fatalf("missing bin: %d %s", code, errs)
 	}

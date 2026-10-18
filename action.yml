@@ -1,0 +1,149 @@
+name: 'Kavach Replay & Verify'
+description: 'Install kavach and kavach-recorder, replay .kavach fixtures, or verify fixes across variants in CI.'
+author: 'Kavach Labs'
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  fixtures:
+    description: 'Optional glob or space-separated list of .kavach fixtures to replay or diff (e.g. "testdata/*.kavach").'
+    required: false
+    default: ''
+  bin:
+    description: 'Host command to replay fixtures against when old/new are not set (e.g. "./my-service").'
+    required: false
+    default: ''
+  old:
+    description: 'Old build host command for kavach diff verification.'
+    required: false
+    default: ''
+  new:
+    description: 'New build host command for kavach diff verification.'
+    required: false
+    default: ''
+  variants:
+    description: 'Minimum reproducing variants required by kavach diff.'
+    required: false
+    default: '10'
+  regressions:
+    description: 'Maximum neighbour regression variants checked by kavach diff (0 skips).'
+    required: false
+    default: '48'
+
+outputs:
+  verdict:
+    description: 'Last verdict reported by kavach replay or kavach diff.'
+    value: ${{ steps.run.outputs.verdict }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+
+    - name: Build kavach and kavach-recorder
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        bin="$RUNNER_TEMP/kavach-bin"
+        mkdir -p "$bin"
+        go build -o "$bin/" ./cmd/kavach-recorder ./cmd/kavach
+        echo "$bin" >> "$GITHUB_PATH"
+        echo "KAVACH_RECORDER=$bin/kavach-recorder" >> "$GITHUB_ENV"
+
+    - name: Run replay or diff verification
+      id: run
+      if: ${{ inputs.fixtures != '' }}
+      shell: bash
+      env:
+        INPUT_FIXTURES: ${{ inputs.fixtures }}
+        INPUT_BIN: ${{ inputs.bin }}
+        INPUT_OLD: ${{ inputs.old }}
+        INPUT_NEW: ${{ inputs.new }}
+        INPUT_VARIANTS: ${{ inputs.variants }}
+        INPUT_REGRESSIONS: ${{ inputs.regressions }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        # Expand glob patterns in INPUT_FIXTURES
+        read -r -a patterns <<<"$INPUT_FIXTURES"
+        files=()
+        for p in "${patterns[@]}"; do
+          for f in $p; do
+            files+=("$f")
+          done
+        done
+        if [[ ${#files[@]} -eq 0 ]]; then
+          echo "::error::no .kavach fixtures matched: $INPUT_FIXTURES"
+          exit 1
+        fi
+
+        if [[ -n "$INPUT_OLD" && -n "$INPUT_NEW" ]]; then
+          {
+            echo "### Kavach Fix Verification (\`kavach diff\`)"
+            echo ""
+            echo "| Fixture | Old Build | New Build | Variants (Pass / Repro) | Regressions | Verdict | Wall |"
+            echo "| --- | --- | --- | --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          overall=0
+          last_verdict=""
+          for f in "${files[@]}"; do
+            set +e
+            out="$(kavach diff "$f" --old "$INPUT_OLD" --new "$INPUT_NEW" \
+              --variants "$INPUT_VARIANTS" --regressions "$INPUT_REGRESSIONS" --json)"
+            code=$?
+            set -e
+            kavach diff "$f" --old "$INPUT_OLD" --new "$INPUT_NEW" \
+              --variants "$INPUT_VARIANTS" --regressions "$INPUT_REGRESSIONS" || true
+
+            verdict="$(jq -r '.verdict' <<<"$out")"
+            old_s="$(jq -r '.old' <<<"$out")"
+            new_s="$(jq -r '.new' <<<"$out")"
+            v_pass="$(jq -r '.variants.passing' <<<"$out")"
+            v_repro="$(jq -r '.variants.reproducing' <<<"$out")"
+            r_pass="$(jq -r '.regressions.passing' <<<"$out")"
+            r_cnt="$(jq -r '.regressions.counted' <<<"$out")"
+            wall="$(jq -r '.wall_ms' <<<"$out")"
+            echo "| \`$f\` | \`$old_s\` | \`$new_s\` | ${v_pass} / ${v_repro} | ${r_pass} / ${r_cnt} | **\`$verdict\`** | ${wall} ms |" >> "$GITHUB_STEP_SUMMARY"
+            last_verdict="$verdict"
+            if [[ $code -ne 0 ]]; then
+              overall=$code
+            fi
+          done
+          echo "verdict=${last_verdict}" >> "$GITHUB_OUTPUT"
+          exit $overall
+        elif [[ -n "$INPUT_BIN" ]]; then
+          {
+            echo "### Kavach Incident Replay (\`kavach replay\`)"
+            echo ""
+            echo "| Fixture | Verdict | Detail |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          overall=0
+          last_verdict=""
+          for f in "${files[@]}"; do
+            set +e
+            out="$(kavach replay "$f" --bin "$INPUT_BIN" --json)"
+            code=$?
+            set -e
+            kavach replay "$f" --bin "$INPUT_BIN" || true
+
+            verdict="$(jq -r '.verdict' <<<"$out")"
+            detail="$(jq -r '.detail // ""' <<<"$out")"
+            echo "| \`$f\` | **\`$verdict\`** | ${detail} |" >> "$GITHUB_STEP_SUMMARY"
+            last_verdict="$verdict"
+            if [[ $code -ne 0 ]]; then
+              overall=$code
+            fi
+          done
+          echo "verdict=${last_verdict}" >> "$GITHUB_OUTPUT"
+          exit $overall
+        else
+          echo "::error::when 'fixtures' is provided, set either 'bin' (for replay) or both 'old' and 'new' (for diff)"
+          exit 2
+        fi
