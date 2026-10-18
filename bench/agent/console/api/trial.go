@@ -877,6 +877,15 @@ func classifyJobError(s string) string {
 	return "Harbor exited with an error"
 }
 
+// ClassifyError is the message a visitor is shown for the error text of a
+// "job" or a "trial". The classifyhost command serves it to the kavach CLI.
+func ClassifyError(kind, text string) string {
+	if kind == "trial" {
+		return classifyTrialError(text)
+	}
+	return classifyJobError(text)
+}
+
 // classifyTrialError keeps the kind of a trial's error (CancelledError,
 // AgentTimeoutError) and drops its message.
 func classifyTrialError(s string) string {
