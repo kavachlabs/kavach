@@ -161,6 +161,8 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	addr := fs.String("addr", "", "address to listen on (default 127.0.0.1:<port>); beyond loopback only with -trial")
 	origin := fs.String("origin", "", "with -trial: the public origin writes may come from, e.g. https://try.kavachlabs.dev")
 	trustCF := fs.Bool("trust-cf", false, "with -trial: take a client's address from CF-Connecting-IP")
+	check := fs.Bool("check", false, "with -trial: check that the config file and invite usage load, print ok and exit")
+	trialConfig := fs.String("trial-config", "", "with -trial: the config file (default $TRIAL_CONFIG or "+api.DefaultTrialConfig+"); read again when it changes")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -191,6 +193,23 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	if *trial {
 		cfg.Trial = api.TrialFromEnv(os.Getenv)
 		cfg.Trial.Origin, cfg.Trial.TrustCF = *origin, *trustCF
+		if *trialConfig != "" {
+			cfg.Trial.ConfigPath = *trialConfig
+		}
+	}
+	if cfg.Trial != nil {
+		if err := api.CheckTrialStart(cfg.Trial, cfg.JobsDir); err != nil {
+			fmt.Fprintf(stderr, "bench api: refusing to start with weaker limits than configured: %v\n", err)
+			return 1
+		}
+	}
+	if *check {
+		if cfg.Trial == nil {
+			fmt.Fprintln(stderr, "bench api: -check needs -trial")
+			return 2
+		}
+		fmt.Fprintln(stdout, "ok")
+		return 0
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
 	if err := serve(syncingServer(cfg), listen, stderr, nil); err != nil {

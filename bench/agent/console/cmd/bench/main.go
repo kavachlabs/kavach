@@ -25,6 +25,7 @@ var commands = []command{
 	{"", "open the terminal console (serving the API itself if none is running)", cmdConsole},
 	{"web", "open the web console, serving the API unless a server already runs", cmdWeb},
 	{"sync", "back finished runs up to R2 once, and exit", cmdSync},
+	{"trial", "edit the public trial's invites, tasks and models (see deploy/trial/ONBOARDING.md)", cmdTrial},
 	{"export", "write a read-only copy of the web console and some runs, for a static host", cmdExport},
 }
 

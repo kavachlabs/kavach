@@ -1,0 +1,135 @@
+#!/bin/sh
+# The operator's handle on the public trial, run from a laptop. It reaches
+# the VM over ssh as root; see ONBOARDING.md.
+#
+#   kavach-trial invite add --label "Garry (YC)" --runs 5
+#   kavach-trial invite list | show <code|label> | revoke <code|label>
+#   kavach-trial task add|remove|list <task>...
+#   kavach-trial model add|remove|list <model>...
+#   kavach-trial status
+#   kavach-trial deploy [--force] [--build-only] [ref]
+#
+# KAVACH_TRIAL_HOST is the VM (default 178.105.177.23), KAVACH_TRIAL_URL the
+# public address (default https://try.kavachlabs.dev).
+set -eu
+
+HOST=${KAVACH_TRIAL_HOST:-178.105.177.23}
+SITE=${KAVACH_TRIAL_URL:-https://try.kavachlabs.dev}
+BENCH=/opt/kavach/bin/bench
+API=http://127.0.0.1:8480
+
+die() { echo "kavach-trial: $*" >&2; exit 1; }
+
+remote() { ssh -o ConnectTimeout=10 "root@$HOST" "$@"; }
+
+# quote prints its arguments so a shell reads each back as one word.
+quote() {
+	for a in "$@"; do
+		printf "'%s' " "$(printf %s "$a" | sed "s/'/'\\\\''/g")"
+	done
+}
+
+# live_runs prints how many trial runs are alive on the VM: running jobs
+# according to the API, and log helpers (each run has one) in case the API
+# is down. The [b] keeps pgrep from matching this command line.
+live_runs() {
+	remote "
+		api=\$(curl -fsS $API/api/jobs 2>/dev/null | grep -o '\"status\": *\"running\"' | wc -l || true)
+		helpers=\$(pgrep -fc '[b]ench _logpipe' || true)
+		echo \$((api + helpers))
+	"
+}
+
+cmd_status() {
+	remote "
+		echo \"service:  \$(systemctl is-active bench-trial) since \$(systemctl show bench-trial -p ActiveEnterTimestamp --value)\"
+		echo \"checkout: \$(git -C /opt/kavach log -1 --format='%h %s')\"
+		echo \"binary:   \$(ls -l --time-style=long-iso $BENCH | awk '{print \$6, \$7}')\"
+	"
+	echo "live runs: $(live_runs)"
+	echo "session endpoint: $(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/trial/session")"
+	echo
+	remote "$BENCH trial invite list"
+}
+
+# rollback puts the previous binary and checkout back and says what state the
+# VM is left in.
+rollback() {
+	echo "kavach-trial: $2; rolling back to $1" >&2
+	if remote "rm -f $BENCH.new; [ -f $BENCH.prev ] && mv -f $BENCH.prev $BENCH; git -C /opt/kavach checkout --detach $1 && systemctl restart bench-trial"; then
+		die "rolled back: the previous binary and checkout $1 are in place and bench-trial was restarted. See: ssh root@$HOST journalctl -u bench-trial -n 50"
+	fi
+	die "ROLLBACK FAILED: fix the VM by hand (binary $BENCH vs $BENCH.prev, checkout $1, systemctl restart bench-trial)"
+}
+
+cmd_deploy() {
+	force=0 build_only=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--force) force=1 ;;
+		--build-only) build_only=1 ;; # build locally and stop
+		-*) die "unknown flag $1" ;;
+		*) break ;;
+		esac
+		shift
+	done
+	ref=${1:-main}
+	top=$(git rev-parse --show-toplevel) || die "run deploy from inside the kavach checkout"
+	sha=$(git -C "$top" rev-parse --verify "$ref^{commit}" 2>/dev/null) ||
+		sha=$(git -C "$top" rev-parse --verify "origin/$ref^{commit}" 2>/dev/null) ||
+		die "no such ref: $ref"
+
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	echo "building bench at $sha for linux/amd64"
+	# The whole tree: the console's go.mod replaces the root module with ../../..
+	mkdir "$tmp/src" "$tmp/out"
+	git -C "$top" archive "$sha" | tar -x -C "$tmp/src"
+	(cd "$tmp/src/bench/agent/console" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$tmp/out/bench" ./cmd/bench) ||
+		die "the build failed"
+	[ "$build_only" = 0 ] || { echo "built $tmp/out/bench (removed on exit)"; return; }
+
+	live=$(live_runs)
+	if [ "$live" != 0 ] && [ "$force" = 0 ]; then
+		die "$live trial run(s) are live; a restart forgets every visitor session. Wait, or pass --force"
+	fi
+
+	# The binary goes up under a new name first, so nothing on the VM changes
+	# until everything local has worked. It is renamed into place, never
+	# overwritten: each run's log helper is this executable.
+	scp -q "$tmp/out/bench" "root@$HOST:/opt/kavach/bin/bench.new" || die "could not copy the binary"
+	# The new binary must accept the config and usage files as they are, read
+	# as the service's user, which can't read what root can.
+	remote "chmod 0755 $BENCH.new && runuser -u kavach -- $BENCH.new api -trial -check -root /opt/kavach -jobs /var/lib/kavach/jobs" || {
+		remote "rm -f $BENCH.new"
+		die "the new bench rejects the VM's trial.json or invite usage; nothing was changed"
+	}
+	prev=$(remote "git -C /opt/kavach rev-parse HEAD")
+	echo "checking out $sha on $HOST (was $prev)"
+	remote "git -C /opt/kavach fetch origin $sha && git -C /opt/kavach checkout --detach FETCH_HEAD" || {
+		remote "rm -f /opt/kavach/bin/bench.new"
+		die "the VM could not fetch $sha; push it first. Nothing was changed"
+	}
+	# Rename, never write: the running binary stays as it is until replaced.
+	if ! remote "cp -p $BENCH $BENCH.prev && chmod 755 $BENCH.new && mv -f $BENCH.new $BENCH && systemctl restart bench-trial"; then
+		rollback "$prev" "installing or restarting failed"
+	fi
+
+	# The service takes a moment to listen.
+	i=0
+	until code=$(remote "curl -s -o /dev/null -w '%{http_code}' $API/api/trial/session") && [ "$code" = 200 ]; do
+		i=$((i + 1))
+		[ $i -lt 15 ] || rollback "$prev" "bench-trial answered ${code:-nothing} after the restart"
+		sleep 1
+	done
+	echo "deployed $sha; $API/api/trial/session on the VM: $code"
+	echo "$SITE/api/trial/session: $(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/trial/session")"
+}
+
+[ $# -gt 0 ] || { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+case $1 in
+status) cmd_status ;;
+deploy) shift; cmd_deploy "$@" ;;
+invite | task | model) remote "$BENCH trial $(quote "$@")" ;;
+*) die "unknown command $1 (invite, task, model, status, deploy)" ;;
+esac

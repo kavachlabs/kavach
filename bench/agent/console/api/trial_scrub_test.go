@@ -35,9 +35,7 @@ func TestScrubPathsBoundaries(t *testing.T) {
 
 func TestTrialScrubsSecretsInServedFiles(t *testing.T) {
 	e := newTrialServer(t, "", nil)
-	e.s.trial.mu.Lock()
-	e.s.trial.showcase["redis-oracle"] = true
-	e.s.trial.mu.Unlock()
+	e.s.trial.settings().showcase["redis-oracle"] = true
 	patchPath := "/api/trials/redis-oracle/redis-10068-kavach__Dw5kmkd/patch"
 	_, raw, _ := e.raw(e.visitor(), "GET", patchPath, "")
 	secret, _, _ := strings.Cut(string(raw), "\n")
