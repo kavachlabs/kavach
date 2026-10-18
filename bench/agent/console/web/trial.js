@@ -7,7 +7,7 @@ export const TRIAL_VIEWS = ["landing", "keys", "invite", "terms"];
 
 const SITE = "https://kavachlabs.dev";
 const BENCH = "https://benchmark.kavachlabs.dev";
-const trust = () => h("span", {}, "Keys you enter stay in this server's memory and are used only for your runs. Runs bill your own provider accounts, so use keys with a spending limit. ", h("a", { href: "#/trial/terms" }, "Terms"));
+const trust = () => h("span", {}, "Keys you enter stay in this server's memory and are used only for your runs. Runs on your own keys bill your provider accounts, so use keys with a spending limit. ", h("a", { href: "#/trial/terms" }, "Terms"));
 const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
 const base = (task) => task.replace(ARM_SUFFIX, "");
 const modelName = (m) => m.replace(/^openrouter\//, "");
@@ -183,7 +183,7 @@ function terms() {
     sec("Your keys",
       "The console holds them in this server's memory only. It never writes them to disk or logs them, and never sends them back to your browser. The tools that run your job might write them into the run's files or its temporary home folder: we redact the files when the run ends and delete the home folder then.",
       "Passed only to the run you start, as environment variables of its process, and used only to call your model provider and your sandbox provider (Daytona or Modal).",
-      "Dropped from your session when you click Forget my keys, after 24 hours without use, or when the server restarts. For a run in progress we keep its key values in memory only, to redact them from that run's output.",
+      "Dropped from your session when you click Forget my keys, after 24 hours without use, or when the server restarts. A run's key values stay in memory, from its start until shortly after it ends, only to redact them from that run's output.",
       "Forgetting your keys does not stop a run that has already started: use Stop on the run. It keeps the keys it began with until it ends.",
       "Logs are redacted as they are written, and a run's files are redacted when it ends. What the server shows is also redacted while it holds the run's key values."),
     sec("What it costs you",
@@ -197,9 +197,9 @@ function terms() {
       "A session cookie. There are no accounts, and we do not ask for your name or email.",
       "The site is served through Cloudflare, which sees your traffic. If the check on the run form is on, your network address is also sent to Cloudflare's Turnstile service to verify it."),
     sec("What we don't",
-      "Your keys, after they are forgotten. Any code or files of yours: you only choose from the incidents we provide."),
+      "Your keys anywhere but in memory, as described above. Any code or files of yours: you only choose from the incidents we provide."),
     sec("Runs are public",
-      "Every run, running or finished, and its results is listed for every visitor, and finished runs appear on this page. Do not put anything private into a run."),
+      "Every run, running or finished, is listed with its results for every visitor, and finished runs appear on this page. Do not put anything private into a run."),
     sec("As is",
       "This is a free trial, provided as is, with no guarantee that it works, stays up, keeps your runs, or that results are correct. We may change or stop it at any time."),
     h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "kavachlabs.dev"), "."),
