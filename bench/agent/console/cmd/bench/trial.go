@@ -182,7 +182,7 @@ func inviteAdd(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 // findInvite picks the invite a user means by its code, or else by its label
 // (ignoring case) among those not revoked: the whole label, else a part of it
 // that only one invite has.
-func findInvite(f *api.TrialFile, ref string) (int, error) {
+func findInvite(f *api.TrialFile, ref string, partial bool) (int, error) {
 	if ref == "" {
 		return 0, errors.New("name a code or a label")
 	}
@@ -193,7 +193,7 @@ func findInvite(f *api.TrialFile, ref string) (int, error) {
 	}
 	for _, match := range []func(label string) bool{
 		func(l string) bool { return strings.EqualFold(l, ref) },
-		func(l string) bool { return strings.Contains(strings.ToLower(l), strings.ToLower(ref)) },
+		func(l string) bool { return partial && strings.Contains(strings.ToLower(l), strings.ToLower(ref)) },
 	} {
 		found := -1
 		for i, inv := range f.Invites {
@@ -207,6 +207,9 @@ func findInvite(f *api.TrialFile, ref string) (int, error) {
 		if found >= 0 {
 			return found, nil
 		}
+	}
+	if !partial {
+		return 0, fmt.Errorf("no invite with code or full label %q (revoke takes the whole of either)", ref)
 	}
 	return 0, fmt.Errorf("no invite with code or label %q", ref)
 }
@@ -258,7 +261,7 @@ func inviteShow(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 		if err != nil {
 			return err
 		}
-		i, err := findInvite(f, fs.Arg(0))
+		i, err := findInvite(f, fs.Arg(0), true)
 		if err != nil {
 			return err
 		}
@@ -284,7 +287,7 @@ func inviteRevoke(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 	return func(stdout io.Writer) error {
 		var inv api.TrialInvite
 		err := api.UpdateTrialFile(o.config, func(f *api.TrialFile) error {
-			i, err := findInvite(f, fs.Arg(0))
+			i, err := findInvite(f, fs.Arg(0), false)
 			if err != nil {
 				return err
 			}

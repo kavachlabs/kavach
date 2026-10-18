@@ -52,6 +52,16 @@ cmd_status() {
 	remote "$BENCH trial invite list"
 }
 
+# rollback puts the previous binary and checkout back and says what state the
+# VM is left in.
+rollback() {
+	echo "kavach-trial: $2; rolling back to $1" >&2
+	if remote "rm -f $BENCH.new; [ -f $BENCH.prev ] && mv -f $BENCH.prev $BENCH; git -C /opt/kavach checkout --detach $1 && systemctl restart bench-trial"; then
+		die "rolled back: the previous binary and checkout $1 are in place and bench-trial was restarted. See: ssh root@$HOST journalctl -u bench-trial -n 50"
+	fi
+	die "ROLLBACK FAILED: fix the VM by hand (binary $BENCH vs $BENCH.prev, checkout $1, systemctl restart bench-trial)"
+}
+
 cmd_deploy() {
 	force=0 build_only=0
 	while [ $# -gt 0 ]; do
@@ -88,22 +98,27 @@ cmd_deploy() {
 	# until everything local has worked. It is renamed into place, never
 	# overwritten: each run's log helper is this executable.
 	scp -q "$tmp/out/bench" "root@$HOST:/opt/kavach/bin/bench.new" || die "could not copy the binary"
+	# The new binary must accept the config and usage files as they are.
+	remote "$BENCH.new api -trial -check -root /opt/kavach -jobs /var/lib/kavach/jobs" || {
+		remote "rm -f $BENCH.new"
+		die "the new bench rejects the VM's trial.json or invite usage; nothing was changed"
+	}
 	prev=$(remote "git -C /opt/kavach rev-parse HEAD")
 	echo "checking out $sha on $HOST (was $prev)"
 	remote "git -C /opt/kavach fetch origin $sha && git -C /opt/kavach checkout --detach FETCH_HEAD" || {
 		remote "rm -f /opt/kavach/bin/bench.new"
 		die "the VM could not fetch $sha; push it first. Nothing was changed"
 	}
-	if ! remote "chmod 755 /opt/kavach/bin/bench.new && mv -f /opt/kavach/bin/bench.new $BENCH && systemctl restart bench-trial"; then
-		remote "rm -f /opt/kavach/bin/bench.new; git -C /opt/kavach checkout --detach $prev"
-		die "installing or restarting failed; the checkout is back at $prev"
+	# Rename, never write: the running binary stays as it is until replaced.
+	if ! remote "cp -p $BENCH $BENCH.prev && chmod 755 $BENCH.new && mv -f $BENCH.new $BENCH && systemctl restart bench-trial"; then
+		rollback "$prev" "installing or restarting failed"
 	fi
 
 	# The service takes a moment to listen.
 	i=0
 	until code=$(remote "curl -s -o /dev/null -w '%{http_code}' $API/api/trial/session") && [ "$code" = 200 ]; do
 		i=$((i + 1))
-		[ $i -lt 15 ] || die "bench-trial answered ${code:-nothing} on the VM after the restart; see: ssh root@$HOST journalctl -u bench-trial -n 50"
+		[ $i -lt 15 ] || rollback "$prev" "bench-trial answered ${code:-nothing} after the restart"
 		sleep 1
 	done
 	echo "deployed $sha; $API/api/trial/session on the VM: $code"

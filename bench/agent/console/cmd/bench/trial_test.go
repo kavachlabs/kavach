@@ -68,6 +68,9 @@ func TestTrialCLIInvites(t *testing.T) {
 		t.Errorf("show:\n%s", out)
 	}
 
+	if code, _, errs := run("invite", "revoke", "garry"); code != 1 || !strings.Contains(errs, "full label") {
+		t.Fatalf("revoke by part of a label: %d %q", code, errs)
+	}
 	if code, out, errs := run("invite", "revoke", "garry (yc)"); code != 0 || !strings.Contains(out, m[1]) {
 		t.Fatalf("revoke by label: %d %s %s", code, out, errs)
 	}
@@ -140,6 +143,15 @@ func TestAPIRefusesToStartOnBrokenTrialConfig(t *testing.T) {
 	code := cmdAPI([]string{"-trial", "-trial-config", bad, "-jobs", dir, "-tasks", dir, "-port", "0"}, &out, &errb)
 	if code != 1 || !strings.Contains(errb.String(), "refusing to start") {
 		t.Errorf("exit %d: %s", code, errb.String())
+	}
+}
+
+func TestAPICheckOnly(t *testing.T) {
+	dir := t.TempDir()
+	args := []string{"-trial", "-check", "-trial-config", filepath.Join(dir, "trial.json"), "-jobs", dir, "-tasks", dir}
+	var out, errb bytes.Buffer
+	if code := cmdAPI(args, &out, &errb); code != 0 || !strings.Contains(out.String(), "ok") {
+		t.Errorf("exit %d: %s %s", code, out.String(), errb.String())
 	}
 }
 

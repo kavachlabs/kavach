@@ -10,7 +10,8 @@ Only `deploy` restarts the service.
 Keys never go in `trial.json`: they stay in `/etc/kavach/trial.env`
 (`trial.env.example`), which the service reads at start. `trial.json` does hold
 the invite codes, which are as good as the keys, so it is `root:kavach`, mode
-0640; keep it that way. Settings missing from
+0640; keep it that way. A file created before this (or by hand) needs the
+fix once: `chgrp kavach /etc/kavach/trial.json && chmod 0640 /etc/kavach/trial.json`. Settings missing from
 `trial.json` fall back to the `TRIAL_*` variables there; see "Trial mode" in
 [API.md](../../console/API.md#trial-mode).
 
@@ -31,7 +32,7 @@ button. `--note "intro from X"` keeps a reminder with the code.
 ```sh
 kavach-trial invite list              # label, code, runs used/budget, state, last used
 kavach-trial invite show garry        # that code's runs, by job id (a code, a label, or a part of one label)
-kavach-trial invite revoke "Garry (YC)"   # by label or code
+kavach-trial invite revoke "Garry (YC)"   # by the full label or the code
 ```
 
 Revoking works at once, also for a visitor who redeemed the code earlier:
@@ -95,7 +96,12 @@ kavach-trial deploy [--force] [ref]    # ref defaults to main; push it first
 It builds `bench` for linux/amd64 (`CGO_ENABLED=0`) from the whole tree at the
 ref (`--build-only` stops there), copies the binary to the VM as `bench.new`,
 fetches and checks out the same commit in `/opt/kavach`, renames the binary
-over `bench` (never in place: each run's log helper executes it), restarts
+over `bench` (never in place: each run's log helper executes it), first
+running `bench.new api -trial -check` on the VM against the real `trial.json`
+and usage file (a failure leaves the VM untouched) and keeping the old binary
+as `bench.prev`; if the restart or the health check then fails it puts back
+`bench.prev` and the old checkout, restarts, and says what state the VM is in.
+It restarts
 `bench-trial`, waits for
 `/api/trial/session` on the VM, and checks the public URL.
 
