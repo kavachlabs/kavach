@@ -458,7 +458,7 @@ func TestTrialInvite(t *testing.T) {
 	}
 
 	// The count survives a restart, and the file holds no code.
-	b, err := os.ReadFile(filepath.Join(e.jobs, ".bench", "trial-invites.json"))
+	b, err := os.ReadFile(filepath.Join(e.jobs, ".bench", "invites-used.json"))
 	if err != nil || bytes.Contains(b, []byte("alpha-code")) {
 		t.Fatalf("invites file %q %v", b, err)
 	}

@@ -1,10 +1,10 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,8 +37,12 @@ type TrialConfig struct {
 	Models      []string // allowed models
 	Tasks       []string // allowed task folders or base names; empty: every task
 	MaxAttempts int
-	MaxRunning  int      // live runs, all visitors together
-	Showcase    []string // job ids anyone may list and read besides trial runs
+	// ConfigPath is the trial config file (see TrialFile). The server reloads
+	// it when it changes; the fields above apply where it says nothing, or
+	// is absent.
+	ConfigPath string
+	MaxRunning int      // live runs, all visitors together
+	Showcase   []string // job ids anyone may list and read besides trial runs
 	// RatePerMin is how many writes one address may make a minute.
 	RatePerMin int
 
@@ -75,6 +79,7 @@ func TrialFromEnv(getenv func(string) string) *TrialConfig {
 		MaxAttempts:      num("TRIAL_MAX_ATTEMPTS", 2),
 		MaxRunning:       num("TRIAL_MAX_RUNNING", 3),
 		Showcase:         list("TRIAL_SHOWCASE"),
+		ConfigPath:       cmp.Or(getenv("TRIAL_CONFIG"), DefaultTrialConfig),
 		TurnstileSecret:  getenv("TURNSTILE_SECRET"),
 		TurnstileSiteKey: getenv("TURNSTILE_SITE_KEY"),
 	}
@@ -127,14 +132,17 @@ type trial struct {
 	jobs   string
 	tasks  string
 
+	confMu    sync.Mutex
+	conf      *trialSettings
+	confStamp fileStamp
+
 	mu       sync.Mutex
 	sessions map[string]*session
 	swept    time.Time
-	owners   map[string]string // job id -> SHA-256 of its session's id
-	runIP    map[string]string // job id -> the address that started it; lost on restart
-	used     map[string]int    // SHA-256 of an invite code -> runs started
-	showcase map[string]bool
-	paths    []pathRule // the server's own directories, hidden from responses
+	owners   map[string]string     // job id -> SHA-256 of its session's id
+	runIP    map[string]string     // job id -> the address that started it; lost on restart
+	used     map[string]*InviteUse // SHA-256 of an invite code -> its runs
+	paths    []pathRule            // the server's own directories, hidden from responses
 	// secrets of the server, and of each trial run while this process lives,
 	// replaced in what is served in case Harbor or an agent wrote one into
 	// a file.
@@ -171,19 +179,17 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	}
 	t := &trial{
 		cfg: cfg, runner: runner, jobs: jobs, tasks: tasks,
-		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, jobSecrets: map[string][]string{}, used: map[string]int{},
-		showcase: map[string]bool{}, rate: map[string]*window{},
+		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, jobSecrets: map[string][]string{}, used: ReadInviteUse(jobs),
+		rate: map[string]*window{},
 	}
-	for _, id := range cfg.Showcase {
-		t.showcase[id] = true
-	}
+	t.conf = t.build(nil)
+	t.settings()
 	paths, _ := filepath.Glob(filepath.Join(jobs, ".bench", "*.owner"))
 	for _, p := range paths {
 		if b, err := os.ReadFile(p); err == nil {
 			t.owners[strings.TrimSuffix(filepath.Base(p), ".owner")] = strings.TrimSpace(string(b))
 		}
 	}
-	readJSONFile(t.invitesFile(), &t.used)
 	t.paths = pathRules(jobs, tasks, runner.Root)
 	names := []string{"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"}
 	for _, v := range modelKeyVars {
@@ -202,14 +208,6 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	return t
 }
 
-func readJSONFile(path string, v any) {
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, v)
-	}
-}
-
-func (t *trial) invitesFile() string { return filepath.Join(t.jobs, ".bench", "trial-invites.json") }
-
 func digest(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
@@ -217,10 +215,11 @@ func digest(s string) string {
 
 func (t *trial) allowedTasks() []string {
 	all, _ := harbor.FindTasks(t.tasks)
+	want := t.settings().tasks
 	var out []string
 	for _, task := range all {
 		for _, a := range task.Arms {
-			if len(t.cfg.Tasks) == 0 || slices.Contains(t.cfg.Tasks, a.Task) || slices.Contains(t.cfg.Tasks, task.Name) {
+			if len(want) == 0 || slices.Contains(want, a.Task) || slices.Contains(want, task.Name) {
 				out = append(out, a.Task)
 			}
 		}
@@ -356,7 +355,8 @@ type limits struct {
 
 func (t *trial) view(s *session) sessionView {
 	v := sessionView{Runs: []string{}, TurnstileSiteKey: t.cfg.TurnstileSiteKey}
-	v.Limits = limits{Models: t.cfg.Models, Tasks: t.allowedTasks(), MaxAttempts: t.cfg.MaxAttempts}
+	conf := t.settings()
+	v.Limits = limits{Models: conf.models, Tasks: t.allowedTasks(), MaxAttempts: conf.maxAttempts}
 	if v.Limits.Tasks == nil {
 		v.Limits.Tasks = []string{}
 	}
@@ -366,7 +366,10 @@ func (t *trial) view(s *session) sessionView {
 	t.mu.Lock()
 	v.Runs = append(v.Runs, s.runs...)
 	keys, invite := s.keys, s.invite
-	left := max(t.cfg.InviteRuns-t.used[digest(invite)], 0)
+	left := 0
+	if inv, ok := conf.invite(invite); ok && !inv.Revoked {
+		left = max(inv.Runs-t.used[digest(invite)].runs(), 0)
+	}
 	t.mu.Unlock()
 	if keys != nil {
 		v.HasKeys, v.Provider = true, keys.provider
@@ -448,20 +451,18 @@ func (s *Server) postTrialInvite(w http.ResponseWriter, r *http.Request) {
 	if !readJSONBody(w, r, &req) {
 		return
 	}
-	var match string
-	for _, c := range s.trial.cfg.InviteCodes {
-		// Every code is compared, so the time taken does not say which
-		// one was close.
-		if subtle.ConstantTimeCompare([]byte(c), []byte(req.Code)) == 1 {
-			match = c
-		}
-	}
-	if match == "" {
+	inv, ok := s.trial.settings().invite(req.Code)
+	if !ok {
 		writeError(w, http.StatusForbidden, "invalid invite code")
 		return
 	}
+	if inv.Revoked {
+		writeError(w, http.StatusForbidden, "this invite code has been revoked")
+		return
+	}
+	match := inv.Code
 	s.trial.mu.Lock()
-	spent := s.trial.used[digest(match)] >= s.trial.cfg.InviteRuns
+	spent := s.trial.used[digest(match)].runs() >= inv.Runs
 	s.trial.mu.Unlock()
 	if spent {
 		writeError(w, http.StatusForbidden, "this invite code has no runs left")
@@ -571,11 +572,12 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rr := req.RunRequest
+	conf := t.settings()
 	if len(rr.Models) == 0 {
-		rr.Models = t.cfg.Models[:1]
+		rr.Models = conf.models[:1]
 	}
 	for _, m := range rr.Models {
-		if !slices.Contains(t.cfg.Models, m) {
+		if !slices.Contains(conf.models, m) {
 			writeError(w, http.StatusBadRequest, "model %q is not available in the trial", m)
 			return
 		}
@@ -590,8 +592,8 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	if rr.Attempts == 0 {
 		rr.Attempts = 1
 	}
-	if rr.Attempts < 1 || rr.Attempts > t.cfg.MaxAttempts {
-		writeError(w, http.StatusBadRequest, "attempts must be 1-%d in the trial", t.cfg.MaxAttempts)
+	if rr.Attempts < 1 || rr.Attempts > conf.maxAttempts {
+		writeError(w, http.StatusBadRequest, "attempts must be 1-%d in the trial", conf.maxAttempts)
 		return
 	}
 	if t.cfg.TurnstileSecret != "" {
@@ -659,8 +661,13 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 	}
 	var code string
 	if invite != "" {
+		// A code revoked after the session redeemed it stops here.
+		inv, ok := t.settings().invite(invite)
+		if !ok || inv.Revoked {
+			return "", &trialRunError{http.StatusForbidden, "this invite code has been revoked"}
+		}
 		code = digest(invite)
-		if t.used[code] >= t.cfg.InviteRuns {
+		if t.used[code].runs() >= inv.Runs {
 			return "", &trialRunError{http.StatusForbidden, "this invite code has no runs left"}
 		}
 	}
@@ -682,8 +689,15 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		saveErr = err
 	}
 	if code != "" {
-		t.used[code]++
-		if err := t.saveInvites(); err != nil {
+		u := t.used[code]
+		if u == nil {
+			u = &InviteUse{}
+			t.used[code] = u
+		}
+		u.Count++
+		u.Last = time.Now().UTC()
+		u.Jobs = append(u.Jobs, name)
+		if err := saveInviteUse(t.jobs, t.used); err != nil {
 			saveErr = err
 		}
 	}
@@ -692,18 +706,6 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		return "", &trialRunError{http.StatusInternalServerError, "recording the run: " + saveErr.Error()}
 	}
 	return name, nil
-}
-
-func (t *trial) saveInvites() error {
-	b, err := json.Marshal(t.used)
-	if err != nil {
-		return err
-	}
-	tmp := t.invitesFile() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, t.invitesFile())
 }
 
 // verifyTurnstile checks token with the Turnstile service. A nil error means
@@ -774,7 +776,7 @@ func (t *trial) visible(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_, ok := t.owners[id]
-	return ok || t.showcase[id]
+	return ok || t.settings().showcase[id]
 }
 
 // viewer is the owner digest of the request's session, or "".

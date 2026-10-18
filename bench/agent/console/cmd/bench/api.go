@@ -161,6 +161,7 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	addr := fs.String("addr", "", "address to listen on (default 127.0.0.1:<port>); beyond loopback only with -trial")
 	origin := fs.String("origin", "", "with -trial: the public origin writes may come from, e.g. https://try.kavachlabs.dev")
 	trustCF := fs.Bool("trust-cf", false, "with -trial: take a client's address from CF-Connecting-IP")
+	trialConfig := fs.String("trial-config", "", "with -trial: the config file (default $TRIAL_CONFIG or "+api.DefaultTrialConfig+"); read again when it changes")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -191,6 +192,9 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	if *trial {
 		cfg.Trial = api.TrialFromEnv(os.Getenv)
 		cfg.Trial.Origin, cfg.Trial.TrustCF = *origin, *trustCF
+		if *trialConfig != "" {
+			cfg.Trial.ConfigPath = *trialConfig
+		}
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
 	if err := serve(syncingServer(cfg), listen, stderr, nil); err != nil {

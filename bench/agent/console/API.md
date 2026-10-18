@@ -92,7 +92,7 @@ else changes without the flag.
 > `-trust-cf` sees only the proxy's address, if any, and limits everyone as
 > one visitor.
 
-Settings come from the environment:
+Settings come from the environment (and the config file below):
 
 | Variable | Default |
 | --- | --- |
@@ -103,7 +103,44 @@ Settings come from the environment:
 | `TRIAL_INVITE_CODES` | none; comma-separated |
 | `TRIAL_INVITE_RUNS` | 5 runs per code |
 | `TRIAL_SHOWCASE` | none; job ids anyone may list and read besides trial runs |
+| `TRIAL_CONFIG` | `/etc/kavach/trial.json`; the config file below |
 | `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` needs a `turnstile_token` that Cloudflare's siteverify accepts |
+
+**Config file.** `-trial-config PATH` (or `TRIAL_CONFIG`; default
+`/etc/kavach/trial.json`) names a JSON file the operator edits while the
+server runs, so changes need no restart and forget no session. It holds no
+secret (keys stay in the environment):
+
+```json
+{
+  "invites": [{"code": "yc-ab12-cd34-ef56-gh78", "label": "Garry (YC)", "runs": 5,
+               "created": "2026-10-18T09:00:00Z", "revoked": false, "note": ""}],
+  "tasks": ["redis-10068-control", "redis-10068-kavach"],
+  "models": ["openrouter/z-ai/glm-5.3"],
+  "max_attempts": 2,
+  "showcase": []
+}
+```
+
+`tasks`, `models`, `max_attempts` and `showcase` replace the `TRIAL_*` value
+of the same name when they are set, and the variable applies where they are
+empty. Codes in `TRIAL_INVITE_CODES` stay valid beside the file's, each with
+`TRIAL_INVITE_RUNS`; a code in both is the file's, so it can revoke one. With
+no file the variables alone apply. The server compares the file's mtime and
+size on each use and reads it again when they change. A file that cannot be
+parsed, has an unknown field or breaks a rule (a code under 8 characters, with
+spaces or commas, or listed twice; a model that is not `provider/name`) is
+logged and ignored: the last good configuration stays. `bench trial` edits the
+file atomically, keeping its mode and owner (`bench trial -h`; see
+[deploy/trial/ONBOARDING.md](../deploy/trial/ONBOARDING.md)).
+
+Each code has its own `runs` budget. The runs used, the time of the last one
+and the job ids it started are kept per SHA-256 of the code in
+`<jobs>/.bench/invites-used.json` (written atomically, and read again at
+start; counts from the earlier `trial-invites.json` carry over). A revoked
+code cannot be redeemed, and a session that redeemed it before gets 403
+(`this invite code has been revoked`) from its next `POST /api/jobs`;
+`invite_runs_left` shows 0. Runs already started continue.
 
 **Sessions.** A visitor has no account. `POST /api/trial/keys` or
 `/api/trial/invite` starts a session and sets its cookie (32 random bytes in
@@ -198,9 +235,9 @@ newlines; unknown fields are rejected) and replies like GET. 400 otherwise.
 runs on the server's keys (the env file, else the process environment),
 passed to Harbor the same way as a visitor's: only the model key and the
 provider's. The provider is the first of `daytona`, `modal` whose keys are
-all variables; a `~/.modal.toml` does not count. 403 for an unknown code (compared in constant time) or one
+all variables; a `~/.modal.toml` does not count. 403 for an unknown code (compared in constant time), a revoked one, or one
 without runs left. A code's runs started are kept in
-`<jobs>/.bench/trial-invites.json` under the SHA-256 of the code.
+`<jobs>/.bench/invites-used.json` under the SHA-256 of the code.
 
 **Starting a run.** `POST /api/jobs` needs a session with keys or an invite
 (401 otherwise) and takes `{"tasks", "models", "attempts", "turnstile_token"}`.
@@ -213,7 +250,7 @@ agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
 400 for a model, task or attempts count
 outside the limits; 400/403 for a missing/failed Turnstile token; 429 when
 the session, or another session from the same network address, already has a
-live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent. A
+live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent or revoked. A
 bad key is an ordinary failed run: the job turns `stopped` or its trials
 `error`, with the classified message above in `error`.
 

@@ -234,7 +234,19 @@ function keysForm() {
     h("p", { class: "tl-alt" }, "No keys? ", h("a", { href: "#/trial/invite" }, "Use an invite code"), "."));
 }
 
+// A shared link, #/trial/invite?code=..., fills the code in; the visitor still
+// submits it. The code is used once, so clearing the field stays cleared.
+let prefilled = "";
+function prefillInvite() {
+  const m = /[?&]code=([^&]*)/.exec(location.hash);
+  if (!m) return;
+  let code = m[1];
+  try { code = decodeURIComponent(code); } catch {}
+  if (code !== prefilled) { prefilled = code; invite.code = code; }
+}
+
 function inviteForm() {
+  prefillInvite();
   const form = h("form", { class: "tf", onsubmit: async (e) => {
     e.preventDefault();
     invite.busy = true; invite.err = ""; renderView();

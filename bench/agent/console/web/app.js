@@ -423,7 +423,8 @@ const jobTitle = (job) => {
 };
 
 function route() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  // A query (#/trial/invite?code=...) is read by the view, not the route.
+  const parts = location.hash.replace(/^#\/?/, "").replace(/\?.*$/, "").split("/").map(decodeURIComponent);
   if (parts[0] === "jobs" && parts[1]) return { view: parts[2] === "compare" ? "compare" : "runs", job: parts[1] };
   if (TRIAL) {
     if (parts[0] === "trial" && TRIAL_VIEWS.includes(parts[1])) return { view: parts[1] };
