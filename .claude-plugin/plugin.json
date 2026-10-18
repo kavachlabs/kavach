@@ -1,6 +1,6 @@
 {
   "name": "kavach-skills",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Agent skills for deterministic crash replay, 56-variant fix verification, contract-first feature implementation, and invariant mutation testing with Kavach.",
   "author": {
     "name": "Kavach Labs",

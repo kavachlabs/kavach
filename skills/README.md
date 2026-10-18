@@ -38,8 +38,10 @@ claude mcp add kavach -- kavach mcp
 | --- | --- | --- |
 | [`kavach-fix`](./kavach-fix/SKILL.md) | Fix a production incident recorded in a `*.kavach` fixture and prove the patch survives 10+ incident variants and 48 neighbour regression variants (`verdict: "fixed"`). | `kavach inspect`, `kavach replay`, `kavach diff` (`kavach_list_incidents`, `kavach_replay`, `kavach_diff`) |
 | [`kavach-implement`](./kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline + feature traffic, declare spec invariants, pause for human `kavach contract approve`, and iterate until `kavach contract check` returns `pass`. | `kavach contract init`, `kavach contract show`, `kavach contract check` (`kavach_contract_show`, `kavach_contract_check`) |
-| [`kavach-setup`](./kavach-setup/SKILL.md) | Instrument a handler or build a `kavach-host` harness in Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP, Elixir, OCaml, Haskell, or Julia. | Language SDKs (`sdk/*`), `kavach-recorder`, `kavach replay` |
-| [`kavach-invariants`](./kavach-invariants/SKILL.md) | Discover domain invariants from a codebase/spec and falsify (mutation-test) them in milliseconds to confirm every invariant catches real bugs. | `env.Invariant`, `kavach replay`, `kavach diff` |
+| [`kavach-setup`](./kavach-setup/SKILL.md) | Map state boundaries into `.kavach/plan/state-map.md`, then instrument a handler or build a `kavach-host` harness in Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP, Elixir, OCaml, Haskell, or Julia. | `.kavach/plan/state-map.md`, Language SDKs (`sdk/*`), `kavach-recorder`, `kavach replay` |
+| [`kavach-invariants`](./kavach-invariants/SKILL.md) | Propose domain invariants and planned mutants in `.kavach/plan/invariants.md`, declare them via the SDK, and falsify (mutation-test) each one in milliseconds to confirm every invariant catches real bugs. | `.kavach/plan/invariants.md`, `env.Invariant`, `kavach replay`, `kavach diff` |
+
+See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state-map.md`](../examples/ledger/.kavach/plan/state-map.md) and [`invariants.md`](../examples/ledger/.kavach/plan/invariants.md)) for a complete example of the human-reviewable planning artifacts generated before code changes.
 
 ---
 
@@ -60,13 +62,13 @@ claude mcp add kavach -- kavach mcp
 ### `kavach-setup`
 
 ```text
-/kavach-setup Instrument the order-matching handler in internal/matcher/ with the Kavach Go SDK so it records production failures via kavach-recorder and runs as a kavach-host for deterministic replay.
+/kavach-setup Map the order-matching handler in internal/matcher/ into .kavach/plan/state-map.md and instrument it with the Kavach Go SDK so it records production failures via kavach-recorder and runs as a kavach-host for deterministic replay.
 ```
 
 ### `kavach-invariants`
 
 ```text
-/kavach-invariants Analyze the ledger service, declare conservation and non-negative balance invariants on the handler, and verify each invariant by mutation-testing it against a recorded journal.
+/kavach-invariants Write .kavach/plan/invariants.md for the ledger service, declare the invariants on the handler, and falsify each invariant by mutation-testing it against a recorded journal.
 ```
 
 ---
