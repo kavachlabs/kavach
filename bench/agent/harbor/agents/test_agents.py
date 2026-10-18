@@ -445,5 +445,84 @@ class Isolation(unittest.TestCase):
         self.assertNotIn(KEY, env.stdout)
 
 
+@unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
+class ExportThroughFile(unittest.TestCase):
+    """The session export travels as a file, not as exec stdout, which remote
+    exec APIs truncate once a session passes about 1 MB."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.logs = Path(self.tmp.name)
+        self.agent = object.__new__(opencode_live.KavachOpenCode)
+        self.agent.logs_dir = self.logs
+        self.agent._session = "ses_1"
+        self.agent._export_failures = 0
+        self.agent.logger = mock.Mock()
+        self.ns = SimpleNamespace
+
+    def environment(self, content, return_code=0, download_error=None):
+        ns = self.ns
+
+        class Env:
+            execs = []
+
+            async def exec(self, command, **kwargs):
+                self.execs.append(command)
+                # What a capped exec would return: the start of the output only.
+                return ns(stdout=content[:1000], stderr="", return_code=return_code)
+
+            async def download_file(self, source, target):
+                if download_error:
+                    raise download_error
+                Path(target).write_text(content)
+
+        return Env()
+
+    def export(self, env):
+        asyncio.run(self.agent._export(env, {}))
+
+    def test_session_over_a_megabyte_is_exported_whole(self):
+        big = json.dumps({"info": {}, "messages": ["x" * 100] * 20000}, indent=2)
+        self.assertGreater(len(big), 1_000_000)
+        env = self.environment(big)
+        self.export(env)
+        self.assertEqual((self.logs / opencode_live.EXPORT_FILE).read_text(), big)
+        self.assertIn("> /tmp/kavach-export.json.tmp", env.execs[0])
+        self.assertEqual([p.name for p in self.logs.iterdir()], [opencode_live.EXPORT_FILE])
+
+    def test_truncated_file_keeps_the_previous_copy(self):
+        previous = self.logs / opencode_live.EXPORT_FILE
+        previous.write_text('{"old": true}')
+        self.export(self.environment('{"info": {"a": '))
+        self.assertEqual(previous.read_text(), '{"old": true}')
+        self.assertEqual([p.name for p in self.logs.iterdir()], [opencode_live.EXPORT_FILE])
+
+    def test_download_failure_keeps_the_previous_copy(self):
+        previous = self.logs / opencode_live.EXPORT_FILE
+        previous.write_text('{"old": true}')
+        self.export(self.environment("{}", download_error=RuntimeError("boom")))
+        self.assertEqual(previous.read_text(), '{"old": true}')
+        self.agent.logger.warning.assert_called_once()
+
+    def test_failed_export_command_is_not_downloaded(self):
+        self.export(self.environment("{}", return_code=1))
+        self.assertFalse((self.logs / opencode_live.EXPORT_FILE).exists())
+
+    def test_warnings_are_rate_limited(self):
+        env = self.environment("{bad")
+        for _ in range(opencode_live.EXPORT_WARN_EVERY + 1):
+            self.export(env)
+        self.assertEqual(self.agent.logger.warning.call_count, 2)
+        self.assertIn("4 bytes", self.agent.logger.warning.call_args.args[0])
+
+    def test_success_resets_the_failure_count(self):
+        self.export(self.environment("{bad"))
+        self.export(self.environment("{}"))
+        self.assertEqual(self.agent._export_failures, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

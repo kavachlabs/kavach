@@ -62,6 +62,7 @@ MODEL_PORT = 8080
 PROXY_SERVICE = "proxy"
 # Pause between copies of the running session to the trial directory.
 MIRROR_SEC = 15
+EXPORT_WARN_EVERY = 20
 # Outside every private range, then the Docker host's usual services: none may
 # accept a connection from a sealed task container.
 OUTSIDE = "1.1.1.1"
@@ -197,6 +198,7 @@ class KavachOpenCode(OpenCode):
         self._version = self._version or PINNED_VERSION
         self._proxy_started = False
         self._session: str | None = None
+        self._export_failures = 0
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
@@ -518,12 +520,29 @@ class KavachOpenCode(OpenCode):
                     break
         if not self._session:
             return
-        result = await environment.exec(
-            f"{NVM}opencode export {shlex.quote(self._session)} 2>/dev/null", env=env, timeout_sec=120
-        )
+        # Not through exec stdout: remote exec APIs truncate large output, and
+        # sessions outgrow that. A file transfer has no such cap.
+        remote = "/tmp/kavach-export.json"
+        local = self.logs_dir / (EXPORT_FILE + ".download")
         try:
-            json.loads(result.stdout)
-        except (ValueError, TypeError):
-            self.logger.warning(f"opencode export failed: {result.stdout!r:.200} {result.stderr}")
+            result = await environment.exec(
+                f"{NVM}opencode export {shlex.quote(self._session)} > {remote}.tmp 2>/dev/null && mv {remote}.tmp {remote}",
+                env=env,
+                timeout_sec=120,
+            )
+            if result.return_code:
+                raise RuntimeError(f"opencode export exited {result.return_code}")
+            await environment.download_file(remote, local)
+            json.loads(local.read_text())
+            local.replace(self.logs_dir / EXPORT_FILE)
+        except Exception as exc:
+            self._export_failures += 1
+            if self._export_failures % EXPORT_WARN_EVERY == 1:
+                size = local.stat().st_size if local.exists() else None
+                self.logger.warning(
+                    f"opencode export failed ({self._export_failures} in a row, downloaded {size} bytes): {exc!r:.200}"
+                )
             return
-        self._write_atomic(EXPORT_FILE, result.stdout)
+        finally:
+            local.unlink(missing_ok=True)
+        self._export_failures = 0
