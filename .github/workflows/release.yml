@@ -1,8 +1,9 @@
 name: release
 
-# Builds static kavach and kavach-recorder archives for Linux and macOS (amd64
-# and arm64) with SHA256SUMS, smoke-tests the native build, and publishes a
-# GitHub Release when triggered by a v* tag.
+# Builds static kavach and kavach-recorder archives (bundled with agent skills
+# and commands) for Linux and macOS (amd64 and arm64) with SHA256SUMS,
+# smoke-tests the native build and installer, and publishes a GitHub Release
+# when triggered by a v* tag.
 on:
   push:
     tags:
@@ -59,9 +60,9 @@ jobs:
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath -ldflags="-s -w" \
               -o "${stage}/kavach-recorder" ./cmd/kavach-recorder
-            cp LICENSE README.md "$stage/"
+            cp -R LICENSE README.md skills commands "$stage/"
             tar -C "$stage" -czf "dist/kavach_${ver}_${goos}_${goarch}.tar.gz" \
-              kavach kavach-recorder LICENSE README.md
+              kavach kavach-recorder LICENSE README.md skills commands
             rm -rf "$stage"
           done
 
@@ -76,10 +77,15 @@ jobs:
           "$tmp/kavach" --version | grep -F "kavach ${VERSION}"
           "$tmp/kavach-recorder" version | grep -F "kavach-recorder/"
           "$tmp/kavach" inspect examples/ledger/testdata/null-amount.kavach >/dev/null
-          KAVACH_ARCHIVE_DIR="$PWD/dist" KAVACH_VERSION="v${VERSION}" KAVACH_INSTALL_DIR="$tmp/bin" \
+          KAVACH_ARCHIVE_DIR="$PWD/dist" KAVACH_VERSION="v${VERSION}" \
+            KAVACH_INSTALL_DIR="$tmp/bin" KAVACH_SKILLS_DIR="$tmp/skills" \
             sh ./scripts/install.sh
           "$tmp/bin/kavach" --version | grep -F "kavach ${VERSION}"
           "$tmp/bin/kavach-recorder" version | grep -F "kavach-recorder/"
+          test -f "$tmp/skills/kavach-fix/SKILL.md"
+          test -f "$tmp/skills/kavach-implement/SKILL.md"
+          test -f "$tmp/skills/kavach-setup/SKILL.md"
+          test -f "$tmp/skills/kavach-invariants/SKILL.md"
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

@@ -1,0 +1,15 @@
+{
+  "name": "kavach-skills",
+  "owner": {
+    "name": "Kavach Labs"
+  },
+  "metadata": {
+    "description": "Agent skills for deterministic crash replay, 56-variant fix verification, contract-first feature implementation, and invariant mutation testing with Kavach."
+  },
+  "plugins": [
+    {
+      "name": "kavach-skills",
+      "source": "./"
+    }
+  ]
+}
