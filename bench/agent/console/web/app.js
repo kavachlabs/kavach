@@ -762,7 +762,7 @@ function renderTop() {
   const kids = [];
   document.querySelector(".app").classList.toggle("trial-bare", TRIAL && (current.view === "new" || TRIAL_VIEWS.includes(current.view)));
   if (TRIAL && TRIAL_VIEWS.includes(current.view)) {
-    title.textContent = current.view === "landing" ? "kavach bench · trial" : "Trial setup";
+    title.textContent = current.view === "landing" ? "kavach bench · trial" : current.view === "terms" ? "Terms" : "Trial setup";
     document.title = "Try Kavach bench";
     return right.replaceChildren(h("a", { class: "btn wide", href: "#/" }, "Home"), themeToggle());
   }

@@ -3788,6 +3788,12 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
 .tl-btn:focus-visible, .tf input:focus-visible, .tf-opt:focus-visible, .tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .tl-trust { display: flex; gap: 8px; margin: 4px 0 0; max-width: 62ch; font-size: 12.5px; line-height: 1.55; color: var(--dim); }
 .tl-lock { flex: none; filter: grayscale(0.4); }
+.tl-terms { max-width: 62ch; padding: 12px 14px; border: 1px solid var(--edge); border-radius: 10px; background: var(--panel); font-size: 12.5px; line-height: 1.55; color: var(--dim); display: flex; flex-direction: column; gap: 8px; }
+.tl-terms ul, .tl-terms-sec ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.tl-terms a, .tl-foot a { color: var(--blue); text-decoration: none; }
+.tl-terms a:hover, .tl-foot a:hover { text-decoration: underline; }
+.tl-terms-sec li { max-width: 62ch; font-size: 14.5px; line-height: 1.6; color: var(--dim); overflow-wrap: anywhere; }
+.tl-foot { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 14px; border-top: 1px solid var(--edge); font-size: 13px; }
 .tl-sec { display: flex; flex-direction: column; gap: 14px; }
 .tl-sub { margin: -8px 0 0; color: var(--dim); font-size: 14px; }
 .tl-steps { list-style: none; margin: 6px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
