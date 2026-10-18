@@ -1,14 +1,26 @@
 # Running the public trial
 
 Day-to-day upkeep of https://try.kavachlabs.dev. Setting it up is in
-[README.md](README.md).
+[README.md](README.md). Partners' invite codes, tasks, models and console
+releases go through the `kavach-trial` CLI from your laptop
+([ONBOARDING.md](ONBOARDING.md)); this file is the rest.
 
 The VM: Hetzner CPX12 (1 vCPU, 2 GB RAM, 2 GB swap), Ubuntu, root SSH by
 key, firewall open on TCP 22 only. The site reaches it through a Cloudflare
 Tunnel: `cloudflared` → `bench-trial` on 127.0.0.1:8480, running as user
-`kavach`. Runs live in `/var/lib/kavach/jobs`; secrets in
-`/etc/kavach/trial.env` (0600, root); optional non-secret settings in
-`/etc/kavach/trial.json`.
+`kavach`. Runs live in `/var/lib/kavach/jobs`; keys in
+`/etc/kavach/trial.env` (root, 0600); invite codes, tasks, models and the
+showcase list in `/etc/kavach/trial.json` (root:kavach, 0640). The codes in
+`trial.json` are as good as the keys: keep it 0640 and out of chat, issues
+and backups you would share.
+
+Locked out of SSH: Hetzner Cloud Console → the server → **Console** (>_)
+is a terminal on the VM that needs no SSH. It logs in with root's password;
+a server made with an SSH key has none, so set one under **Rescue** →
+**Reset root password** first. From there, `fail2ban-client set sshd unbanip
+<ip>` lifts a ban, and removing
+`/etc/ssh/sshd_config.d/00-kavach-hardening.conf` then
+`systemctl reload ssh` undoes the SSH hardening.
 
 | Unit | What it is |
 | --- | --- |
@@ -29,7 +41,8 @@ outlives the console. A run is live while a process's command line names
 ps -eo pid,etime,args | grep -F /var/lib/kavach/jobs/ | grep -v grep
 ```
 
-No output means no live runs. The console's view (it also lists a folder
+No output means no live runs. From your laptop, `kavach-trial status` shows
+the service, the checkout, a live-run count and invite usage. The console's view (it also lists a folder
 with no `result.json` as running, so trust `ps` when they disagree):
 
 ```sh
@@ -44,15 +57,22 @@ A run's Harbor output is `/var/lib/kavach/jobs/.bench/<id>.log`.
   only) and never reboot. Check for a pending reboot about weekly:
   `cat /var/run/reboot-required.pkgs 2>/dev/null`. Everything else,
   including cloudflared from Cloudflare's repository, waits for you:
-  `apt-get update && apt list --upgradable`, then `apt-get upgrade` with no
-  live runs (an upgrade can restart services).
-- **The console**: README.md, Update. A restart leaves runs going.
+  `apt-get update && apt list --upgradable`, then
+  `NEEDRESTART_MODE=l apt-get upgrade` with no live runs (needrestart then
+  lists services to restart instead of restarting bench-trial or
+  cloudflared itself).
+- **The console**: `kavach-trial deploy [ref]` (ONBOARDING.md, "Ship a
+  console change"). It refuses while runs are live, checks the new binary
+  against `trial.json` first and rolls back on a failed restart. A restart
+  leaves runs going but forgets visitor sessions.
 - **Disk**: `df -h /` and `du -sh /var/lib/kavach/jobs`. The journal is
   capped at 200M (`journalctl --disk-usage`).
 - **Memory**: `free -h`. Each live run is a Harbor process on 2 GB;
   `TRIAL_MAX_RUNNING` (default 3) bounds them.
 - **SSH bans**: `fail2ban-client status sshd`; unban with
-  `fail2ban-client set sshd unbanip <ip>`.
+  `fail2ban-client set sshd unbanip <ip>`. Loopback is never banned. If
+  your own address is banned, use the Hetzner console (above) or SSH from
+  another address.
 - **Hardening again** (after changing SSH or on a VM set up before
   `harden.sh`): `sh /opt/kavach/bench/agent/deploy/trial/harden.sh`, then
   log in from a new terminal before closing the old one.
@@ -74,11 +94,20 @@ finish:
 
 ## Retention
 
-`retention.sh` deletes a run (its folder and its files in `.bench/`) when
-nothing in either has changed for 30 days, except showcase runs (listed in
-`trial.json`'s `showcase` or in `TRIAL_SHOWCASE`; both count) and live runs.
-It also removes `.bench/home/<id>` folders older than a day whose run is not
-live. Every deletion is logged.
+`retention.sh` deletes a run (its Harbor folder and its files in `.bench/`)
+when nothing in either has changed for 30 days, except showcase runs
+(listed in `trial.json`'s `showcase` or in `TRIAL_SHOWCASE`; both count) and
+live runs. It also removes `.bench/home/<id>` folders older than a day whose
+run is not live. It touches only folders with a plain name
+(`[A-Za-z0-9._-]`) that hold Harbor's `config.json`, `lock.json` or
+`result.json`, never the console's own files (`invites-used.json`, ...).
+Every deletion is logged; a folder it cannot delete is logged, kept with its
+bookkeeping, and makes the pass exit 1 (the unit shows as failed).
+
+The timer's service runs as `kavach` and does not load `trial.env`: root
+copies out only its `TRIAL_SHOWCASE` line before the script starts. It
+reads `trial.json` itself, so that file must stay readable by `kavach`; if
+it cannot be read or parsed, nothing is deleted and the unit fails.
 
 ```sh
 sh /opt/kavach/bench/agent/deploy/trial/retention.sh --dry-run   # as root: lists what it would delete
@@ -87,17 +116,25 @@ journalctl -u bench-retention                                    # what it delet
 systemctl start bench-retention                                  # run it now
 ```
 
-Keep runs longer with `RETENTION_DAYS=60` in `trial.env`, or `--days N` by
-hand. If `trial.json` exists but cannot be parsed, it deletes nothing and
-fails. Add a run to the showcase list before it turns 30 days old if you
-want to keep it.
+Keep runs longer with `systemctl edit bench-retention` and
+
+```ini
+[Service]
+Environment=RETENTION_DAYS=60
+```
+
+or `--days N` by hand. To keep a run for good, add its id to `showcase` in
+`trial.json` (by hand; `kavach-trial` does not edit that list) before it
+turns 30 days old.
 
 ## Monitoring
 
 `.github/workflows/trial-uptime.yml` fetches `/api/trial/session` every 15
-minutes and expects 200 with JSON that has `limits`. After three failed
-tries it opens an issue labelled `trial-down` (or comments on the open one)
-and fails the run; the next good probe closes the issue. GitHub runs
+minutes and expects 200 with JSON that has `limits`; a probe fails after
+three tries 20 s apart, and the run then fails. Two failed probes in a row
+open an issue labelled `trial-down`; while it stays down the issue gets a
+comment at most every 6 hours; the next good probe closes it with a
+comment. GitHub runs
 schedules only from the default branch, so it starts once it is on `main`;
 run it by hand from Actions → trial-uptime → Run workflow. GitHub turns off
 scheduled workflows in a repository with no activity for 60 days; re-enable
@@ -297,9 +334,13 @@ runs keep going; stop them with `kill -INT <pid>` from [Live runs](#live-runs)).
 holds a digest of the session, the same for all of its runs. The console
 does not log client addresses; Cloudflare's Security → Events and
 Analytics show them, and a custom rule can block one. Revoke or lower the
-provider caps above. Invite codes are in `TRIAL_INVITE_CODES`; remove one
-and `systemctl restart bench-trial`. Rotate a leaked key at the provider,
-then in `trial.env`, then restart.
+provider caps above. Revoke an invite code with
+`kavach-trial invite revoke <code|label>`, which takes effect at once
+without a restart (ONBOARDING.md); see which runs a code started with
+`kavach-trial invite show`. Rotate a leaked key at the provider,
+then in `trial.env`, then `systemctl restart bench-trial`. If `trial.json`
+leaked, revoke every code in it (`kavach-trial invite list`, then `revoke`)
+and hand out new ones.
 
 **Disk full**: `sh .../retention.sh --dry-run --days 7`, then without
 `--dry-run`; `journalctl --vacuum-size=100M`.

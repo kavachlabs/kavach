@@ -4,7 +4,8 @@
 the agent with their own OpenRouter and Daytona or Modal keys, which stay in
 the console's memory (API.md, Trial mode); invite codes run with the keys in
 `/etc/kavach/trial.env`. Sandboxes run at the provider, so the VM only runs
-the console and Harbor: 2 vCPU and 4 GB is enough.
+the console and Harbor: it runs on a Hetzner CPX12 (1 vCPU, 2 GB RAM plus
+2 GB swap).
 
 The console listens on 127.0.0.1 only and cloudflared reaches it there. Its
 client addresses come from `CF-Connecting-IP`, which it believes only from
@@ -43,7 +44,8 @@ Running it day to day (reboots, retention, monitoring, spend caps, incidents): [
 
 5. Showcase runs: copy finished runs into `/var/lib/kavach/jobs` (for
    example `rsync -a results/harbor/<id> root@VM:/var/lib/kavach/jobs/`,
-   then `chown -R kavach:kavach`) and list their ids in `TRIAL_SHOWCASE`.
+   then `chown -R kavach:kavach`) and list their ids in `showcase` in
+   `/etc/kavach/trial.json`, or in `TRIAL_SHOWCASE`.
 6. `systemctl enable --now bench-trial`, then open https://try.kavachlabs.dev.
 
 ## Update
