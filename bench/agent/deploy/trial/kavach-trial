@@ -98,8 +98,9 @@ cmd_deploy() {
 	# until everything local has worked. It is renamed into place, never
 	# overwritten: each run's log helper is this executable.
 	scp -q "$tmp/out/bench" "root@$HOST:/opt/kavach/bin/bench.new" || die "could not copy the binary"
-	# The new binary must accept the config and usage files as they are.
-	remote "$BENCH.new api -trial -check -root /opt/kavach -jobs /var/lib/kavach/jobs" || {
+	# The new binary must accept the config and usage files as they are, read
+	# as the service's user, which can't read what root can.
+	remote "chmod 0755 $BENCH.new && runuser -u kavach -- $BENCH.new api -trial -check -root /opt/kavach -jobs /var/lib/kavach/jobs" || {
 		remote "rm -f $BENCH.new"
 		die "the new bench rejects the VM's trial.json or invite usage; nothing was changed"
 	}
