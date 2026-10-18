@@ -120,8 +120,8 @@ Kavach ships with four [Agent Skills](skills/README.md) (installed automatically
 | --- | --- |
 | [`/kavach-fix`](skills/kavach-fix/SKILL.md) | Reproduce a `.kavach` crash fixture and generalize the fix until `kavach diff` returns `fixed` across all incident and regression variants. |
 | [`/kavach-implement`](skills/kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline traffic, declare spec invariants, stop for human `kavach contract approve`, and iterate until `pass`. |
-| [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Instrument a handler or build a `kavach-host` harness in any of the 12 language SDKs. |
-| [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Discover domain invariants and mutation-test each one in milliseconds with `kavach replay` and `kavach diff`. |
+| [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Map state boundaries into [`.kavach/plan/state-map.md`](examples/ledger/.kavach/plan/state-map.md), then instrument a handler or build a `kavach-host` harness in any of the 12 language SDKs. |
+| [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Write a reviewable invariant blueprint to [`.kavach/plan/invariants.md`](examples/ledger/.kavach/plan/invariants.md), declare the invariants, and mutation-test each one in milliseconds with `kavach replay` and `kavach diff`. |
 
 See [AGENTS.md](AGENTS.md) for the complete verdict loop and rules.
 

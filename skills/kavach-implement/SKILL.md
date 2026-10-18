@@ -8,7 +8,7 @@ description: >
   implementing a new feature, command, endpoint, or behaviour change.
 compatibility: Requires the `kavach` CLI on PATH (or `kavach mcp` registered).
 metadata:
-  version: "0.1.0"
+  version: "0.1.2"
 ---
 
 # Build a Feature Contract-First (`kavach-implement`)

@@ -1,15 +1,15 @@
 ---
 name: kavach-setup
 description: >
-  Instrument an existing service or build a `kavach-host` harness around a
-  subsystem using Kavach's 12 language SDKs (Go, Rust, Python, TypeScript,
-  Java, C, C++, Ruby, PHP, Elixir, OCaml, Haskell, Julia) or the raw pipe
-  protocol (`INTEGRATING.md`). Use when onboarding a codebase to Kavach for
-  production flight recording (`kavach-recorder`), incident replay, or
-  contract-first verification.
+  Map a codebase's state boundaries into `.kavach/plan/state-map.md`, then
+  instrument an existing service or build a `kavach-host` harness using Kavach's
+  12 language SDKs (Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP,
+  Elixir, OCaml, Haskell, Julia) or the raw pipe protocol (`INTEGRATING.md`).
+  Use when onboarding a codebase to Kavach for production flight recording
+  (`kavach-recorder`), incident replay, or contract-first verification.
 compatibility: Requires `kavach` and `kavach-recorder` on PATH.
 metadata:
-  version: "0.1.0"
+  version: "0.1.2"
 ---
 
 # Instrument a Service or Harness with Kavach (`kavach-setup`)
@@ -21,7 +21,7 @@ Onboard a service or subsystem to Kavach so it can record `.kavach` flight-recor
 Choose the lightest integration mode that fits the user's goal:
 
 1. **Direct Handler Instrumentation (Production + Replay):**
-   Wire the service's core event/command handler directly to the Kavach SDK for its language, and add the `MaybeHost` / `maybe_host` entrypoint at the top of `main`. In production, `Recorder.Step` writes into `kavach-recorder` over shared memory (`81.2 ns/event`); when invoked with `kavach-host`, the same binary runs as a deterministic replay host.
+   Wire the service's core event/command handler directly to the Kavach SDK for its language, and add the `MaybeReplay` / `maybe_host` entrypoint at the top of `main`. In production, `Recorder.Step` writes into `kavach-recorder` over shared memory (`81.2 ns/event`); when invoked with `kavach-host`, the same binary runs as a deterministic replay host.
 2. **Scoped Subsystem Harness (`cmd/kavach-harness`):**
    When working inside a large existing repository (like Redis, Valkey, Kombu, HTTPX, or Axum) to fix an incident or verify a feature contract without refactoring the entire server entrypoint, create a thin `kavach-host` harness binary/script that drives the target subsystem's functions through `env` and checks state invariants after each step.
 
@@ -29,18 +29,21 @@ Choose the lightest integration mode that fits the user's goal:
 
 ## Step-by-Step Setup Workflow
 
-### 1. Map the Determinism Boundary
+### 1. Write `.kavach/plan/state-map.md` (Before Touching Code)
 
-Inspect the target handler or subsystem and inventory:
-- **Inputs (`Input`):** Commands, events, requests, or messages that trigger a state transition.
-- **Non-deterministic reads (must route through `env`):**
+Inspect the target handler or subsystem and write **`.kavach/plan/state-map.md`** following [`references/state-map-template.md`](./references/state-map-template.md) (see [`examples/ledger/.kavach/plan/state-map.md`](../../examples/ledger/.kavach/plan/state-map.md) for a complete example):
+
+- **State Root & Mutable Structures:** Primary structs, maps, caches, or secondary indices that hold domain state, with `file:line` locations.
+- **Transition Entrypoints (`Input`):** Commands, events, requests, or messages that trigger a state transition.
+- **Determinism Boundary (`env` Reads):**
   - Wall clock / timestamps (`env.Now()` / `env.now()`)
-  - Random bytes / UUIDs / jitter (`env.RandBytes()` / `env.random()`)
+  - Random bytes / UUIDs / jitter (`env.Read()` / `env.RandBytes()` / `env.random()`)
   - Synchronous outbound queries to external services or DBs (`env.Query()` / `env.query()`)
   - Dynamic config or feature flags (`env.Config()` / `env.config()`)
-- **External effects (`env.Emit` / `env.emit`):** Outbound messages, DB writes, or notifications that should be captured and compared during replay rather than executed against live systems.
-- **State Snapshot & Restore (optional but recommended):** `Snapshot()` and `Restore()` so long-running production recorders can roll segments cleanly.
-- **Domain Invariants:** Properties that must hold after every non-failing step.
+- **Captured Side Effects (`env.Emit` / `env.emit`):** Outbound messages, DB writes, or notifications that should be captured and compared during replay rather than executed against live systems.
+- **Snapshots & Host Entrypoint:** `Snapshot()` / `Restore()` hooks and where `kavach-host` is intercepted.
+
+ Writing `.kavach/plan/state-map.md` first gives the human engineer a concise artifact to review and feeds directly into `/kavach-invariants` (`.kavach/plan/invariants.md`).
 
 ### 2. Wire the Language SDK
 

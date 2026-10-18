@@ -8,7 +8,7 @@ description: >
   that a patch is not a narrow single-trace workaround.
 compatibility: Requires the `kavach` CLI on PATH (or `kavach mcp` registered).
 metadata:
-  version: "0.1.0"
+  version: "0.1.2"
 ---
 
 # Fix an Incident with Kavach (`kavach-fix`)
