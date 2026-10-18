@@ -17,7 +17,12 @@ go build -o "$work/kavach-recorder" github.com/kavachlabs/kavach/cmd/kavach-reco
 git -C "$root" worktree add -q --detach "$work/old" "${OLD_REV:?set OLD_REV}"
 (cd "$work/old/$rel" && go build -trimpath -o "$work/classifyhost" ./cmd/classifyhost)
 
-KAVACH_RECORDER=$work/kavach-recorder "$work/classifyhost" -record testdata/axum-1934-inputs.jsonl -fixtures "$work/out" || true
+# --test-facts replaces the machine's environment with a neutral one, so that the
+# fixture holds nothing of the machine it was made on.
+printf '#!/bin/sh\nexec "%s" --test-facts "%s" "$@"\n' "$work/kavach-recorder" "$PWD/testdata/axum-1934-facts.json" >"$work/recorder"
+chmod +x "$work/recorder"
+
+KAVACH_RECORDER=$work/recorder "$work/classifyhost" -record testdata/axum-1934-inputs.jsonl -fixtures "$work/out" || true
 set -- "$work"/out/fixtures/*.kavach
 [ $# -eq 1 ] && [ -f "$1" ] || { echo "regen-fixture: expected one fixture, got: $*" >&2; exit 1; }
 cp "$1" testdata/axum-1934.kavach

@@ -75,6 +75,16 @@ func TestClassifyErrors(t *testing.T) {
 		"daytona.errors.DaytonaError: 401 Unauthorized":          "the sandbox provider rejected the key",
 		"Traceback /Users/op/x.py\nboom\nharbor: exit status 3":  "Harbor exited with an error (code 3)",
 		"something odd": "Harbor exited with an error",
+		"Downloading  403.3kB/40.21MB\nDownloading  403MB/520.4MB\nharbor: exit status 1": "Harbor exited with an error (code 1)",
+		"I've been forbidden from touching authentication.py; permission denied":          "Harbor exited with an error",
+		"RuntimeError: docker compose up failed:  c1be Downloading  403.3kB/40.21MB":      "the sandbox failed to start",
+		"EnvironmentStartTimeoutError: Environment start timed out after 120s":            "the sandbox timed out starting",
+		"httpx: HTTP/1.1 401 Unauthorized from daytona":                                   "the sandbox provider rejected the key",
+		"modal.exception.AuthError: Token ID is invalid":                                  "the sandbox provider rejected the key",
+		"Error code: 401 - {'error': {'message': 'No auth credentials found'}}":           "the model provider rejected the key",
+		"openai.APIStatusError: status code 403":                                          "the model provider rejected the key",
+		"Invalid API key provided":                                                        "the model provider rejected the key",
+		"OpenrouterException: User not found.":                                            "the model provider rejected the key",
 	} {
 		if got := classifyJobError(in); got != want {
 			t.Errorf("job error %q: %q, want %q", in, got, want)
@@ -86,6 +96,7 @@ func TestClassifyErrors(t *testing.T) {
 		"interrupted":                    "interrupted",
 		"a long free text sentence":      "the attempt failed",
 		"RuntimeError: 401 Unauthorized": "the model provider rejected the key",
+		"RuntimeError: docker compose up failed: 403MB/520.4MB": "the sandbox failed to start",
 	} {
 		if got := classifyTrialError(in); got != want {
 			t.Errorf("trial error %q: %q, want %q", in, got, want)

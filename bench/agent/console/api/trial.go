@@ -847,13 +847,21 @@ func (t *trial) shapeTrial(tr *harbor.Trial) {
 
 var (
 	exitStatus = regexp.MustCompile(`harbor: exit status (\d+)`)
-	authFailed = regexp.MustCompile(`(?i)\b(401|403)\b|unauthori[sz]ed|invalid[ _]api[ _]key|incorrect api key|authentication|invalid[ _]token|forbidden|permission denied`)
-	sandboxLog = regexp.MustCompile(`(?i)daytona|modal`)
+	// authFailed matches a provider refusing credentials. A bare 401 or 403
+	// is not enough: Docker progress prints "403.3kB/40.21MB".
+	authFailed = regexp.MustCompile(`(?i)(?:http/[\d.]+\s+|status[ _]?code\W{0,3}|error code:?\s*)(?:401|403)\b|\b(?:401|403)\s+(?:unauthori[sz]ed|forbidden)\b|(?:error|exception)[^\n]{0,40}?[-:]\s*(?:401|403)\b|unauthori[sz]ed|invalid[ _]api[ _]key|incorrect api key|no auth credentials|user not found|invalid[ _]token|token id is invalid|\bauth(?:entication)?error\b`)
+	// sandboxStart matches the sandbox failing to come up: Harbor's
+	// "docker compose up" failing, which includes the image pull, or timing out.
+	sandboxStart   = regexp.MustCompile(`docker compose up failed|EnvironmentStartTimeoutError`)
+	sandboxTimeout = regexp.MustCompile(`(?i)timeout|timed out`)
+	sandboxLog     = regexp.MustCompile(`(?i)daytona|modal`)
 )
 
 const (
 	modelKeyRejected   = "the model provider rejected the key"
 	sandboxKeyRejected = "the sandbox provider rejected the key"
+	sandboxStartFailed = "the sandbox failed to start"
+	sandboxStartSlow   = "the sandbox timed out starting"
 )
 
 // classifyJobError turns the tail of Harbor's output, which the reader puts
@@ -866,6 +874,8 @@ func classifyJobError(s string) string {
 		return ""
 	case strings.HasPrefix(s, "Harbor stopped writing"):
 		return s
+	case sandboxStart.MatchString(s):
+		return sandboxStartMessage(s)
 	case authFailed.MatchString(s) && sandboxLog.MatchString(s):
 		return sandboxKeyRejected
 	case authFailed.MatchString(s):
@@ -875,6 +885,13 @@ func classifyJobError(s string) string {
 		return "Harbor exited with an error (code " + m[1] + ")"
 	}
 	return "Harbor exited with an error"
+}
+
+func sandboxStartMessage(s string) string {
+	if sandboxTimeout.MatchString(s) {
+		return sandboxStartSlow
+	}
+	return sandboxStartFailed
 }
 
 // ClassifyError is the message a visitor is shown for the error text of a
@@ -892,6 +909,8 @@ func classifyTrialError(s string) string {
 	switch {
 	case s == "":
 		return ""
+	case sandboxStart.MatchString(s):
+		return sandboxStartMessage(s)
 	case authFailed.MatchString(s) && sandboxLog.MatchString(s):
 		return sandboxKeyRejected
 	case authFailed.MatchString(s):
