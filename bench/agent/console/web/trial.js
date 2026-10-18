@@ -7,7 +7,7 @@ export const TRIAL_VIEWS = ["landing", "keys", "invite", "terms"];
 
 const SITE = "https://kavachlabs.dev";
 const BENCH = "https://benchmark.kavachlabs.dev";
-const TRUST = "Your keys stay in this server's memory for your session only, are never written to disk, and are sent only to OpenRouter and your sandbox provider. Use a key with a spending limit.";
+const trust = () => h("span", {}, "Keys you enter stay in this server's memory and are used only for your runs. Runs bill your own provider accounts, so use keys with a spending limit. ", h("a", { href: "#/trial/terms" }, "Terms"));
 const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
 const base = (task) => task.replace(ARM_SUFFIX, "");
 const modelName = (m) => m.replace(/^openrouter\//, "");
@@ -52,10 +52,10 @@ function termsNote(invited) {
       invited
         ? h("li", {}, "Invite runs use our provider keys, so they cost you nothing, and are limited to the runs your code allows.")
         : [
-          h("li", {}, "Your keys stay in this server's memory. They are used only for your runs, and forgotten when you click Forget keys, after 24 hours idle, or when the server restarts."),
-          h("li", {}, "Runs are billed to your own OpenRouter and sandbox accounts. Set a spend limit on your key."),
+          h("li", {}, "Your keys stay in this server's memory. They are used only for your runs, and dropped when you click Forget my keys, after 24 hours idle, or when the server restarts."),
+          h("li", {}, "Runs are billed to your own model and sandbox provider accounts. Set a spend limit on your key."),
         ],
-      h("li", {}, "Runs and their results are public to anyone with the link.")),
+      h("li", {}, "Every run and its results are public and listed for anyone.")),
     h("a", { href: "#/trial/terms" }, "Terms and how your keys are handled →"));
 }
 
@@ -147,7 +147,7 @@ function landing() {
           : h("a", { class: "tl-btn primary", href: "#/trial/keys" }, "Try it with your keys"),
         ready ? null : h("a", { class: "tl-btn", href: "#/trial/invite" }, "Have an invite code?"),
         ready && trial.session.has_keys ? h("button", { type: "button", class: "tl-btn", onclick: forgetKeys }, "Forget my keys") : null),
-      h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), TRUST)),
+      h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), trust())),
     verdictCard(showcase.map((j) => j.id))),
 
     h("section", { class: "tl-sec" },
@@ -181,24 +181,25 @@ function terms() {
   return shell("Terms and how your keys are handled",
     "Plain version. This is a trial, so it is short.",
     sec("Your keys",
-      "Held in this server's memory only. Never written to disk, never logged, never sent back to your browser.",
-      "Passed only to the run you start, as environment variables of its process, and used only to call OpenRouter (the model) and Daytona or Modal (the sandbox).",
-      "Forgotten when you click Forget keys, after 24 hours without use, or when the server restarts.",
+      "The console holds them in this server's memory only. It never writes them to disk or logs them, and never sends them back to your browser. The tools that run your job might write them into the run's files or its temporary home folder: we redact the files when the run ends and delete the home folder then.",
+      "Passed only to the run you start, as environment variables of its process, and used only to call your model provider and your sandbox provider (Daytona or Modal).",
+      "Dropped from your session when you click Forget my keys, after 24 hours without use, or when the server restarts. For a run in progress we keep its key values in memory only, to redact them from that run's output.",
       "Forgetting your keys does not stop a run that has already started: use Stop on the run. It keeps the keys it began with until it ends.",
-      "Run logs and files have your key values replaced by [redacted] before they are kept or shown."),
+      "Logs are redacted as they are written, and a run's files are redacted when it ends. What the server shows is also redacted while it holds the run's key values."),
     sec("What it costs you",
-      "Runs bill your own accounts: model tokens at OpenRouter and sandbox time at Daytona or Modal. We do not charge you and cannot cap what your providers charge.",
+      "Runs bill your own accounts: model tokens at your model provider and sandbox time at Daytona or Modal. We do not charge you and cannot cap what your providers charge.",
       "Set a spend limit on every key you paste. Use a key you can revoke afterwards.",
       "With an invite code the run uses our keys instead, up to the number of runs the code allows."),
     sec("What we store",
       "Each run's folder: the task, model and settings you chose, the agent's transcript, its patch, Kavach's verdicts, grading results and logs (with keys redacted). Finished runs may also be copied to our backup storage.",
-      "These are kept for a limited time.",
+      "They are kept until we delete them. We make no promise about how long that is.",
       "A one-way hash of your session id (to let you stop your own runs), and for an invite code a hash of the code with a count of its runs. Your network address is held in memory to rate-limit requests.",
-      "A session cookie. There are no accounts, and we do not ask for your name or email."),
+      "A session cookie. There are no accounts, and we do not ask for your name or email.",
+      "The site is served through Cloudflare, which sees your traffic. If the check on the run form is on, your network address is also sent to Cloudflare's Turnstile service to verify it."),
     sec("What we don't",
       "Your keys, after they are forgotten. Any code or files of yours: you only choose from the incidents we provide."),
     sec("Runs are public",
-      "A run you start can be opened by anyone who has its link, and a finished one may be listed on this page with its results. Do not put anything private into a run. Showcase runs are public too."),
+      "Every run, running or finished, and its results is listed for every visitor, and finished runs appear on this page. Do not put anything private into a run."),
     sec("As is",
       "This is a free trial, provided as is, with no guarantee that it works, stays up, keeps your runs, or that results are correct. We may change or stop it at any time."),
     h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "kavachlabs.dev"), "."),
@@ -400,6 +401,6 @@ export function renderTrialNew(view) {
       turnstileBox(trial.session.turnstile_site_key),
       run.err ? h("p", { class: "tf-err", role: "alert" }, run.err) : null,
       h("button", { type: "submit", class: "tl-btn primary", disabled: run.busy || !run.task }, run.busy ? "Starting…" : "Start run"),
-      h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), TRUST),
+      h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), trust()),
       trial.session.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null)));
 }
