@@ -7,7 +7,7 @@
 #   kavach-trial task add|remove|list <task>...
 #   kavach-trial model add|remove|list <model>...
 #   kavach-trial status
-#   kavach-trial deploy [--force] [ref]
+#   kavach-trial deploy [--force] [--build-only] [ref]
 #
 # KAVACH_TRIAL_HOST is the VM (default 178.105.177.23), KAVACH_TRIAL_URL the
 # public address (default https://try.kavachlabs.dev).
@@ -34,7 +34,7 @@ quote() {
 # is down. The [b] keeps pgrep from matching this command line.
 live_runs() {
 	remote "
-		api=\$(curl -fsS $API/api/jobs 2>/dev/null | grep -o '\"status\":\"running\"' | wc -l || true)
+		api=\$(curl -fsS $API/api/jobs 2>/dev/null | grep -o '\"status\": *\"running\"' | wc -l || true)
 		helpers=\$(pgrep -fc '[b]ench _logpipe' || true)
 		echo \$((api + helpers))
 	"
@@ -53,8 +53,16 @@ cmd_status() {
 }
 
 cmd_deploy() {
-	force=0
-	if [ "${1:-}" = --force ]; then force=1; shift; fi
+	force=0 build_only=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--force) force=1 ;;
+		--build-only) build_only=1 ;; # build locally and stop
+		-*) die "unknown flag $1" ;;
+		*) break ;;
+		esac
+		shift
+	done
 	ref=${1:-main}
 	top=$(git rev-parse --show-toplevel) || die "run deploy from inside the kavach checkout"
 	sha=$(git -C "$top" rev-parse --verify "$ref^{commit}" 2>/dev/null) ||
@@ -64,21 +72,32 @@ cmd_deploy() {
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	echo "building bench at $sha for linux/amd64"
-	git -C "$top" archive "$sha" bench/agent/console | tar -x -C "$tmp"
-	(cd "$tmp/bench/agent/console" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$tmp/bench" ./cmd/bench)
+	# The whole tree: the console's go.mod replaces the root module with ../../..
+	mkdir "$tmp/src" "$tmp/out"
+	git -C "$top" archive "$sha" | tar -x -C "$tmp/src"
+	(cd "$tmp/src/bench/agent/console" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$tmp/out/bench" ./cmd/bench) ||
+		die "the build failed"
+	[ "$build_only" = 0 ] || { echo "built $tmp/out/bench (removed on exit)"; return; }
 
 	live=$(live_runs)
 	if [ "$live" != 0 ] && [ "$force" = 0 ]; then
 		die "$live trial run(s) are live; a restart forgets every visitor session. Wait, or pass --force"
 	fi
 
-	echo "checking out $sha on $HOST"
-	remote "git -C /opt/kavach fetch origin $sha && git -C /opt/kavach checkout --detach FETCH_HEAD" ||
-		die "the VM could not fetch $sha; push it first"
-	# Under a new name, then renamed into place: each run's log helper is this
-	# executable and must not see it rewritten.
-	scp -q "$tmp/bench" "root@$HOST:/opt/kavach/bin/bench.new"
-	remote "chmod 755 /opt/kavach/bin/bench.new && mv -f /opt/kavach/bin/bench.new $BENCH && systemctl restart bench-trial"
+	# The binary goes up under a new name first, so nothing on the VM changes
+	# until everything local has worked. It is renamed into place, never
+	# overwritten: each run's log helper is this executable.
+	scp -q "$tmp/out/bench" "root@$HOST:/opt/kavach/bin/bench.new" || die "could not copy the binary"
+	prev=$(remote "git -C /opt/kavach rev-parse HEAD")
+	echo "checking out $sha on $HOST (was $prev)"
+	remote "git -C /opt/kavach fetch origin $sha && git -C /opt/kavach checkout --detach FETCH_HEAD" || {
+		remote "rm -f /opt/kavach/bin/bench.new"
+		die "the VM could not fetch $sha; push it first. Nothing was changed"
+	}
+	if ! remote "chmod 755 /opt/kavach/bin/bench.new && mv -f /opt/kavach/bin/bench.new $BENCH && systemctl restart bench-trial"; then
+		remote "rm -f /opt/kavach/bin/bench.new; git -C /opt/kavach checkout --detach $prev"
+		die "installing or restarting failed; the checkout is back at $prev"
+	fi
 
 	# The service takes a moment to listen.
 	i=0

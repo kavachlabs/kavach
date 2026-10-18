@@ -131,3 +131,26 @@ func TestTrialCLISeedsFromEnvFile(t *testing.T) {
 		t.Fatalf("model add: %d %s", code, out)
 	}
 }
+
+func TestAPIRefusesToStartOnBrokenTrialConfig(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "trial.json")
+	os.WriteFile(bad, []byte("{nope"), 0o600)
+	var out, errb bytes.Buffer
+	code := cmdAPI([]string{"-trial", "-trial-config", bad, "-jobs", dir, "-tasks", dir, "-port", "0"}, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "refusing to start") {
+		t.Errorf("exit %d: %s", code, errb.String())
+	}
+}
+
+func TestTrialCLIMatchesLabelPart(t *testing.T) {
+	run, _, _ := trialCLI(t)
+	run("invite", "add", "-label", "Garry (YC)")
+	run("invite", "add", "-label", "Garth Co")
+	if code, _, _ := run("invite", "show", "garry"); code != 0 {
+		t.Errorf("a unique part of a label: %d", code)
+	}
+	if code, _, errs := run("invite", "show", "gar"); code != 1 || !strings.Contains(errs, "more than one") {
+		t.Errorf("an ambiguous part: %d %q", code, errs)
+	}
+}

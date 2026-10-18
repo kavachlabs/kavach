@@ -196,6 +196,12 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 			cfg.Trial.ConfigPath = *trialConfig
 		}
 	}
+	if cfg.Trial != nil {
+		if err := api.CheckTrialStart(cfg.Trial, cfg.JobsDir); err != nil {
+			fmt.Fprintf(stderr, "bench api: refusing to start with weaker limits than configured: %v\n", err)
+			return 1
+		}
+	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
 	if err := serve(syncingServer(cfg), listen, stderr, nil); err != nil {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)

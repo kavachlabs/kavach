@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -132,6 +133,8 @@ type trial struct {
 	jobs   string
 	tasks  string
 
+	usageErr error // invite usage could not be read: invite runs are refused
+
 	confMu    sync.Mutex
 	conf      *trialSettings
 	confStamp fileStamp
@@ -179,8 +182,11 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	}
 	t := &trial{
 		cfg: cfg, runner: runner, jobs: jobs, tasks: tasks,
-		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, jobSecrets: map[string][]string{}, used: ReadInviteUse(jobs),
+		sessions: map[string]*session{}, owners: map[string]string{}, runIP: map[string]string{}, jobSecrets: map[string][]string{}, used: map[string]*InviteUse{},
 		rate: map[string]*window{},
+	}
+	if t.used, t.usageErr = ReadInviteUse(jobs); t.usageErr != nil {
+		log.Printf("invite usage unreadable, invite runs are refused: %v", t.usageErr)
 	}
 	t.conf = t.build(nil)
 	t.settings()
@@ -665,6 +671,9 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		inv, ok := t.settings().invite(invite)
 		if !ok || inv.Revoked {
 			return "", &trialRunError{http.StatusForbidden, "this invite code has been revoked"}
+		}
+		if t.usageErr != nil {
+			return "", &trialRunError{http.StatusServiceUnavailable, "invite runs are paused until the operator fixes the usage record"}
 		}
 		code = digest(invite)
 		if t.used[code].runs() >= inv.Runs {

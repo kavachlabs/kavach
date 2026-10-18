@@ -108,8 +108,10 @@ Settings come from the environment (and the config file below):
 
 **Config file.** `-trial-config PATH` (or `TRIAL_CONFIG`; default
 `/etc/kavach/trial.json`) names a JSON file the operator edits while the
-server runs, so changes need no restart and forget no session. It holds no
-secret (keys stay in the environment):
+server runs, so changes need no restart and forget no session. Its invite
+codes are bearer credentials for the server's keys, so it is created 0640
+`root:kavach` (0600 without a `kavach` group) and an edit keeps the mode; the
+keys themselves stay in the environment:
 
 ```json
 {
@@ -126,7 +128,11 @@ secret (keys stay in the environment):
 of the same name when they are set, and the variable applies where they are
 empty. Codes in `TRIAL_INVITE_CODES` stay valid beside the file's, each with
 `TRIAL_INVITE_RUNS`; a code in both is the file's, so it can revoke one. With
-no file the variables alone apply. The server compares the file's mtime and
+no file the variables alone apply, so deleting the file brings back env codes
+it had revoked: remove retired codes from `TRIAL_INVITE_CODES` as well. A file
+that exists but does not load stops `bench api -trial` from starting (the
+environment alone could allow more than the file did), and so does an
+unreadable `invites-used.json`. The running server compares the file's mtime and
 size on each use and reads it again when they change. A file that cannot be
 parsed, has an unknown field or breaks a rule (a code under 8 characters, with
 spaces or commas, or listed twice; a model that is not `provider/name`) is

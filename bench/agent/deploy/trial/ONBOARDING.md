@@ -8,7 +8,9 @@ every edit within a request, with no restart, so **no visitor session is lost**.
 Only `deploy` restarts the service.
 
 Keys never go in `trial.json`: they stay in `/etc/kavach/trial.env`
-(`trial.env.example`), which the service reads at start. Settings missing from
+(`trial.env.example`), which the service reads at start. `trial.json` does hold
+the invite codes, which are as good as the keys, so it is `root:kavach`, mode
+0640; keep it that way. Settings missing from
 `trial.json` fall back to the `TRIAL_*` variables there; see "Trial mode" in
 [API.md](../../console/API.md#trial-mode).
 
@@ -28,7 +30,7 @@ button. `--note "intro from X"` keeps a reminder with the code.
 
 ```sh
 kavach-trial invite list              # label, code, runs used/budget, state, last used
-kavach-trial invite show garry        # that code's runs, by job id (a label works for a code)
+kavach-trial invite show garry        # that code's runs, by job id (a code, a label, or a part of one label)
 kavach-trial invite revoke "Garry (YC)"   # by label or code
 ```
 
@@ -41,7 +43,10 @@ fails its checks is logged and ignored, and the last good one stays in force.
 Counts live in `/var/lib/kavach/jobs/.bench/invites-used.json` and survive
 restarts. Codes in `TRIAL_INVITE_CODES` still work (with `TRIAL_INVITE_RUNS`
 each) and are not listed; to revoke one, add the same code to the file with
-`"revoked": true`.
+`"revoked": true` and remove it from `trial.env` at the next chance: deleting
+`trial.json` brings every env code back. If `trial.json` or `invites-used.json`
+is corrupt, the service refuses to start (a running one keeps its last good
+file) rather than run with weaker limits.
 
 ## Put a new task in the trial
 
@@ -87,10 +92,11 @@ in `trial.env`.
 kavach-trial deploy [--force] [ref]    # ref defaults to main; push it first
 ```
 
-It builds `bench` for linux/amd64 (`CGO_ENABLED=0`) from the ref's files,
-fetches and checks out the same commit in `/opt/kavach` on the VM, copies the
-binary as `bench.new` and renames it over `bench` (never in place: each run's
-log helper executes it), restarts `bench-trial`, waits for
+It builds `bench` for linux/amd64 (`CGO_ENABLED=0`) from the whole tree at the
+ref (`--build-only` stops there), copies the binary to the VM as `bench.new`,
+fetches and checks out the same commit in `/opt/kavach`, renames the binary
+over `bench` (never in place: each run's log helper executes it), restarts
+`bench-trial`, waits for
 `/api/trial/session` on the VM, and checks the public URL.
 
 It refuses while trial runs are live, because a restart forgets every visitor

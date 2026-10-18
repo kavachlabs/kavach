@@ -9,8 +9,10 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,8 +25,9 @@ const DefaultTrialConfig = "/etc/kavach/trial.json"
 const minInviteCode = 8
 
 // TrialFile is the trial's config file: what the operator changes while the
-// server runs. It holds no secret; keys stay in the environment file. A field
-// left empty falls back to the TRIAL_* variable of the same name, and a
+// server runs. Its invite codes are bearer credentials for the operator's
+// keys, so the file is not world-readable (0640 root:kavach, else 0600); the
+// keys themselves stay in the environment file. A field left empty falls back to the TRIAL_* variable of the same name, and a
 // missing file means the variables alone.
 type TrialFile struct {
 	Invites     []TrialInvite `json:"invites"`
@@ -95,8 +98,8 @@ func (f *TrialFile) Validate() error {
 
 // UpdateTrialFile applies edit to the file at path (an empty one if it does
 // not exist yet) and writes the result back atomically. The file keeps its
-// mode and owner; a new one is 0644, readable by the service user, and holds
-// no secret. edit's error, or an invalid result, leaves the file as it was.
+// mode and owner; a new one is 0640 with group kavach (the service user's), or
+// 0600 where there is no such group. edit's error, or an invalid result, leaves the file as it was.
 func UpdateTrialFile(path string, edit func(*TrialFile) error) error {
 	f, err := LoadTrialFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -118,12 +121,18 @@ func UpdateTrialFile(path string, edit func(*TrialFile) error) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, append(b, '\n'), 0o644)
+	perm, gid := os.FileMode(0o600), -1
+	if g, err := user.LookupGroup("kavach"); err == nil {
+		perm = 0o640
+		gid, _ = strconv.Atoi(g.Gid)
+	}
+	return writeFileAtomic(path, append(b, '\n'), perm, gid)
 }
 
 // writeFileAtomic writes b beside path and renames it over path. An existing
-// file's mode and owner carry over; perm is for a new one.
-func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
+// file's mode and owner carry over; perm and group gid (if not -1) are for a
+// new one.
+func writeFileAtomic(path string, b []byte, perm os.FileMode, gid int) error {
 	old, statErr := os.Stat(path)
 	if statErr == nil {
 		perm = old.Mode().Perm()
@@ -141,6 +150,8 @@ func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
 		if st, ok := old.Sys().(*syscall.Stat_t); ok {
 			err = tmp.Chown(int(st.Uid), int(st.Gid))
 		}
+	} else if err == nil && gid >= 0 {
+		err = tmp.Chown(-1, gid)
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -174,21 +185,51 @@ func (u *InviteUse) runs() int {
 func inviteUseFile(jobs string) string { return filepath.Join(jobs, ".bench", "invites-used.json") }
 
 // ReadInviteUse reads the usage of every invite code, by InviteDigest. Counts
-// kept before codes had their own file (trial-invites.json) carry over.
-func ReadInviteUse(jobs string) map[string]*InviteUse {
+// kept before codes had their own file (trial-invites.json) carry over. A file
+// that exists but cannot be read or parsed is an error, with the counts read
+// so far: zeroing them would hand every code its budget again.
+func ReadInviteUse(jobs string) (map[string]*InviteUse, error) {
 	use := map[string]*InviteUse{}
-	if b, err := os.ReadFile(inviteUseFile(jobs)); err == nil {
-		json.Unmarshal(b, &use)
-		return use
+	b, err := os.ReadFile(inviteUseFile(jobs))
+	if err == nil {
+		if err := json.Unmarshal(b, &use); err != nil {
+			return map[string]*InviteUse{}, fmt.Errorf("%s: %w", inviteUseFile(jobs), err)
+		}
+		return use, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return use, err
+	}
+	legacyPath := filepath.Join(jobs, ".bench", "trial-invites.json")
+	b, err = os.ReadFile(legacyPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return use, nil
 	}
 	var legacy map[string]int
-	if b, err := os.ReadFile(filepath.Join(jobs, ".bench", "trial-invites.json")); err == nil {
-		json.Unmarshal(b, &legacy)
+	if err == nil {
+		err = json.Unmarshal(b, &legacy)
 	}
 	for k, n := range legacy {
 		use[k] = &InviteUse{Count: n}
 	}
-	return use
+	if err != nil {
+		return use, fmt.Errorf("%s: %w", legacyPath, err)
+	}
+	return use, nil
+}
+
+// CheckTrialStart reports what would make a trial start with weaker limits
+// than the operator set: a config file that exists but does not load (the
+// environment alone could allow every task, or revive a revoked code), or
+// invite usage that cannot be read (every budget would reset).
+func CheckTrialStart(cfg *TrialConfig, jobs string) error {
+	if cfg.ConfigPath != "" {
+		if _, err := LoadTrialFile(cfg.ConfigPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	_, err := ReadInviteUse(jobs)
+	return err
 }
 
 func saveInviteUse(jobs string, use map[string]*InviteUse) error {
@@ -196,7 +237,7 @@ func saveInviteUse(jobs string, use map[string]*InviteUse) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(inviteUseFile(jobs), b, 0o600)
+	return writeFileAtomic(inviteUseFile(jobs), b, 0o600, -1)
 }
 
 // trialSettings is the part of the configuration that can change while the

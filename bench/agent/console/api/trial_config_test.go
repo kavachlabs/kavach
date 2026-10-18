@@ -136,7 +136,8 @@ func TestTrialLegacyInviteCountsCarryOver(t *testing.T) {
 	jobs := t.TempDir()
 	os.MkdirAll(filepath.Join(jobs, ".bench"), 0o755)
 	os.WriteFile(filepath.Join(jobs, ".bench", "trial-invites.json"), []byte(`{"`+InviteDigest("old-code-1")+`":2}`), 0o600)
-	if got := ReadInviteUse(jobs)[InviteDigest("old-code-1")].runs(); got != 2 {
+	use, err := ReadInviteUse(jobs)
+	if got := use[InviteDigest("old-code-1")].runs(); err != nil || got != 2 {
 		t.Errorf("legacy count: %d", got)
 	}
 }
@@ -146,7 +147,7 @@ func TestUpdateTrialFileKeepsModeAndRefusesInvalid(t *testing.T) {
 	if err := UpdateTrialFile(path, func(f *TrialFile) error { f.Models = []string{"openrouter/a/b"}; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o644 {
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 && st.Mode().Perm() != 0o640 {
 		t.Errorf("new file mode %v", st.Mode())
 	}
 	os.Chmod(path, 0o640)
@@ -165,5 +166,40 @@ func TestUpdateTrialFileKeepsModeAndRefusesInvalid(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".trial.json.tmp-*")); len(left) != 0 {
 		t.Errorf("temp files left: %v", left)
+	}
+}
+
+func TestCheckTrialStartFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trial.json")
+	cfg := &TrialConfig{ConfigPath: path}
+	if err := CheckTrialStart(cfg, dir); err != nil {
+		t.Fatalf("no file: %v", err)
+	}
+	writeTrialFile(t, path, `{"invites":[`)
+	if err := CheckTrialStart(cfg, dir); err == nil {
+		t.Error("a malformed config file was accepted")
+	}
+	writeTrialFile(t, path, `{"invites":[]}`)
+	if err := CheckTrialStart(cfg, dir); err != nil {
+		t.Fatalf("good file: %v", err)
+	}
+	os.MkdirAll(filepath.Join(dir, ".bench"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".bench", "invites-used.json"), []byte("{oops"), 0o600)
+	if err := CheckTrialStart(cfg, dir); err == nil {
+		t.Error("corrupt usage was accepted")
+	}
+}
+
+func TestTrialRefusesInviteRunsWhenUsageUnreadable(t *testing.T) {
+	e := newTrialServer(t, "", func(c *Config, tc *TrialConfig) {
+		tc.InviteCodes = []string{"alpha-code"}
+		os.MkdirAll(filepath.Join(c.JobsDir, ".bench"), 0o755)
+		os.WriteFile(filepath.Join(c.JobsDir, ".bench", "invites-used.json"), []byte("{oops"), 0o600)
+	})
+	c := e.visitor()
+	e.do(c, "POST", "/api/trial/invite", `{"code":"alpha-code"}`)
+	if code, _ := e.do(c, "POST", "/api/jobs", runBody); code != 503 {
+		t.Errorf("invite run with unreadable usage: %d", code)
 	}
 }

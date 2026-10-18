@@ -254,6 +254,7 @@ function inviteForm() {
     invite.busy = false;
     if (!r.ok) { invite.err = r.err; return renderView(); }
     invite.code = "";
+    history.replaceState(null, "", "#/trial/invite"); // the code leaves the address bar and history
     await loadTrialSession();
     location.hash = "#/new";
   } },

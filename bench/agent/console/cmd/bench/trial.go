@@ -127,9 +127,11 @@ const codeAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
 
 // newInviteCode is yc-xxxx-xxxx-xxxx-xxxx: 16 characters without the ones
 // that read alike, about 78 bits.
-func newInviteCode(prefix string) string {
+func newInviteCode(prefix string) (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
 	var sb strings.Builder
 	sb.WriteString(prefix)
 	for i, c := range b {
@@ -138,7 +140,7 @@ func newInviteCode(prefix string) string {
 		}
 		sb.WriteByte(codeAlphabet[int(c)%len(codeAlphabet)])
 	}
-	return sb.String()
+	return sb.String(), nil
 }
 
 func (o *trialOpts) shareURL(code string) string {
@@ -160,7 +162,10 @@ func inviteAdd(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 		}
 		c := *code
 		if c == "" {
-			c = newInviteCode(*prefix)
+			var err error
+			if c, err = newInviteCode(*prefix); err != nil {
+				return err
+			}
 		}
 		err := api.UpdateTrialFile(o.config, func(f *api.TrialFile) error {
 			f.Invites = append(f.Invites, api.TrialInvite{Code: c, Label: *label, Runs: *runs, Created: time.Now().UTC().Truncate(time.Second), Note: *note})
@@ -175,7 +180,8 @@ func inviteAdd(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 }
 
 // findInvite picks the invite a user means by its code, or else by its label
-// (ignoring case) among those not revoked.
+// (ignoring case) among those not revoked: the whole label, else a part of it
+// that only one invite has.
 func findInvite(f *api.TrialFile, ref string) (int, error) {
 	if ref == "" {
 		return 0, errors.New("name a code or a label")
@@ -185,19 +191,24 @@ func findInvite(f *api.TrialFile, ref string) (int, error) {
 			return i, nil
 		}
 	}
-	found := -1
-	for i, inv := range f.Invites {
-		if strings.EqualFold(inv.Label, ref) && !inv.Revoked {
-			if found >= 0 {
-				return 0, fmt.Errorf("%q is the label of more than one invite; use a code", ref)
+	for _, match := range []func(label string) bool{
+		func(l string) bool { return strings.EqualFold(l, ref) },
+		func(l string) bool { return strings.Contains(strings.ToLower(l), strings.ToLower(ref)) },
+	} {
+		found := -1
+		for i, inv := range f.Invites {
+			if match(inv.Label) && !inv.Revoked {
+				if found >= 0 {
+					return 0, fmt.Errorf("%q matches more than one invite; use a code", ref)
+				}
+				found = i
 			}
-			found = i
+		}
+		if found >= 0 {
+			return found, nil
 		}
 	}
-	if found < 0 {
-		return 0, fmt.Errorf("no invite with code or label %q", ref)
-	}
-	return found, nil
+	return 0, fmt.Errorf("no invite with code or label %q", ref)
 }
 
 func loadTrialFile(path string) (*api.TrialFile, error) {
@@ -214,7 +225,10 @@ func inviteList(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 		if err != nil {
 			return err
 		}
-		use := api.ReadInviteUse(o.jobs)
+		use, err := api.ReadInviteUse(o.jobs)
+		if err != nil {
+			return err
+		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "LABEL\tCODE\tRUNS\tSTATE\tLAST USED")
 		for _, inv := range f.Invites {
@@ -249,7 +263,11 @@ func inviteShow(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 			return err
 		}
 		inv := f.Invites[i]
-		u := api.ReadInviteUse(o.jobs)[api.InviteDigest(inv.Code)]
+		use, err := api.ReadInviteUse(o.jobs)
+		if err != nil {
+			return err
+		}
+		u := use[api.InviteDigest(inv.Code)]
 		fmt.Fprintf(stdout, "label   %s\ncode    %s\nurl     %s\ncreated %s\nrevoked %v\nnote    %s\n", inv.Label, inv.Code, o.shareURL(inv.Code), inv.Created.Format(time.RFC3339), inv.Revoked, inv.Note)
 		if u == nil {
 			u = &api.InviteUse{}
