@@ -3,7 +3,7 @@
 
 import { h, state, trial, loadTrialSession, trialReady, renderView } from "./app.js";
 
-export const TRIAL_VIEWS = ["landing", "keys", "invite"];
+export const TRIAL_VIEWS = ["landing", "keys", "invite", "terms"];
 
 const SITE = "https://kavachlabs.dev";
 const BENCH = "https://benchmark.kavachlabs.dev";
@@ -38,12 +38,26 @@ async function forgetKeys() {
 }
 
 export function renderTrialView(view, name) {
-  const page = { landing: landing, keys: keysForm, invite: inviteForm }[name]();
+  const page = { landing, keys: keysForm, invite: inviteForm, terms }[name]();
   view.replaceChildren(page);
   view.scrollTop = 0;
 }
 
 const link = (href, text) => h("a", { href, target: "_blank", rel: "noopener" }, text);
+
+// termsNote is the short version of the terms, on the forms that take keys.
+function termsNote(invited) {
+  return h("div", { class: "tl-terms", role: "note" },
+    h("ul", {},
+      invited
+        ? h("li", {}, "Invite runs use our provider keys, so they cost you nothing, and are limited to the runs your code allows.")
+        : [
+          h("li", {}, "Your keys stay in this server's memory. They are used only for your runs, and forgotten when you click Forget keys, after 24 hours idle, or when the server restarts."),
+          h("li", {}, "Runs are billed to your own OpenRouter and sandbox accounts. Set a spend limit on your key."),
+        ],
+      h("li", {}, "Runs and their results are public to anyone with the link.")),
+    h("a", { href: "#/trial/terms" }, "Terms and how your keys are handled →"));
+}
 
 // cmp holds each finished run's /compare rows, fetched once for the landing.
 const cmp = new Map();
@@ -152,7 +166,43 @@ function landing() {
         h("p", {}, "Every task, model and arm we have run, read-only, at ", link(BENCH, "benchmark.kavachlabs.dev"), ".")),
       h("div", { class: "tl-cta" },
         h("a", { class: "tl-btn", href: BENCH, target: "_blank", rel: "noopener" }, "Open the full benchmark ↗"),
-        h("a", { class: "tl-btn", href: SITE, target: "_blank", rel: "noopener" }, "kavachlabs.dev ↗"))));
+        h("a", { class: "tl-btn", href: SITE, target: "_blank", rel: "noopener" }, "kavachlabs.dev ↗"))),
+
+    h("footer", { class: "tl-foot" },
+      h("a", { href: "#/trial/terms" }, "Terms and how your keys are handled"),
+      h("span", { class: "faint" }, "A free trial, provided as is.")));
+}
+
+// terms is the fuller statement. Each claim is backed by api/trial.go and
+// API.md "Trial mode"; change the code and this together.
+function terms() {
+  const sec = (title, ...items) => h("section", { class: "tl-sec tl-terms-sec" },
+    h("h2", {}, title), h("ul", {}, items.map((t) => h("li", {}, t))));
+  return shell("Terms and how your keys are handled",
+    "Plain version. This is a trial, so it is short.",
+    sec("Your keys",
+      "Held in this server's memory only. Never written to disk, never logged, never sent back to your browser.",
+      "Passed only to the run you start, as environment variables of its process, and used only to call OpenRouter (the model) and Daytona or Modal (the sandbox).",
+      "Forgotten when you click Forget keys, after 24 hours without use, or when the server restarts.",
+      "Forgetting your keys does not stop a run that has already started: use Stop on the run. It keeps the keys it began with until it ends.",
+      "Run logs and files have your key values replaced by [redacted] before they are kept or shown."),
+    sec("What it costs you",
+      "Runs bill your own accounts: model tokens at OpenRouter and sandbox time at Daytona or Modal. We do not charge you and cannot cap what your providers charge.",
+      "Set a spend limit on every key you paste. Use a key you can revoke afterwards.",
+      "With an invite code the run uses our keys instead, up to the number of runs the code allows."),
+    sec("What we store",
+      "Each run's folder: the task, model and settings you chose, the agent's transcript, its patch, Kavach's verdicts, grading results and logs (with keys redacted). Finished runs may also be copied to our backup storage.",
+      "These are kept for a limited time.",
+      "A one-way hash of your session id (to let you stop your own runs), and for an invite code a hash of the code with a count of its runs. Your network address is held in memory to rate-limit requests.",
+      "A session cookie. There are no accounts, and we do not ask for your name or email."),
+    sec("What we don't",
+      "Your keys, after they are forgotten. Any code or files of yours: you only choose from the incidents we provide."),
+    sec("Runs are public",
+      "A run you start can be opened by anyone who has its link, and a finished one may be listed on this page with its results. Do not put anything private into a run. Showcase runs are public too."),
+    sec("As is",
+      "This is a free trial, provided as is, with no guarantee that it works, stays up, keeps your runs, or that results are correct. We may change or stop it at any time."),
+    h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "kavachlabs.dev"), "."),
+    h("p", { class: "tl-alt" }, h("a", { href: "#/trial/keys" }, "Bring your keys"), " · ", h("a", { href: "#/trial/invite" }, "Use an invite code")));
 }
 
 function runsSection(title, sub, jobs, empty) {
@@ -229,7 +279,7 @@ function keysForm() {
         ]),
     keys.err ? h("p", { class: "tf-err", role: "alert" }, keys.err) : null,
     h("button", { type: "submit", class: "tl-btn primary", disabled: keys.busy }, keys.busy ? "Saving…" : "Save keys and continue"),
-    h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), TRUST));
+    termsNote(false));
   return shell("Bring your keys", "They are held in memory for this session so the agent can run for you.", form,
     h("p", { class: "tl-alt" }, "No keys? ", h("a", { href: "#/trial/invite" }, "Use an invite code"), "."));
 }
@@ -247,7 +297,8 @@ function inviteForm() {
   } },
     field({ id: "inv", label: "Invite code", value: invite.code, onInput: (v) => { invite.code = v; } }),
     invite.err ? h("p", { class: "tf-err", role: "alert" }, invite.err) : null,
-    h("button", { type: "submit", class: "tl-btn primary", disabled: invite.busy }, invite.busy ? "Checking…" : "Use invite code"));
+    h("button", { type: "submit", class: "tl-btn primary", disabled: invite.busy }, invite.busy ? "Checking…" : "Use invite code"),
+    termsNote(true));
   return shell("Have an invite code?", "An invite lets you run without your own keys.", form,
     h("p", { class: "tl-alt" }, "No code? ", h("a", { href: "#/trial/keys" }, "Bring your own keys"), "."));
 }
