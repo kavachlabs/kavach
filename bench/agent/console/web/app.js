@@ -1964,6 +1964,7 @@ function clampToOwn() {
   f.runs = Math.min(f.runs, own.max_attempts);
   f.concurrent = Math.min(f.concurrent, own.max_concurrent);
   f.timeout = Math.min(f.timeout, own.max_timeout_min);
+  f.retries = Math.min(f.retries, own.max_retries);
 }
 
 function renderNew(view) {
@@ -2564,7 +2565,8 @@ function canRun() {
   if (!state.tasks || !state.tasks.length) return "No task to run.";
   if (!chosenTasks().length) return "Choose at least one arm.";
   const own = ownLimits();
-  if (own && attemptsCount() > own.max_trials) return `A run may have at most ${own.max_trials} attempts here; this one has ${attemptsCount()}.`;
+  const total = attemptsCount() * (f.retries + 1);
+  if (own && total > own.max_trials) return `A run may have at most ${own.max_trials} attempts, retries included, here; this one has ${total}.`;
   if (envProblem(f.environment)) return environmentHint(f.environment);
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + Add OpenRouter model, or /model <id>.";
   return "";
@@ -2588,6 +2590,7 @@ async function startRun() {
   try {
     const job = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     state.note = "";
+    if (TRIAL) resetTurnstile();
     location.hash = `#/jobs/${encodeURIComponent(job.id)}`;
   } catch (e) {
     say(`Harbor didn't start: ${e.message}`, true);

@@ -40,6 +40,8 @@ type TrialFile struct {
 	OwnMaxAttempts   int `json:"own_max_attempts,omitempty"`
 	OwnMaxConcurrent int `json:"own_max_concurrent,omitempty"`
 	OwnMaxTrials     int `json:"own_max_trials,omitempty"`
+	OwnMaxRetries    int `json:"own_max_retries,omitempty"`
+	OwnMaxRetryReqs  int `json:"own_max_retry_requests,omitempty"`
 }
 
 // TrialInvite is one invite code, which runs on the server's keys.
@@ -95,8 +97,13 @@ func (f *TrialFile) Validate() error {
 			return fmt.Errorf("model %q is not provider/name", m)
 		}
 	}
-	if f.MaxAttempts < 0 || f.OwnMaxAttempts < 0 || f.OwnMaxConcurrent < 0 || f.OwnMaxTrials < 0 {
-		return errors.New("max_attempts, own_max_attempts, own_max_concurrent and own_max_trials are not negative")
+	for name, n := range map[string]int{
+		"max_attempts": f.MaxAttempts, "own_max_attempts": f.OwnMaxAttempts, "own_max_concurrent": f.OwnMaxConcurrent,
+		"own_max_trials": f.OwnMaxTrials, "own_max_retries": f.OwnMaxRetries, "own_max_retry_requests": f.OwnMaxRetryReqs,
+	} {
+		if n < 0 {
+			return fmt.Errorf("%s must not be negative", name)
+		}
 	}
 	return nil
 }
@@ -285,6 +292,8 @@ func (t *trial) build(f *TrialFile) *trialSettings {
 			MaxAttempts:   cmp.Or(f.OwnMaxAttempts, t.cfg.OwnMaxAttempts),
 			MaxConcurrent: cmp.Or(f.OwnMaxConcurrent, t.cfg.OwnMaxConcurrent),
 			MaxTrials:     cmp.Or(f.OwnMaxTrials, t.cfg.OwnMaxTrials),
+			MaxRetries:    cmp.Or(f.OwnMaxRetries, t.cfg.OwnMaxRetries),
+			MaxRetryReqs:  cmp.Or(f.OwnMaxRetryReqs, t.cfg.OwnMaxRetryReqs),
 			MaxTimeoutMin: ownMaxTimeoutMin,
 		},
 	}

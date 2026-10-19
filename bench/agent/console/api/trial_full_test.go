@@ -53,7 +53,7 @@ func ownServer(t *testing.T, script string) (*trialEnv, *http.Client) {
 	e := newTrialServer(t, script, func(_ *Config, tc *TrialConfig) {
 		tc.Tasks = []string{"hello-world-kavach"}
 		tc.InviteCodes = []string{"alpha-code"}
-		tc.OwnMaxAttempts, tc.OwnMaxConcurrent, tc.OwnMaxTrials = 3, 4, 5
+		tc.OwnMaxAttempts, tc.OwnMaxConcurrent, tc.OwnMaxTrials = 3, 4, 8
 	})
 	c := e.visitor()
 	e.setKeys(c)
@@ -86,7 +86,8 @@ func TestTrialOwnKeysRunForm(t *testing.T) {
 		`{"tasks":["hello-world-kavach"],` + ok + `,"attempts":4}`,
 		`{"tasks":["hello-world-kavach"],` + ok + `,"attempts":-1}`,
 		`{"tasks":["hello-world-kavach"],` + ok + `,"concurrent":5}`,
-		`{"tasks":["hello-world-kavach","hello-world-control"],` + ok + `,"attempts":3,"concurrent":2}`,
+		`{"tasks":["hello-world-kavach","hello-world-control"],` + ok + `,"attempts":3,"retries":2,"concurrent":2}`,
+		`{"tasks":["hello-world-kavach"],` + ok + `,"retries":3}`,
 		`{"tasks":["hello-world-kavach"],` + ok + `,"timeout_sec":7201}`,
 		`{"tasks":["hello-world-kavach"],` + ok + `,"retries":6}`,
 		`{"tasks":["hello-world-kavach"],` + ok + `,"environment":"docker"}`,
@@ -105,14 +106,14 @@ func TestTrialOwnKeysRunForm(t *testing.T) {
 	// Anything within the caps starts: another arm than the invite's, a model
 	// the invite does not offer, every option of the form.
 	body := `{"tasks":["hello-world-control","hello-world-kavach"],"models":["openrouter/anthropic/claude-sonnet-5.5","openrouter/~moonshotai/kimi-latest"],` +
-		`"attempts":1,"concurrent":4,"retries":2,"timeout_sec":1800,"environment":"daytona","agent":"opencode","name":"mine"}`
+		`"attempts":1,"concurrent":4,"retries":1,"timeout_sec":1800,"environment":"daytona","agent":"opencode","name":"mine"}`
 	code, v := e.do(c, "POST", "/api/jobs", body)
 	id, _ := v["id"].(string)
 	if code != 202 || id == "mine" || v["environment"] != "daytona" {
 		t.Fatalf("start: %d %v", code, v)
 	}
 	b, _ := os.ReadFile(filepath.Join(e.jobs, ".bench", id+".json"))
-	for _, want := range []string{`"n_concurrent_trials": 4`, `"max_retries": 2`, `"override_timeout_sec": 1800`, `"type": "daytona"`,
+	for _, want := range []string{`"n_concurrent_trials": 4`, `"max_retries": 1`, `"override_timeout_sec": 1800`, `"type": "daytona"`,
 		`openrouter/anthropic/claude-sonnet-5.5`, `openrouter/~moonshotai/kimi-latest`, "hello-world-control", `"import_path": "bench.agent.harbor.agents:KavachOpenCode"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("config lacks %s:\n%s", want, b)
@@ -161,7 +162,7 @@ func TestTrialOwnCapsFromFile(t *testing.T) {
 	}
 	// Unset, the caps are 10 attempts, 4 at once, 40 attempts in all.
 	e2 := newTrialServer(t, "", nil)
-	if l := e2.s.trial.settings().own; l.MaxAttempts != 10 || l.MaxConcurrent != 4 || l.MaxTrials != 40 || l.MaxTimeoutMin != 120 {
+	if l := e2.s.trial.settings().own; l.MaxAttempts != 10 || l.MaxConcurrent != 4 || l.MaxTrials != 40 || l.MaxTimeoutMin != 120 || l.MaxRetries != 2 || l.MaxRetryReqs != 5 {
 		t.Errorf("defaults %+v", l)
 	}
 	if l := TrialFromEnv(func(k string) string {
@@ -391,4 +392,64 @@ func TestTrialLockedRoutes(t *testing.T) {
 		}
 	}
 	e.stop(own, id)
+}
+
+func TestTrialOwnRetryRequestsCapped(t *testing.T) {
+	e := newTrialServer(t, callsScript, func(_ *Config, tc *TrialConfig) { tc.OwnMaxRetryReqs = 2 })
+	c := e.visitor()
+	e.setKeys(c)
+	id := e.startOwn(c)
+	e.call(1)
+	e.stop(c, id)
+	dir := filepath.Join(e.jobs, id)
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"job_name":"`+id+`"}`), 0o644)
+	n := 0
+	retry := func() int {
+		// A distinct attempt each time: the moved folder is named by the second.
+		n++
+		trial := id + "__" + string(rune('A'+n))
+		os.MkdirAll(filepath.Join(dir, trial), 0o755)
+		os.WriteFile(filepath.Join(dir, trial, "config.json"), []byte("{}"), 0o644)
+		code, _ := e.do(c, "POST", "/api/trials/"+id+"/"+trial+"/retry", "")
+		return code
+	}
+	for i := 1; i <= 2; i++ {
+		if code := retry(); code != 202 {
+			t.Fatalf("retry %d: %d", i, code)
+		}
+		e.call(1 + i)
+		e.stop(c, id)
+	}
+	if code := retry(); code != 429 {
+		t.Errorf("third retry: %d", code)
+	}
+	if n := readRetryRequests(e.jobs, id); n != 2 {
+		t.Errorf("persisted count %d", n)
+	}
+	// Resume is not a retry request.
+	if code, _ := e.do(c, "POST", "/api/jobs/"+id+"/resume", ""); code != 202 {
+		t.Errorf("resume: %d", code)
+	}
+	e.call(4)
+	e.stop(c, id)
+}
+
+func TestTrialRelaunchStartsInAFreshHome(t *testing.T) {
+	e, c := ownServer(t, callsScript)
+	id := e.startOwn(c)
+	e.call(1)
+	e.stop(c, id)
+	home := filepath.Join(e.jobs, ".bench", "home", id)
+	os.MkdirAll(home, 0o700)
+	stale := filepath.Join(home, "stale")
+	os.WriteFile(stale, []byte("x"), 0o600)
+	if code, _ := e.do(c, "POST", "/api/jobs/"+id+"/resume", ""); code != 202 {
+		t.Fatal(code)
+	}
+	e.call(2)
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("resume reused the old home folder")
+	}
+	e.stop(c, id)
 }

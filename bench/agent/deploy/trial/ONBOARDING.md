@@ -93,11 +93,14 @@ A visitor who enters their own OpenRouter and Daytona or Modal keys gets the
 full run form: any task, any OpenRouter model, attempts, attempts at once,
 retries, timeout, and Pause, Resume and Retry on their own runs. They bill
 their own accounts, but each run is still a Harbor process on this VM, so the
-server caps them: 10 attempts per task and model, 4 at once, 40 attempts in a
-run, a 2-hour timeout override. Invite sessions keep the allow-lists above and
+server caps them: 10 attempts per task and model, 4 at once, 2 Harbor retries
+per erroring attempt, 40 attempts in a run counting retries (retries + 1 x
+tasks x models x attempts), 5 retry requests per run, a 2-hour timeout
+override. Invite sessions keep the allow-lists above and
 cannot pause, resume or retry. To change the caps, set `own_max_attempts`,
-`own_max_concurrent` and `own_max_trials` in `/etc/kavach/trial.json` (taking
-effect within a request), or `TRIAL_OWN_MAX_*` in `trial.env`. The one-live-run
+`own_max_concurrent`, `own_max_trials`, `own_max_retries` and
+`own_max_retry_requests` in `/etc/kavach/trial.json` (taking
+effect within a request), or `TRIAL_OWN_MAX_*` (`..._RETRY_REQUESTS` for the last) in `trial.env`. The one-live-run
 limits and `TRIAL_MAX_RUNNING` apply to them as before; lower
 `own_max_concurrent` first if the VM is short of memory.
 

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
@@ -21,9 +23,11 @@ import (
 
 // ownLimits is what a session with its own keys may ask for.
 type ownLimits struct {
-	MaxAttempts   int `json:"max_attempts"`   // per task and model
-	MaxConcurrent int `json:"max_concurrent"` // attempts at once in one run
-	MaxTrials     int `json:"max_trials"`     // tasks x models x attempts
+	MaxAttempts   int `json:"max_attempts"`       // per task and model
+	MaxConcurrent int `json:"max_concurrent"`     // attempts at once in one run
+	MaxTrials     int `json:"max_trials"`         // (retries + 1) x tasks x models x attempts
+	MaxRetries    int `json:"max_retries"`        // Harbor's retries of an attempt that errors
+	MaxRetryReqs  int `json:"max_retry_requests"` // retry requests per run
 	MaxTimeoutMin int `json:"max_timeout_min"`
 }
 
@@ -140,10 +144,13 @@ func (s *Server) checkOwnRun(ctx context.Context, rr *harbor.RunRequest, k *visi
 	if rr.TimeoutSec < 0 || rr.TimeoutSec > float64(lim.MaxTimeoutMin*60) {
 		return bad("the agent timeout must be at most %d minutes in the trial", lim.MaxTimeoutMin)
 	}
-	if n := len(rr.Tasks) * max(len(rr.Models), 1) * rr.Attempts; n > lim.MaxTrials {
-		return bad("a run may have at most %d attempts in the trial; this one has %d", lim.MaxTrials, n)
+	if rr.Retries < 0 || rr.Retries > lim.MaxRetries {
+		return bad("retries must be 0-%d in the trial", lim.MaxRetries)
 	}
-	// Harbor's own limits (retries) are checked by the Runner.
+	// Each retry of an erroring attempt is another attempt on the visitor's accounts.
+	if n := (rr.Retries + 1) * len(rr.Tasks) * max(len(rr.Models), 1) * rr.Attempts; n > lim.MaxTrials {
+		return bad("a run may have at most %d attempts, retries included, in the trial; this one has %d", lim.MaxTrials, n)
+	}
 	if rr.Environment != "" && rr.Environment != k.provider {
 		return bad("attempts run on %s, the sandbox your keys are for; docker would run on this server and is not available", k.provider)
 	}
@@ -182,7 +189,7 @@ func (s *Server) resumeTrialJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.relaunch(w, r, sess, id, func(env map[string]string) error { return s.runner.ResumeWithEnv(id, env) })
+	s.relaunch(w, r, sess, id, false, func(env map[string]string) error { return s.runner.ResumeWithEnv(id, env) })
 }
 
 func (s *Server) retryTrialJob(w http.ResponseWriter, r *http.Request) {
@@ -191,13 +198,13 @@ func (s *Server) retryTrialJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.relaunch(w, r, sess, id, func(env map[string]string) error { return s.runner.RetryWithEnv(id, trial, env) })
+	s.relaunch(w, r, sess, id, true, func(env map[string]string) error { return s.runner.RetryWithEnv(id, trial, env) })
 }
 
 // relaunch starts Harbor again for run id with the session's own keys, which
 // is what starting did: if the session has none any more it refuses, and
 // never falls back to the server's env file or keys.
-func (s *Server) relaunch(w http.ResponseWriter, r *http.Request, sess *session, id string, do func(env map[string]string) error) {
+func (s *Server) relaunch(w http.ResponseWriter, r *http.Request, sess *session, id string, isRetry bool, do func(env map[string]string) error) {
 	t := s.trial
 	t.mu.Lock()
 	keys := sess.keys
@@ -207,7 +214,7 @@ func (s *Server) relaunch(w http.ResponseWriter, r *http.Request, sess *session,
 		writeError(w, re.code, "%s", re.msg)
 		return
 	}
-	err := t.relaunchRun(sess, t.clientIP(r), id, env, func() error { return do(env) })
+	err := t.relaunchRun(sess, t.clientIP(r), id, isRetry, env, func() error { return do(env) })
 	var lim *trialRunError
 	switch {
 	case errors.As(err, &lim):
@@ -221,6 +228,16 @@ func (s *Server) relaunch(w http.ResponseWriter, r *http.Request, sess *session,
 	default:
 		s.writeJob(w, r, http.StatusAccepted, id)
 	}
+}
+
+func retryRequestsFile(jobs, id string) string { return filepath.Join(jobs, ".bench", id+".retries") }
+
+// readRetryRequests is how many retries of run id were requested, kept with
+// the run's other bookkeeping so a restart does not reset it.
+func readRetryRequests(jobs, id string) int {
+	b, _ := os.ReadFile(retryRequestsFile(jobs, id))
+	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return n
 }
 
 // relaunchEnv is the environment for running job id again on keys. The job's
@@ -263,14 +280,25 @@ func (t *trial) relaunchEnv(keys *visitorKeys, id string) (map[string]string, *t
 
 // relaunchRun runs start, which starts Harbor again for job id, under the
 // limits starting a run has.
-func (t *trial) relaunchRun(sess *session, ip, id string, env map[string]string, start func() error) error {
+func (t *trial) relaunchRun(sess *session, ip, id string, isRetry bool, env map[string]string, start func() error) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if re := t.admit(sess, ip); re != nil {
 		return re
 	}
+	var asked int
+	if isRetry {
+		asked = readRetryRequests(t.jobs, id)
+		if asked >= t.settings().own.MaxRetryReqs {
+			return &trialRunError{http.StatusTooManyRequests, "this run has used its retries; start a new run"}
+		}
+	}
 	if err := start(); err != nil {
 		return err
+	}
+	if isRetry {
+		// Best effort: a count that cannot be written only lets one more through.
+		os.WriteFile(retryRequestsFile(t.jobs, id), []byte(strconv.Itoa(asked+1)), 0o644)
 	}
 	t.runIP[id] = ip
 	for _, v := range env {

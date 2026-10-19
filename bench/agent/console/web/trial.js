@@ -424,6 +424,7 @@ export function renderTrialNew(view) {
       resetTurnstile();
       return redraw();
     }
+    resetTurnstile();
     await loadTrialSession();
     location.hash = `#/jobs/${encodeURIComponent(r.body.id || r.body.name)}`;
   };

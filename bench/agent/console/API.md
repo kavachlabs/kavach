@@ -101,7 +101,9 @@ Settings come from the environment (and the config file below):
 | `TRIAL_MAX_ATTEMPTS` | 2; for invite sessions |
 | `TRIAL_OWN_MAX_ATTEMPTS` | 10 attempts per task and model, for a session with its own keys |
 | `TRIAL_OWN_MAX_CONCURRENT` | 4 attempts at once in one run, for a session with its own keys |
-| `TRIAL_OWN_MAX_TRIALS` | 40 attempts in one run (tasks x models x attempts), for a session with its own keys |
+| `TRIAL_OWN_MAX_TRIALS` | 40 attempts in one run, retries included: (retries + 1) x tasks x models x attempts; for a session with its own keys |
+| `TRIAL_OWN_MAX_RETRIES` | 2 Harbor retries of an erroring attempt, for a session with its own keys |
+| `TRIAL_OWN_MAX_RETRY_REQUESTS` | 5 `retry` requests per run (kept in `<jobs>/.bench/<id>.retries`; more is 429), for a session with its own keys |
 | `TRIAL_MAX_RUNNING` | 3 live runs, all visitors together; more gets 429 |
 | `TRIAL_INVITE_CODES` | none; comma-separated |
 | `TRIAL_INVITE_RUNS` | 5 runs per code |
@@ -126,12 +128,14 @@ keys themselves stay in the environment:
   "own_max_attempts": 10,
   "own_max_concurrent": 4,
   "own_max_trials": 40,
+  "own_max_retries": 2,
+  "own_max_retry_requests": 5,
   "showcase": []
 }
 ```
 
 `tasks`, `models`, `max_attempts`, `own_max_attempts`, `own_max_concurrent`,
-`own_max_trials` and `showcase` replace the `TRIAL_*` value
+`own_max_trials`, `own_max_retries`, `own_max_retry_requests` and `showcase` replace the `TRIAL_*` value
 of the same name when they are set, and the variable applies where they are
 empty. Codes in `TRIAL_INVITE_CODES` stay valid beside the file's, each with
 `TRIAL_INVITE_RUNS`; a code in both is the file's, so it can revoke one. With
@@ -230,7 +234,7 @@ left alone when the home folder is `/root`.
   "has_keys": true, "provider": "daytona", "invite": false,
   "runs": ["brisk-cobalt-heron-x7k2p9q"],
   "limits": {"models": ["openrouter/z-ai/glm-5.3"], "tasks": ["redis-10068-control", "redis-10068-kavach"], "max_attempts": 2,
-             "own": {"max_attempts": 10, "max_concurrent": 4, "max_trials": 40, "max_timeout_min": 120}},
+             "own": {"max_attempts": 10, "max_concurrent": 4, "max_trials": 40, "max_retries": 2, "max_retry_requests": 5, "max_timeout_min": 120}},
   "turnstile_site_key": "",
   "invite_runs_left": 4
 }
@@ -278,7 +282,7 @@ checked on the server: `tasks` any task arm in `--tasks` (the invite
 OpenRouter's model list (502 if the list cannot be fetched; the key form takes
 an OpenRouter key, so no other provider's models); `attempts` 1 to
 `TRIAL_OWN_MAX_ATTEMPTS`, `concurrent` 1 to `TRIAL_OWN_MAX_CONCURRENT`,
-tasks x models x attempts at most `TRIAL_OWN_MAX_TRIALS`, `retries` 0-5,
+(retries + 1) x tasks x models x attempts at most `TRIAL_OWN_MAX_TRIALS`, `retries` 0 to `TRIAL_OWN_MAX_RETRIES`,
 `timeout_sec` 0 (the task's own) to 7200; `environment` omitted or the
 session's own provider (`docker` and the other providers are 400: docker
 would run on this server). `name` is ignored and generated. Harbor gets the
@@ -315,7 +319,9 @@ sandbox other than the session's provider, or a model other than OpenRouter's
 (a run another session began, carried over when a session was replaced).
 Turnstile is checked when a run starts, not on resume or retry: a resumed run
 was started through it, and a fresh token per click would need the widget on
-every run page; the address's write rate limit applies to both.
+every run page; the address's write rate limit applies to both. A run takes at most
+`TRIAL_OWN_MAX_RETRY_REQUESTS` retry requests (429 after), counted across
+restarts. Each relaunch removes the run's old home folder and starts in a fresh one.
 
 **Locked for everyone**, own keys included, and 404 whoever asks:
 `/api/settings` (it reads and writes the server's env file and keys),

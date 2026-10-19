@@ -41,7 +41,7 @@ type TrialConfig struct {
 	// What a session with its own keys may ask for, which bills its own
 	// accounts but runs on this machine (see ownLimits). Defaults: 10
 	// attempts, 4 at once, 40 attempts in all.
-	OwnMaxAttempts, OwnMaxConcurrent, OwnMaxTrials int
+	OwnMaxAttempts, OwnMaxConcurrent, OwnMaxTrials, OwnMaxRetries, OwnMaxRetryReqs int
 	// ConfigPath is the trial config file (see TrialFile). The server reloads
 	// it when it changes; the fields above apply where it says nothing, or
 	// is absent.
@@ -85,6 +85,8 @@ func TrialFromEnv(getenv func(string) string) *TrialConfig {
 		OwnMaxAttempts:   num("TRIAL_OWN_MAX_ATTEMPTS", 0),
 		OwnMaxConcurrent: num("TRIAL_OWN_MAX_CONCURRENT", 0),
 		OwnMaxTrials:     num("TRIAL_OWN_MAX_TRIALS", 0),
+		OwnMaxRetries:    num("TRIAL_OWN_MAX_RETRIES", 0),
+		OwnMaxRetryReqs:  num("TRIAL_OWN_MAX_RETRY_REQUESTS", 0),
 		MaxRunning:       num("TRIAL_MAX_RUNNING", 3),
 		Showcase:         list("TRIAL_SHOWCASE"),
 		ConfigPath:       cmp.Or(getenv("TRIAL_CONFIG"), DefaultTrialConfig),
@@ -181,6 +183,8 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	cfg.OwnMaxAttempts = cmp.Or(cfg.OwnMaxAttempts, 10)
 	cfg.OwnMaxConcurrent = cmp.Or(cfg.OwnMaxConcurrent, 4)
 	cfg.OwnMaxTrials = cmp.Or(cfg.OwnMaxTrials, 40)
+	cfg.OwnMaxRetries = cmp.Or(cfg.OwnMaxRetries, 2)
+	cfg.OwnMaxRetryReqs = cmp.Or(cfg.OwnMaxRetryReqs, 5)
 	if cfg.MaxRunning < 1 {
 		cfg.MaxRunning = 3
 	}
@@ -385,16 +389,14 @@ func (t *trial) view(s *session) sessionView {
 	t.mu.Lock()
 	v.Runs = append(v.Runs, s.runs...)
 	keys, invite := s.keys, s.invite
-	if keys != nil {
-		own := conf.own
-		v.Limits.Own, v.Limits.Tasks = &own, t.allTasks()
-	}
 	left := 0
 	if inv, ok := conf.invite(invite); ok && !inv.Revoked {
 		left = max(inv.Runs-t.used[digest(invite)].runs(), 0)
 	}
 	t.mu.Unlock()
 	if keys != nil {
+		own := conf.own
+		v.Limits.Own, v.Limits.Tasks = &own, t.allTasks()
 		v.HasKeys, v.Provider = true, keys.provider
 	}
 	if invite != "" {

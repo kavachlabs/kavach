@@ -546,7 +546,12 @@ func (r *Runner) resumeLocked(id string, env map[string]string) error {
 	home := ""
 	switch {
 	case env != nil:
+		// A helper killed outright leaves its home behind; a fresh one keeps
+		// the old run's files out of this one.
 		home = r.file("home/"+id, "")
+		if err := os.RemoveAll(home); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(home, 0o700); err != nil {
 			return err
 		}
