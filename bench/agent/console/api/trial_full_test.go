@@ -360,16 +360,38 @@ func TestTrialInviteSessionStaysLimited(t *testing.T) {
 		t.Errorf("invite session sees the own-key limits: %s", raw)
 	}
 	e.stop(c, id)
+	dir := filepath.Join(e.jobs, id)
+	os.MkdirAll(filepath.Join(dir, id+"__A"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"job_name":"`+id+`"}`), 0o644)
+	os.WriteFile(filepath.Join(dir, id+"__A", "config.json"), []byte("{}"), 0o644)
 	_, raw, _ = e.raw(c, "GET", "/api/jobs/"+id, "")
-	if s := string(raw); strings.Contains(s, `"resumable": true`) || strings.Contains(s, `"retryable": true`) {
-		t.Errorf("invite owner sees controls: %s", raw)
+	if s := string(raw); strings.Contains(s, `"resumable": true`) || !strings.Contains(s, `"retryable": true`) {
+		t.Errorf("invite owner may retry, not resume: %s", raw)
 	}
-	for _, r := range [][2]string{{"POST", "/api/jobs/" + id + "/pause"}, {"POST", "/api/jobs/" + id + "/resume"}, {"POST", "/api/trials/" + id + "/x/retry"}} {
+	for _, r := range [][2]string{{"POST", "/api/jobs/" + id + "/pause"}, {"POST", "/api/jobs/" + id + "/resume"}} {
 		if code, _ := e.do(c, r[0], r[1], ""); code != 404 {
 			t.Errorf("%s %s: %d", r[0], r[1], code)
 		}
 	}
-	if n := e.calls(); n != 1 {
+	// Another session may not retry it.
+	other := e.visitor()
+	e.invite(other)
+	if code, _ := e.do(other, "POST", "/api/trials/"+id+"/"+id+"__A/retry", ""); code != 404 {
+		t.Errorf("another invite session retried: %d", code)
+	}
+	_, before, _ := e.raw(c, "GET", "/api/trial/session", "")
+	// The owner retries an attempt on the operator's keys, using no run.
+	if code, v := e.do(c, "POST", "/api/trials/"+id+"/"+id+"__A/retry", ""); code != 202 {
+		t.Fatalf("retry: %d %v", code, v)
+	}
+	if env := e.call(2); !strings.Contains(env, "sk-or-v1-server-secret-9999") || !strings.Contains(env, "jobs resume") {
+		t.Errorf("retry env:\n%s", env)
+	}
+	if _, after, _ := e.raw(c, "GET", "/api/trial/session", ""); string(after) != string(before) {
+		t.Errorf("a retry used an invite run:\n%s\n%s", before, after)
+	}
+	e.stop(c, id)
+	if n := e.calls(); n != 2 {
 		t.Errorf("harbor ran %d times", n)
 	}
 }

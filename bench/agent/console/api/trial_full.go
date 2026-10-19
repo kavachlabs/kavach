@@ -194,11 +194,82 @@ func (s *Server) resumeTrialJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) retryTrialJob(w http.ResponseWriter, r *http.Request) {
 	id, trial := r.PathValue("job"), r.PathValue("trial")
+	retry := func(env map[string]string) error { return s.runner.RetryWithEnv(id, trial, env) }
+	if sess, ok := s.inviteRetrier(r, id); ok {
+		s.relaunchInvite(w, r, sess, id, retry)
+		return
+	}
 	sess, ok := s.controlOf(w, r, id)
 	if !ok {
 		return
 	}
-	s.relaunch(w, r, sess, id, true, func(env map[string]string) error { return s.runner.RetryWithEnv(id, trial, env) })
+	s.relaunch(w, r, sess, id, true, retry)
+}
+
+// inviteRetrier returns the session that asked, if it is an invite's and
+// owns job id, which was started on an invite: such a session may retry the
+// run's attempts on the operator's keys, though not pause or resume it.
+func (s *Server) inviteRetrier(r *http.Request, id string) (*session, bool) {
+	t := s.trial
+	sid, sess := t.lookup(r)
+	if sess == nil {
+		return nil, false
+	}
+	t.mu.Lock()
+	invite := sess.invite
+	t.mu.Unlock()
+	return sess, invite != "" && t.ownedBy(viewer{owner: digest(sid)}, id) && t.inviteRun(id)
+}
+
+// inviteRun reports whether job id was started on an invite code.
+func (t *trial) inviteRun(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, u := range t.used {
+		if slices.Contains(u.Jobs, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// relaunchInvite retries an attempt of an invited run on the operator's keys,
+// as starting it did. A retry uses none of the invite's runs; the per-run cap
+// on retry requests and the limits on live runs apply as for a visitor's keys.
+func (s *Server) relaunchInvite(w http.ResponseWriter, r *http.Request, sess *session, id string, do func(env map[string]string) error) {
+	t := s.trial
+	t.mu.Lock()
+	invite := sess.invite
+	t.mu.Unlock()
+	if inv, ok := t.settings().invite(invite); !ok || inv.Revoked {
+		writeError(w, http.StatusForbidden, "this invite code has been revoked")
+		return
+	}
+	var cfg struct {
+		Environment struct {
+			Type string `json:"type"`
+		} `json:"environment"`
+		Agents []struct {
+			Model string `json:"model_name"`
+		} `json:"agents"`
+	}
+	b, err := os.ReadFile(filepath.Join(t.jobs, ".bench", id+".json"))
+	if err == nil {
+		err = json.Unmarshal(b, &cfg)
+	}
+	if err != nil || len(cfg.Agents) == 0 {
+		writeError(w, http.StatusConflict, "the run's record could not be read")
+		return
+	}
+	env, provider, err := t.runEnv(cfg.Agents[0].Model)
+	if err == nil && provider != cfg.Environment.Type {
+		err = errors.New("this run used " + cfg.Environment.Type + ", and invite runs now use " + provider)
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, "%v", err)
+		return
+	}
+	s.relaunchWith(w, r, sess, id, env, do)
 }
 
 // relaunch starts Harbor again for run id with the session's own keys, which
@@ -214,7 +285,20 @@ func (s *Server) relaunch(w http.ResponseWriter, r *http.Request, sess *session,
 		writeError(w, re.code, "%s", re.msg)
 		return
 	}
-	err := t.relaunchRun(sess, t.clientIP(r), id, isRetry, env, func() error { return do(env) })
+	if isRetry {
+		s.relaunchWith(w, r, sess, id, env, do)
+		return
+	}
+	s.relaunchResult(w, r, id, t.relaunchRun(sess, t.clientIP(r), id, false, env, func() error { return do(env) }))
+}
+
+// relaunchWith retries an attempt of run id with env, under relaunchRun's limits.
+func (s *Server) relaunchWith(w http.ResponseWriter, r *http.Request, sess *session, id string, env map[string]string, do func(env map[string]string) error) {
+	t := s.trial
+	s.relaunchResult(w, r, id, t.relaunchRun(sess, t.clientIP(r), id, true, env, func() error { return do(env) }))
+}
+
+func (s *Server) relaunchResult(w http.ResponseWriter, r *http.Request, id string, err error) {
 	var lim *trialRunError
 	switch {
 	case errors.As(err, &lim):

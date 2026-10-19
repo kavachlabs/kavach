@@ -891,11 +891,12 @@ func (t *trial) shapeTrialEvent(e event) event {
 
 // shape makes a job as a visitor may see it: it can be stopped, and by a
 // session that is not an invite's resumed and retried, only by its owner,
-// and is never synced.
+// and is never synced. An invite's session may also retry the attempts of a
+// run it started on the invite.
 func (t *trial) shape(j *harbor.Job, v viewer, owner bool) {
 	j.Stoppable = j.Stoppable && owner
 	j.Resumable = j.Resumable && owner && v.control
-	j.Retryable = j.Retryable && owner && v.control
+	j.Retryable = j.Retryable && owner && (v.control || t.inviteRun(j.ID))
 	j.Sync = nil
 	j.Error = classifyJobError(j.Error)
 }
