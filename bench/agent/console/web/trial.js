@@ -120,6 +120,16 @@ function armLine(j) {
   }));
 }
 
+// incidents names the incidents visitors may run, from the trial's limits,
+// so the landing copy follows what kavach-trial task add allows.
+function incidents() {
+  const tasks = (trial.session && trial.session.limits && trial.session.limits.tasks) || [];
+  const names = [...new Set(tasks.map(base))];
+  if (!names.length) return "";
+  const list = names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  return `: ${list}`;
+}
+
 function landing() {
   const ready = trialReady();
   const done = (state.jobs || []).filter((j) => j.status === "done");
@@ -154,7 +164,7 @@ function landing() {
       h("h2", {}, "How the trial works"),
       h("ol", { class: "tl-steps" },
         step("1", "Bring your keys", "An OpenRouter key for the model, and a Daytona or Modal key for the sandbox the agent works in. Or enter an invite code."),
-        step("2", "Pick an incident and a model", "Real bugs from real projects such as Redis, Valkey, axum and httpx. Each runs twice: a control arm, and an arm with Kavach."),
+        step("2", "Pick an incident and a model", `Real bugs from real projects${incidents()}. Each runs twice: a control arm, and an arm with Kavach.`),
         step("3", "Watch it live", "Follow the agent step by step, then see Kavach's verdict on its fix next to the control's."))),
 
     yours.length ? runsSection("Your runs", "Started from this session.", yours) : null,
