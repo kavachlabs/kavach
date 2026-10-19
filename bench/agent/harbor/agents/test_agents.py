@@ -265,6 +265,62 @@ class AgentChecks(unittest.TestCase):
             opencode_live.check_modal_runtime(env(EnvironmentType.MODAL))
 
 
+@unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
+class PullBeforeUp(unittest.TestCase):
+    def strategy(self, signature_ok=True):
+        from types import SimpleNamespace
+
+        calls = []
+
+        class Strategy:
+            _env = SimpleNamespace(task_env_config=SimpleNamespace(build_timeout_sec=1800.0))
+
+            async def _compose_exec(self, subcommand, timeout_sec=None):
+                calls.append((subcommand, timeout_sec))
+                return "result"
+
+        if not signature_ok:
+            async def other(self, subcommand):
+                return None
+
+            Strategy._compose_exec = other
+        return Strategy, calls
+
+    def test_pulls_under_the_build_timeout_before_up(self):
+        strategy, calls = self.strategy()
+        self.assertTrue(opencode_live.pull_before_up(strategy))
+        for sub, timeout in ([["build"], 1800], [["up", "-d"], 120], [["down"], 30]):
+            self.assertEqual(asyncio.run(strategy()._compose_exec(sub, timeout)), "result")
+        self.assertEqual(
+            calls,
+            [(["build"], 1800), (["pull", "--ignore-buildable"], 1800), (["up", "-d"], 120), (["down"], 30)],
+        )
+
+    def test_applies_once(self):
+        strategy, calls = self.strategy()
+        self.assertTrue(opencode_live.pull_before_up(strategy))
+        with self.assertNoLogs("opencode_live", "INFO"):
+            self.assertTrue(opencode_live.pull_before_up(strategy))
+        asyncio.run(strategy()._compose_exec(["up", "-d"], 120))
+        self.assertEqual(len(calls), 2)
+
+    def test_logs_when_applied(self):
+        strategy, _ = self.strategy()
+        with self.assertLogs("opencode_live", "INFO") as logs:
+            opencode_live.pull_before_up(strategy)
+        self.assertIn("pull", logs.output[0])
+
+    def test_does_nothing_if_the_method_changed(self):
+        strategy, calls = self.strategy(signature_ok=False)
+        before = strategy._compose_exec
+        self.assertFalse(opencode_live.pull_before_up(strategy))
+        self.assertIs(strategy._compose_exec, before)
+
+    def test_does_nothing_on_another_harbor(self):
+        with mock.patch("importlib.metadata.version", return_value="0.25.0"):
+            self.assertFalse(opencode_live.pull_before_up())
+
+
 class Upstream(BaseHTTPRequestHandler):
     seen = []
 
@@ -387,6 +443,163 @@ class Isolation(unittest.TestCase):
     def test_main_does_not_have_the_key(self):
         env = self.main("env; cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n'")
         self.assertNotIn(KEY, env.stdout)
+
+
+@unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
+class ExportThroughFile(unittest.TestCase):
+    """The session export travels as a file, not as exec stdout, which remote
+    exec APIs truncate once a session passes about 1 MB."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.logs = Path(self.tmp.name)
+        self.agent = object.__new__(opencode_live.KavachOpenCode)
+        self.agent.logs_dir = self.logs
+        self.agent._session = "ses_1"
+        self.agent._export_failures = 0
+        self.agent.logger = mock.Mock()
+        self.ns = SimpleNamespace
+
+    def environment(self, content, return_code=0, download_error=None):
+        ns = self.ns
+
+        class Env:
+            execs = []
+
+            async def exec(self, command, **kwargs):
+                self.execs.append(command)
+                # What a capped exec would return: the start of the output only.
+                return ns(stdout=content[:1000], stderr="", return_code=return_code)
+
+            async def download_file(self, source, target):
+                if download_error:
+                    raise download_error
+                Path(target).write_text(content)
+
+        return Env()
+
+    def export(self, env):
+        asyncio.run(self.agent._export(env, {}))
+
+    def test_session_over_a_megabyte_is_exported_whole(self):
+        big = json.dumps({"info": {}, "messages": ["x" * 100] * 20000}, indent=2)
+        self.assertGreater(len(big), 1_000_000)
+        env = self.environment(big)
+        self.export(env)
+        self.assertEqual((self.logs / opencode_live.EXPORT_FILE).read_text(), big)
+        self.assertIn("> /tmp/kavach-export.json.tmp", env.execs[0])
+        self.assertEqual([p.name for p in self.logs.iterdir()], [opencode_live.EXPORT_FILE])
+
+    def test_truncated_file_keeps_the_previous_copy(self):
+        previous = self.logs / opencode_live.EXPORT_FILE
+        previous.write_text('{"old": true}')
+        self.export(self.environment('{"info": {"a": '))
+        self.assertEqual(previous.read_text(), '{"old": true}')
+        self.assertEqual([p.name for p in self.logs.iterdir()], [opencode_live.EXPORT_FILE])
+
+    def test_download_failure_keeps_the_previous_copy(self):
+        previous = self.logs / opencode_live.EXPORT_FILE
+        previous.write_text('{"old": true}')
+        self.export(self.environment("{}", download_error=RuntimeError("boom")))
+        self.assertEqual(previous.read_text(), '{"old": true}')
+        self.agent.logger.warning.assert_called_once()
+
+    def test_failed_export_command_is_not_downloaded(self):
+        self.export(self.environment("{}", return_code=1))
+        self.assertFalse((self.logs / opencode_live.EXPORT_FILE).exists())
+
+    def test_warnings_are_rate_limited(self):
+        env = self.environment("{bad")
+        for _ in range(opencode_live.EXPORT_WARN_EVERY + 1):
+            self.export(env)
+        self.assertEqual(self.agent.logger.warning.call_count, 2)
+        self.assertIn("4 bytes", self.agent.logger.warning.call_args.args[0])
+
+    def test_success_resets_the_failure_count(self):
+        self.export(self.environment("{bad"))
+        self.export(self.environment("{}"))
+        self.assertEqual(self.agent._export_failures, 0)
+
+
+@unittest.skipUnless(HARBOR_INSTALLED, "needs harbor")
+class LiveLog(unittest.TestCase):
+    """The event log's new bytes reach the trial directory while the agent
+    runs, on a sandbox that does not mount it."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.logs = Path(self.tmp.name)
+        self.agent = object.__new__(opencode_live.KavachOpenCode)
+        self.agent.logs_dir = self.logs
+        self.agent._live_offset = 0
+        self.agent.logger = mock.Mock()
+        self.ns = SimpleNamespace
+        self.remote = b""
+        self.execs = []
+
+    def environment(self, return_code=0, missing=False):
+        test = self
+
+        class Env:
+            async def exec(self, command, **kwargs):
+                test.execs.append(command)
+                # Run the command's pipeline on the fake log, as the shell would.
+                import re
+                import base64
+
+                m = re.match(r"tail -c \+(\d+) (\S+) 2>/dev/null \| head -c (\d+) \| base64 \| tr -d '\\n'$", command)
+                test.assertIsNotNone(m, command)
+                test.assertEqual(m.group(2), "/logs/agent/opencode.txt")
+                start, n = int(m.group(1)) - 1, int(m.group(3))
+                out = b"" if missing else test.remote[start : start + n]
+                return test.ns(stdout=base64.b64encode(out).decode(), stderr="", return_code=return_code)
+
+        return Env()
+
+    def tail(self, env):
+        with mock.patch.object(type(self.agent), "environment_logs_dir", Path("/logs/agent"), create=True):
+            return asyncio.run(self.agent._tail_once(env))
+
+    def live(self):
+        return (self.logs / opencode_live.LIVE_LOG).read_bytes()
+
+    def test_copies_what_the_log_gains(self):
+        env = self.environment()
+        self.remote = b'{"type":"text"}\n{"type":"tool_'
+        self.assertTrue(self.tail(env))
+        self.remote += 'use","part":{"tool":"bash","state":{"output":"é"}}}\n'.encode()
+        self.assertTrue(self.tail(env))
+        self.assertTrue(self.tail(env))  # nothing new
+        self.assertEqual(self.live(), self.remote)
+        self.assertEqual(self.agent._live_offset, len(self.remote))
+
+    def test_a_burst_over_one_chunk_is_copied_whole(self):
+        self.remote = bytes(range(256)) * ((3 * opencode_live.TAIL_CHUNK) // 256 + 7)
+        self.assertTrue(self.tail(self.environment()))
+        self.assertEqual(self.live(), self.remote)
+        self.assertEqual(len(self.execs), 4)
+
+    def test_no_log_yet_writes_nothing(self):
+        self.assertTrue(self.tail(self.environment(missing=True)))
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+
+    def test_a_failed_exec_copies_nothing(self):
+        self.remote = b'{"type":"text"}\n'
+        self.assertTrue(self.tail(self.environment(return_code=1)))
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+        self.assertEqual(self.agent._live_offset, 0)
+
+    def test_a_mounted_log_is_not_copied(self):
+        (self.logs / "opencode.txt").write_text('{"type":"text"}\n')
+        self.assertFalse(self.tail(self.environment()))
+        self.assertEqual(self.execs, [])
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
 
 
 if __name__ == "__main__":

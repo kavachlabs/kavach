@@ -73,6 +73,273 @@ else the runs hold (agent transcripts, patches) is published as it is, so
 read it first. `staticPath` in `cmd/bench/export.go` and `apiURL` in
 `web/app.js` agree on where each response is kept.
 
+## Trial mode
+
+`bench api -trial [-addr 0.0.0.0:8080] [-origin https://try.kavachlabs.dev]
+[-trust-cf]` serves the console publicly so visitors can try Kavach with
+their own keys. `-addr` beyond loopback is refused without `-trial`. Nothing
+else changes without the flag.
+
+> **Deploy a public trial behind Cloudflare Tunnel.** Run `cloudflared` on the
+> same machine, point it at the server's loopback address, and start the
+> server with `-addr 127.0.0.1:PORT -trust-cf -origin https://your.host`. The
+> server then never listens on a public interface: every request comes from
+> the tunnel, which adds the real client address as `CF-Connecting-IP`, and
+> the per-address rate limit, session limit and one-run limit depend on that
+> address. Without the tunnel the header is whatever a client writes, so
+> `-trust-cf` honours it only from a loopback connection, and refuses to
+> start with a `-addr` beyond loopback. A server on a public `-addr` without
+> `-trust-cf` sees only the proxy's address, if any, and limits everyone as
+> one visitor.
+
+Settings come from the environment (and the config file below):
+
+| Variable | Default |
+| --- | --- |
+| `TRIAL_MODELS` | `openrouter/z-ai/glm-5.3`; comma-separated allowlist. All of a run's models must share a provider, whose usual key variable (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `NVIDIA_API_KEY`, `ZAI_API_KEY`) carries the visitor's key |
+| `TRIAL_TASKS` | every task folder under `--tasks`; entries are folder names or base names |
+| `TRIAL_MAX_ATTEMPTS` | 2; for invite sessions |
+| `TRIAL_OWN_MAX_ATTEMPTS` | 10 attempts per task and model, for a session with its own keys |
+| `TRIAL_OWN_MAX_CONCURRENT` | 4 attempts at once in one run, for a session with its own keys |
+| `TRIAL_OWN_MAX_TRIALS` | 40 attempts in one run, retries included: (retries + 1) x tasks x models x attempts; for a session with its own keys |
+| `TRIAL_OWN_MAX_RETRIES` | 2 Harbor retries of an erroring attempt, for a session with its own keys |
+| `TRIAL_OWN_MAX_RETRY_REQUESTS` | 5 `retry` requests per run (kept in `<jobs>/.bench/<id>.retries`; more is 429), for a session with its own keys |
+| `TRIAL_MAX_RUNNING` | 3 live runs, all visitors together; more gets 429 |
+| `TRIAL_INVITE_CODES` | none; comma-separated |
+| `TRIAL_INVITE_RUNS` | 5 runs per code |
+| `TRIAL_SHOWCASE` | none; job ids anyone may list and read besides trial runs |
+| `TRIAL_CONFIG` | `/etc/kavach/trial.json`; the config file below |
+| `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` needs a `turnstile_token` that Cloudflare's siteverify accepts |
+
+**Config file.** `-trial-config PATH` (or `TRIAL_CONFIG`; default
+`/etc/kavach/trial.json`) names a JSON file the operator edits while the
+server runs, so changes need no restart and forget no session. Its invite
+codes are bearer credentials for the server's keys, so it is created 0640
+`root:kavach` (0600 without a `kavach` group) and an edit keeps the mode; the
+keys themselves stay in the environment:
+
+```json
+{
+  "invites": [{"code": "yc-ab12-cd34-ef56-gh78", "label": "Garry (YC)", "runs": 5,
+               "created": "2026-10-18T09:00:00Z", "revoked": false, "note": ""}],
+  "tasks": ["redis-10068-control", "redis-10068-kavach"],
+  "models": ["openrouter/z-ai/glm-5.3"],
+  "max_attempts": 2,
+  "own_max_attempts": 10,
+  "own_max_concurrent": 4,
+  "own_max_trials": 40,
+  "own_max_retries": 2,
+  "own_max_retry_requests": 5,
+  "showcase": []
+}
+```
+
+`tasks`, `models`, `max_attempts`, `own_max_attempts`, `own_max_concurrent`,
+`own_max_trials`, `own_max_retries`, `own_max_retry_requests` and `showcase` replace the `TRIAL_*` value
+of the same name when they are set, and the variable applies where they are
+empty. Codes in `TRIAL_INVITE_CODES` stay valid beside the file's, each with
+`TRIAL_INVITE_RUNS`; a code in both is the file's, so it can revoke one. With
+no file the variables alone apply, so deleting the file brings back env codes
+it had revoked: remove retired codes from `TRIAL_INVITE_CODES` as well. A file
+that exists but does not load stops `bench api -trial` from starting (the
+environment alone could allow more than the file did), and so does an
+unreadable `invites-used.json`. The running server compares the file's mtime and
+size on each use and reads it again when they change. A file that cannot be
+parsed, has an unknown field or breaks a rule (a code under 8 characters, with
+spaces or commas, or listed twice; a model that is not `provider/name`) is
+logged and ignored: the last good configuration stays. `bench trial` edits the
+file atomically, keeping its mode and owner (`bench trial -h`; see
+[deploy/trial/ONBOARDING.md](../deploy/trial/ONBOARDING.md)).
+
+Each code has its own `runs` budget. The runs used, the time of the last one
+and the job ids it started are kept per SHA-256 of the code in
+`<jobs>/.bench/invites-used.json` (written atomically, and read again at
+start; counts from the earlier `trial-invites.json` carry over). A revoked
+code cannot be redeemed, and a session that redeemed it before gets 403
+(`this invite code has been revoked`) from its next `POST /api/jobs`;
+`invite_runs_left` shows 0. Runs already started continue.
+
+**Sessions.** A visitor has no account. `POST /api/trial/keys` or
+`/api/trial/invite` starts a session and sets its cookie (32 random bytes in
+hex; `HttpOnly`, `SameSite=Lax`). Over https, or with `X-Forwarded-Proto:
+https`, the cookie is `__Host-kv_session` and `Secure` (`Path=/`, no
+`Domain`); over plain http, as in local development, `kv_session`. Both calls
+always mint a new id and drop the session the request came with. Only the
+list of the visitor's runs carries over (the runs' owner records are rewritten
+to the new id), so they keep Stop on a live run; keys, invite and everything
+else are the new ones. Each request that uses a session refreshes the cookie's `Max-Age`;
+a session expires after 24 hours idle. One network address holds at most 10
+sessions (a new one replaces its oldest), and a full table (10000) drops the
+one idle longest.
+
+Sessions live in memory: **a restart forgets every session and its keys**.
+Visitors enter their keys again, and can no longer stop runs that began
+before the restart (the runs themselves continue, and stay readable).
+
+**Keys** are held in the session's memory only. They are never written to
+disk (not in a job folder, `.bench/<id>.json`, the log or the owner file),
+never logged and never returned; each is 20-512 visible ASCII characters. A
+run's Harbor gets them in its process environment: the minimal base (`PATH`,
+`USER`, `LANG`, `LC_ALL`, `TMPDIR`, `PYTHONPATH`) plus the visitor's
+variables, without `--env-file`, so nothing else of the console's
+environment reaches it. Its `HOME` is a folder of its own
+(`<jobs>/.bench/home/<id>`, mode 0700, removed when Harbor exits), so the
+operator's `~/.modal.toml` and other credential files are out of reach;
+`UV_CACHE_DIR`, `UV_TOOL_DIR` and `UV_PYTHON_INSTALL_DIR` keep pointing at
+the operator's, so a uv-installed Harbor still starts. Invite runs get the
+same, with the server's keys.
+
+A visitor's or an invite's Harbor is started by a helper, `bench _logpipe`
+(hidden), which runs Harbor with the keys in its own environment, never in
+argv, and writes Harbor's output to `<id>.log` with the run's key values (also
+split across writes) replaced by `[redacted]`, so a provider's error that
+quotes a key never lands on disk. The helper is detached like any Harbor, in a
+process group of its own, so a console that exits or restarts leaves the run
+going. The pid recorded for the run is the helper's: it forwards `SIGINT` and
+`SIGTERM` to Harbor alone, which is what Stop sends, then writes what it held
+back, replaces the run's key values (also JSON-escaped) with `[redacted]` in
+every file under the job's folder, in place, a file at a time through a
+temporary file and a rename with the old mode, removes the run's home folder
+and exits with Harbor's code. At start the server removes the home folders
+of runs that are not running. If the helper is killed outright (`kill -9`,
+the OOM killer) Harbor lives on in the helper's process group: the run still
+counts as live, and Stop interrupts the processes of that group whose command
+line names the run's config. Nothing scrubs the job folder then, and the
+home folder stays until the sweep; the console's per-run scrub below
+covers served files for as long as it runs.
+
+**Restart the console only through its own process** (for systemd,
+`KillMode=process`). The helpers are detached so a restart leaves the runs
+going, but `pkill bench`, which matches the helpers too, or a signal to the
+whole control group, sends them SIGTERM, and that stops every visitor run. The log is not served: a stopped
+job's `error` is a short message chosen from it: `the model provider
+rejected the key`, `the sandbox provider rejected the key`, or `Harbor
+exited with an error (code N)`. A trial's `error` is cut to its kind
+(`AgentTimeoutError`). A trial's `opencode` block has no `url`, `web` or
+`export`.
+
+As a second line of defence, what is served is also scrubbed: each trial run's
+own key values, while it is live in this process, are replaced by `[redacted]` in that
+run's responses and events, and the server's own keys (the env file's and the
+environment's model and provider keys and the R2 credentials) in all of them.
+Only values of 20 characters or more are replaced. The server's folders in
+every `/api/*` response are replaced by `<jobs>`, `<tasks>`, `<root>` and `~`
+for the home folder, only where one is a whole path prefix, so `/rootfs` is
+left alone when the home folder is `/root`.
+
+`GET /api/trial/session` (no cookie needed; reads never create a session):
+
+```json
+{
+  "has_keys": true, "provider": "daytona", "invite": false,
+  "runs": ["brisk-cobalt-heron-x7k2p9q"],
+  "limits": {"models": ["openrouter/z-ai/glm-5.3"], "tasks": ["redis-10068-control", "redis-10068-kavach"], "max_attempts": 2,
+             "own": {"max_attempts": 10, "max_concurrent": 4, "max_trials": 40, "max_retries": 2, "max_retry_requests": 5, "max_timeout_min": 120}},
+  "turnstile_site_key": "",
+  "invite_runs_left": 4
+}
+```
+
+`limits.own` appears only for a session with its own keys, and then `tasks`
+lists every task. `invite_runs_left` appears only for an invite session. `provider` of an invite
+session is the first of `daytona`, `modal` the server has keys for.
+
+`POST /api/trial/keys` `{"model_key", "provider": "daytona"|"modal",
+"daytona_api_key", "modal_token_id", "modal_token_secret"}` stores the keys
+the provider needs (each 8-512 visible ASCII characters, no spaces or
+newlines; unknown fields are rejected) and replies like GET. 400 otherwise.
+`DELETE /api/trial/keys` forgets keys and invite; 204.
+
+`POST /api/trial/invite` `{"code"}` makes the session an invite session, which
+runs on the server's keys (the env file, else the process environment),
+passed to Harbor the same way as a visitor's: only the model key and the
+provider's. The provider is the first of `daytona`, `modal` whose keys are
+all variables; a `~/.modal.toml` does not count. 403 for an unknown code (compared in constant time), a revoked one, or one
+without runs left. A code's runs started are kept in
+`<jobs>/.bench/invites-used.json` under the SHA-256 of the code.
+
+**Starting a run.** `POST /api/jobs` needs a session with keys or an invite
+(401 otherwise). A session that brings its **own keys** gets the same run
+form and controls as the local console, for its own runs; an **invite**
+session, whose runs bill the operator, keeps the limited form below. Unknown
+fields are rejected with 400, as everywhere (`env` is not a request field).
+`turnstile_token` is read in both.
+
+*Invite session.* Takes `{"tasks", "models", "attempts", "turnstile_token"}`;
+the other fields of the ordinary request (`agent`, `environment`, `name`,
+`concurrent`, `retries`, `timeout_sec`) are known and overridden.
+`models` defaults to the first allowed one. The server forces the rest:
+`environment` is the session's provider, `agent` the repository's OpenCode
+agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
+400 for a model, task or attempts count outside `TRIAL_MODELS`,
+`TRIAL_TASKS` and `TRIAL_MAX_ATTEMPTS`.
+
+*Session with its own keys.* Takes every field of the ordinary request,
+checked on the server: `tasks` any task arm in `--tasks` (the invite
+`TRIAL_TASKS` do not apply; an absolute path is not a task); `agent`
+`opencode` (default), `oracle` or `nop`, never an import path; `models` for
+`opencode`, none for the others, each `openrouter/<vendor>/<name>` and in
+OpenRouter's model list (502 if the list cannot be fetched; the key form takes
+an OpenRouter key, so no other provider's models); `attempts` 1 to
+`TRIAL_OWN_MAX_ATTEMPTS`, `concurrent` 1 to `TRIAL_OWN_MAX_CONCURRENT`,
+(retries + 1) x tasks x models x attempts at most `TRIAL_OWN_MAX_TRIALS`, `retries` 0 to `TRIAL_OWN_MAX_RETRIES`,
+`timeout_sec` 0 (the task's own) to 7200; `environment` omitted or the
+session's own provider (`docker` and the other providers are 400: docker
+would run on this server). `name` is ignored and generated. Harbor gets the
+session's sandbox keys, and its model key when the agent calls a model, as
+above and nothing of the server's.
+
+Both: 400/403 for a missing/failed Turnstile token; 429 when
+the session, or another session from the same network address, already has a
+live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent or revoked. A
+bad key is an ordinary failed run: the job turns `stopped` or its trials
+`error`, with the classified message above in `error`.
+
+**Ownership and visibility.** Each run records the SHA-256 of its session's id
+(in memory and `<jobs>/.bench/<id>.owner`, so it survives a restart). GETs of
+jobs and trials stay public, as share links (`#/jobs/<id>`), but only for
+trial runs and `TRIAL_SHOWCASE`: `GET /api/jobs` lists only those and any
+other job or trial is 404. `stoppable` is true only for the owner, `sync` is always absent, and
+`resumable` and `retryable` are true only for the owner when the session is
+not an invite's. `POST /api/jobs/{id}/stop` is for the owner (else 403).
+
+**Controls for runs on own keys.** `POST /api/jobs/{id}/pause`, `POST
+/api/jobs/{id}/resume` and `POST /api/trials/{job}/{trial}/retry` work for the
+owner (by the hashed session id) of a session that is not an invite's; anyone
+else, an invite session included, gets the 404 they always had. Resume and
+retry start Harbor again, so they go through the same path as starting: the
+session's own keys in the isolated environment and home folder, the
+`_logpipe` helper, never `--env-file`, never the server's keys; the live-run
+limits (one per session, one per address, `TRIAL_MAX_RUNNING`) apply, so
+resuming a run beside a live one is 429. They are refused with 409 when the
+server no longer holds the session's keys (forgotten, expired, a restart):
+`enter your keys again to resume`; nothing is started, and the server's
+environment is never the fallback. They are also 409 when the run used a
+sandbox other than the session's provider, or a model other than OpenRouter's
+(a run another session began, carried over when a session was replaced).
+Turnstile is checked when a run starts, not on resume or retry: a resumed run
+was started through it, and a fresh token per click would need the widget on
+every run page; the address's write rate limit applies to both. A run takes at most
+`TRIAL_OWN_MAX_RETRY_REQUESTS` retry requests (429 after), counted across
+restarts. Each relaunch removes the run's old home folder and starts in a fresh one.
+
+**Locked for everyone**, own keys included, and 404 whoever asks:
+`/api/settings` (it reads and writes the server's env file and keys),
+`POST /api/jobs/{id}/sync` (the server's R2 backup), and
+`/api/tasks/{task}/environment` (it builds with the server's Docker and names
+local paths). A run on `docker` is refused for the same reason: runs go to
+Daytona or Modal. `/api/status` and `/api/tasks` carry no local paths; the
+invariants view shows patches rather than starting containers. The event stream
+is filtered the same way; it reflects the cookie it was opened with.
+
+**Requests.** The host check is off. A write with an `Origin` must match the
+request's host or `-origin`. Each address may make 20 writes (POST, DELETE) a
+minute (429 and `Retry-After`). The address is the connection's. With
+`-trust-cf` it is the `CF-Connecting-IP` header, but only when the connection
+is from loopback (a tunnel such as cloudflared on this machine); `-trust-cf`
+with a `-addr` beyond loopback is a startup error, since anyone could then
+forge the header.
+
 ## Conventions
 
 - Everything is JSON. Times are RFC 3339; a time that is not known is `null`.

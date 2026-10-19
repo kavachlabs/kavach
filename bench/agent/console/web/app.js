@@ -6,6 +6,7 @@ import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
+import { TRIAL_VIEWS, forgetKeys, renderTrialView, resetTurnstile, turnstileBox, turnstileToken } from "./trial.js";
 import { NARROW, UI_PREFS_KEY, initialPanes, prefsJSON, readPrefs, sideOpen as sideOpenOn, statusRedraw, toggleFold, toggleRight, toggleSide } from "./uistate.js";
 
 // Where the theme a person picked is kept; index.html reads it too.
@@ -255,6 +256,40 @@ const staticMeta = document.querySelector('meta[name="bench-static"]');
 export const STATIC = staticMeta !== null;
 const LANDING = staticMeta ? staticMeta.content : "";
 
+// TRIAL is the public trial server: people bring their own keys and start a
+// few runs. It tells the page by a meta tag, or by answering the session.
+export let TRIAL = !STATIC && document.querySelector('meta[name="bench-trial"]') !== null;
+export const trial = { session: null };
+
+// fullConsole is whether the console draws its ordinary run form and run
+// controls: always outside the trial, and in it for a session with its own
+// keys, or an invite code, which the form then holds to the trial's limits.
+// The server checks it all.
+export const fullConsole = () => !TRIAL || !!(trial.session && (trial.session.has_keys || trial.session.invite));
+const ownLimits = () => (TRIAL && trial.session && trial.session.limits && trial.session.limits.own) || null;
+// inviteLimits are the trial's limits, for a session on the operator's keys:
+// the server forces its concurrency, retries, timeout, agent and sandbox.
+const inviteLimits = () => (TRIAL && trial.session && trial.session.invite && trial.session.limits) || null;
+const maxAttempts = () => (ownLimits() || inviteLimits() || { max_attempts: 100 }).max_attempts;
+const allowedModel = (id) => !inviteLimits() || inviteLimits().models.includes(`openrouter/${id}`);
+
+export async function loadTrialSession() {
+  const had = fullConsole();
+  try {
+    const resp = await fetch("/api/trial/session");
+    if (resp.ok) {
+      trial.session = await resp.json();
+      TRIAL = true;
+    }
+  } catch {}
+  // Own keys list every task; other sessions only the trial's.
+  if (state.tasks && had !== fullConsole()) loadTasks();
+}
+if (!STATIC) await loadTrialSession();
+
+// trialReady is whether this session may start a run.
+export const trialReady = () => TRIAL && !!trial.session && (trial.session.has_keys || trial.session.invite);
+
 // apiURL is where an API request goes: to bench api, or in a copy to the
 // file bench export wrote for it (staticPath in cmd/bench/export.go).
 export function apiURL(path) {
@@ -403,8 +438,16 @@ const jobTitle = (job) => {
 };
 
 function route() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  // A query (#/trial/invite?code=...) is read by the view, not the route.
+  const parts = location.hash.replace(/^#\/?/, "").replace(/\?.*$/, "").split("/").map(decodeURIComponent);
   if (parts[0] === "jobs" && parts[1]) return { view: parts[2] === "compare" ? "compare" : "runs", job: parts[1] };
+  if (TRIAL) {
+    if (parts[0] === "trial" && TRIAL_VIEWS.includes(parts[1])) return { view: parts[1] };
+    if (parts[0] === "trial" && parts[1] === "about") return { view: "landing" };
+    // A session that can run opens on the console's own home, as locally.
+    if (parts[0] === "new" || (trialReady() && !parts[0])) return { view: "new", task: parts[0] === "new" ? parts[1] || "" : "" };
+    return { view: "landing" };
+  }
   // A copy has no new-run form: it opens on its landing run's results.
   if (STATIC) return { view: "compare", job: LANDING };
   return { view: "new", task: parts[0] === "new" ? parts[1] || "" : "" };
@@ -499,6 +542,7 @@ async function loadJobs() {
   }
   renderSide();
   renderTop();
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) renderView();
 }
 
 async function ensureModelsLoaded() {
@@ -714,7 +758,7 @@ function statusDot(name, check) {
 
 // syncPill is a run's backup to R2. A copy on a static host has none.
 function syncPill(sync) {
-  if (STATIC || !sync) return null;
+  if (STATIC || TRIAL || !sync) return null;
   const held = sync.skipped ? `${sync.skipped} file${sync.skipped === 1 ? "" : "s"} held back by the secret guard` : "";
   const [label, dot, tip] = {
     off: ["R2 off", "off", "Not backed up: set the R2 keys in Settings"],
@@ -728,11 +772,24 @@ function syncPill(sync) {
     h("span", { class: `dot ${dot}` }), held ? `${label} · ${sync.skipped} held back` : label);
 }
 
+// sandboxPill is where the session's runs execute, in the header and foot of the trial.
+function sandboxPill() {
+  const p = trial.session && trial.session.provider;
+  return h("span", { class: "status-pill", title: p ? "Where this session's attempts execute" : "No sandbox is available for this session" },
+    h("span", { class: `dot ${p ? "" : "bad"}` }), p || "no sandbox");
+}
+
 function renderTop() {
   const right = document.getElementById("right");
   const title = document.getElementById("title-text");
   let text = "New run";
   const kids = [];
+  document.querySelector(".app").classList.toggle("trial-bare", TRIAL && ((current.view === "new" && !fullConsole()) || TRIAL_VIEWS.includes(current.view)));
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) {
+    title.textContent = current.view === "landing" ? "kavach bench · trial" : current.view === "terms" ? "Terms" : "Trial setup";
+    document.title = "Try Kavach bench";
+    return right.replaceChildren(h("a", { class: "btn wide", href: "#/" }, "Home"), themeToggle());
+  }
   if (!state.live && state.statusErr) {
     kids.push(h("span", { class: "status-pill bad" }, h("span", { class: "dot bad" }), "server unreachable"));
   }
@@ -746,6 +803,7 @@ function renderTop() {
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
     if (job.environment && ENVIRONMENTS[job.environment]) kids.push(h("span", { class: "status-pill", title: "Where this run's attempts execute" }, ENVIRONMENTS[job.environment]));
     kids.push(syncPill(job.sync));
+    if (TRIAL) kids.push(trialReady() ? null : h("a", { class: "btn wide", href: "#/" }, "Home"), shareButton());
     if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
@@ -761,17 +819,16 @@ function renderTop() {
     }
   } else if (current.view !== "new") {
     text = current.job;
-  } else {
-    if (state.status) {
-      kids.push(statusDot("docker", state.status.docker), statusDot("harbor", state.status.harbor));
-      if (state.jobs) kids.push(h("span", { class: "wide" }, `${state.jobs.length} run${state.jobs.length === 1 ? "" : "s"} saved`));
-    }
+  } else if (state.status) {
+    // Docker is the operator's machine, not a visitor's: the sandbox is.
+    kids.push(TRIAL ? null : statusDot("docker", state.status.docker), statusDot("harbor", state.status.harbor), TRIAL ? sandboxPill() : null);
+    if (state.jobs) kids.push(h("span", { class: "wide" }, `${state.jobs.length} run${state.jobs.length === 1 ? "" : "s"} saved`));
   }
 
   kids.push(themeToggle());
 
   // Antigravity symmetrical right-hand Auxiliary Pane toggle icon on #/new and #/jobs/<id>
-  if (current.view === "new" || current.view === "runs") {
+  if ((current.view === "new" && fullConsole()) || current.view === "runs") {
     kids.push(h("button", {
       id: "aux-toggle",
       type: "button",
@@ -918,6 +975,7 @@ function makeResizeSash(side) {
 function renderNav() {
   const nav = document.getElementById("nav");
   const kids = STATIC ? [] : [h("a", { href: "#/new" }, h("span", {}, "+ New benchmark run"), h("span", { class: "dim m" }, "#/new"))];
+  if (TRIAL) kids.unshift(trialReady() ? h("a", { href: "#/trial/about" }, h("span", {}, "About the trial")) : h("a", { href: "#/" }, h("span", {}, "Home")));
   if (current.job) {
     const enc = encodeURIComponent(current.job);
     kids.push(h("a", { href: `#/jobs/${enc}` }, "Matrix & Step Inspector", h("span", { class: "dim m" }, current.job)));
@@ -1008,7 +1066,7 @@ function renderSide() {
 
   const keyOk = hasConfiguredKey();
   const st = state.status;
-  const foot = STATIC ? staticFoot() : h("div", { class: "side-foot" },
+  const foot = STATIC ? staticFoot() : TRIAL ? trialFoot() : h("div", { class: "side-foot" },
     st ? h("div", { class: "side-env-row" },
       h("span", { class: "side-env-items" },
         h("span", { title: st.docker.ok ? `Docker ${st.docker.version}` : st.docker.error },
@@ -1058,9 +1116,9 @@ function renderSide() {
   }
 
   // A task's link opens the new-run form, which a copy doesn't have.
-  if (!STATIC) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
+  if (!STATIC && fullConsole()) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  const tasksShut = STATIC || state.folded.has("tasks");
+  const tasksShut = STATIC || !fullConsole() || state.folded.has("tasks");
   if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
   // Incidents first, then features; each task names the benchmark it came from.
   const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
@@ -1125,18 +1183,28 @@ const SETTINGS_TABS = [
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 let settingsOpener = null;
 
+// The trial has the same dialog with panels of its own: the server's settings
+// are not a visitor's, so it offers the session's keys and invite instead.
+const TRIAL_SETTINGS_TABS = [
+  { id: "session", label: "Session", desc: "Which sandbox this session runs on, and the keys or invite code behind it." },
+  { id: "about", label: "About", desc: "What the trial is, and how your keys are handled.", foot: true },
+];
+const settingsTabs = () => (TRIAL ? TRIAL_SETTINGS_TABS : SETTINGS_TABS);
+
 function openSettingsModal(tab) {
   if (!state.settings.open) settingsOpener = document.activeElement;
   // tab is ignored when this runs as an event handler.
-  if (typeof tab === "string" && SETTINGS_TABS.some((t) => t.id === tab)) state.settings.tab = tab;
+  if (typeof tab === "string" && settingsTabs().some((t) => t.id === tab)) state.settings.tab = tab;
+  if (!settingsTabs().some((t) => t.id === state.settings.tab)) state.settings.tab = settingsTabs()[0].id;
   state.settings.open = true;
   state.settings.msg = "";
   state.settings.err = "";
   state.settings.drafts = {};
+  if (TRIAL) resetTrialDrafts();
   renderSide();
   renderSettingsModal();
   focusSettingsTab();
-  loadSettings();
+  if (!TRIAL) loadSettings();
 }
 
 function closeSettingsModal() {
@@ -1164,7 +1232,7 @@ function focusSettingsTab() {
 }
 
 function onSettingsTabKey(e) {
-  const ids = SETTINGS_TABS.map((t) => t.id);
+  const ids = settingsTabs().map((t) => t.id);
   let i = ids.indexOf(state.settings.tab);
   // The rail is vertical on desktop and a horizontal strip on phones.
   if (e.key === "ArrowDown" || e.key === "ArrowRight") i = (i + 1) % ids.length;
@@ -1488,7 +1556,124 @@ const SETTINGS_RENDER = {
   keys: settingsKeysTab,
   environment: settingsEnvironmentTab,
   shortcuts: settingsShortcutsTab,
+  session: trialSessionTab,
+  about: trialAboutTab,
 };
+
+// What the trial's settings panel has typed but not sent.
+const tset = { provider: "daytona", model_key: "", daytona: "", modal_id: "", modal_secret: "", code: "", err: "", msg: "", busy: false };
+function resetTrialDrafts() {
+  Object.assign(tset, { provider: (trial.session && trial.session.provider) === "modal" ? "modal" : "daytona", model_key: "", daytona: "", modal_id: "", modal_secret: "", code: "", err: "", msg: "", busy: false });
+}
+
+// sendTrial posts to one of the trial's own endpoints from the panel, then
+// refreshes everything that depends on the session.
+async function sendTrial(path, body, done) {
+  tset.busy = true; tset.err = ""; tset.msg = "";
+  renderSettingsModal();
+  try {
+    await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await loadTrialSession();
+    resetTrialDrafts();
+    tset.msg = done;
+  } catch (e) {
+    tset.err = e.message;
+    tset.busy = false;
+  }
+  renderTop();
+  renderSide();
+  renderSettingsModal();
+}
+
+function trialInput(id, label, key, { type = "password", placeholder = "" } = {}) {
+  return settingsRow({
+    label: h("label", { for: id }, label),
+    below: h("div", { class: "key-input-row" },
+      h("input", { id, type, autocomplete: "off", spellcheck: "false", placeholder, value: tset[key], oninput: (e) => { tset[key] = e.target.value.trim(); } })),
+  });
+}
+
+function trialSessionTab() {
+  const s = trial.session || {};
+  const left = s.invite_runs_left ?? 0;
+  const closeThen = () => closeSettingsModal();
+  const groups = [settingsGroup("This session", [
+    settingsRow({
+      label: "Status",
+      hint: s.has_keys ? "Your keys are held in this server's memory for this session only, and dropped when you forget them, after 24 hours idle, or when the server restarts."
+        : s.invite ? "Runs use the operator's keys, up to the number of runs the code allows." : "No keys and no invite code yet.",
+      control: h("span", { class: `key-badge ${s.has_keys || s.invite ? "ok" : "warn"}` }, s.has_keys ? "Your keys" : s.invite ? `Invite · ${left} run${left === 1 ? "" : "s"} left` : "Not set up"),
+    }),
+    settingsRow({
+      label: "Sandbox",
+      hint: "Where each attempt executes. It follows from the keys, or from the operator's setup for an invite.",
+      control: h("span", { class: `key-badge ${s.provider ? "ok" : "bad"}` }, s.provider ? ENVIRONMENTS[s.provider] || s.provider : "None available"),
+    }),
+  ])];
+
+  const submitMsg = h("span", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg);
+  if (s.has_keys) {
+    const modal = tset.provider === "modal";
+    const labelId = "ts-prov-lbl";
+    groups.push(settingsGroup("Your keys", [
+      settingsRow({
+        label: "Sandbox provider", labelId,
+        control: segmented({
+          id: "ts-prov", labelledBy: labelId, value: tset.provider,
+          options: [{ value: "daytona", label: "Daytona" }, { value: "modal", label: "Modal" }],
+          onChange: (v) => { tset.provider = v; renderSettingsModal(); },
+        }),
+      }),
+      trialInput("ts-or", "OpenRouter API key", "model_key", { placeholder: "Paste a new OpenRouter key" }),
+      modal ? [
+        trialInput("ts-mid", "Modal token ID", "modal_id"),
+        trialInput("ts-msec", "Modal token secret", "modal_secret"),
+      ] : trialInput("ts-day", "Daytona API key", "daytona"),
+    ], "Replacing the keys starts a fresh session. The runs you started stay yours and can still be stopped, resumed and retried; a run in progress keeps the keys it began with, and runs you start or resume from now on use the new ones. Any invite code is dropped."));
+    groups.push(h("form", {
+      class: "settings-actions",
+      onsubmit: (e) => {
+        e.preventDefault();
+        const body = { model_key: tset.model_key, provider: tset.provider };
+        if (modal) Object.assign(body, { modal_token_id: tset.modal_id, modal_token_secret: tset.modal_secret });
+        else body.daytona_api_key = tset.daytona;
+        sendTrial("/trial/keys", body, "Keys replaced.");
+      },
+    },
+      submitMsg,
+      h("button", { type: "button", class: "btn danger", onclick: async () => { await forgetKeys(); closeThen(); } }, "Forget my keys"),
+      h("button", { type: "submit", class: "btn peach", disabled: tset.busy }, tset.busy ? "Saving…" : "Replace keys")));
+  }
+
+  if (s.has_keys || s.invite) {
+    groups.push(settingsGroup("Invite code", [
+      settingsRow({
+        label: h("label", { for: "ts-code" }, s.invite ? "Redeem a different code" : "Have an invite code?"),
+        hint: s.invite
+          ? "Replaces this code with another; the new code's runs are counted on their own. The runs you started stay yours."
+          : "Redeeming a code switches this session to the operator's keys, with the invite's limits, and drops your own keys. The runs you started stay yours.",
+        below: h("form", { class: "key-input-row", onsubmit: (e) => { e.preventDefault(); sendTrial("/trial/invite", { code: tset.code }, "Invite code accepted."); } },
+          h("input", { id: "ts-code", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "Paste an invite code", value: tset.code, oninput: (e) => { tset.code = e.target.value.trim(); } }),
+          h("button", { type: "submit", class: "btn", disabled: tset.busy }, "Redeem")),
+      }),
+      s.invite ? settingsRow({
+        label: "Your own keys",
+        hint: "Leave the invite and run on your own OpenRouter and sandbox keys.",
+        control: h("a", { class: "btn", href: "#/trial/keys", onclick: closeThen }, "Use my own keys"),
+      }) : null,
+    ]));
+    if (!s.has_keys) groups.push(h("p", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg));
+  }
+  return groups;
+}
+
+function trialAboutTab() {
+  const link = (href, text) => h("a", { class: "btn", href, onclick: () => closeSettingsModal() }, text);
+  return [settingsGroup("The trial", [
+    settingsRow({ label: "About the trial", hint: "What Kavach does and how a trial run works.", control: link("#/trial/about", "Open") }),
+    settingsRow({ label: "Terms", hint: "How your keys are handled, what is stored, and that runs are public.", control: link("#/trial/terms", "Open") }),
+  ])];
+}
 
 function renderSettingsModal() {
   let backdrop = document.getElementById("settings-backdrop");
@@ -1508,7 +1693,7 @@ function renderSettingsModal() {
   }
 
   // Re-rendering replaces the DOM: keep the panel's scroll and the focused control.
-  const tab = SETTINGS_TABS.find((t) => t.id === state.settings.tab);
+  const tab = settingsTabs().find((t) => t.id === state.settings.tab);
   const prevPane = backdrop.querySelector(".settings-pane");
   const scroll = prevPane && backdrop.dataset.tab === tab.id ? prevPane.scrollTop : 0;
   const active = document.activeElement;
@@ -1533,9 +1718,9 @@ function renderSettingsModal() {
   const rail = h("nav", { class: "settings-rail", "aria-label": "Settings" },
     h("h2", { class: "settings-rail-title", id: "settings-title" }, "Settings"),
     h("div", { class: "settings-tabs", role: "tablist", "aria-orientation": window.matchMedia("(max-width: 680px)").matches ? "horizontal" : "vertical", onkeydown: onSettingsTabKey },
-      SETTINGS_TABS.filter((t) => !t.foot).map(tabBtn),
+      settingsTabs().filter((t) => !t.foot).map(tabBtn),
       h("div", { class: "settings-tabs-gap", role: "presentation" }),
-      SETTINGS_TABS.filter((t) => t.foot).map(tabBtn)));
+      settingsTabs().filter((t) => t.foot).map(tabBtn)));
 
   const pane = h("section", {
     class: "settings-pane",
@@ -1666,7 +1851,12 @@ function renderAll() {
 
 export function renderView() {
   const view = document.getElementById("view");
-  if (current.view === "new") return renderNew(view);
+  if (TRIAL && TRIAL_VIEWS.includes(current.view)) return renderTrialView(view, current.view);
+  if (current.view === "new") {
+    if (fullConsole()) return renderNew(view);
+    history.replaceState(null, "", "#/");
+    return renderTrialView(view, "landing");
+  }
   if (state.jobErr) {
     const msg = state.jobErr === "notfound"
       ? STATIC
@@ -1905,9 +2095,35 @@ function rowIcon(name) {
   return ic;
 }
 
+// clampToOwn brings saved form values within the caps a session with its own
+// keys has; the server enforces them whatever the form says.
+function clampToOwn() {
+  const own = ownLimits();
+  const inv = inviteLimits();
+  const f = state.form;
+  if (inv) {
+    f.runs = Math.min(f.runs, inv.max_attempts);
+    f.agent = "opencode";
+    f.models = f.models.filter(allowedModel);
+    if (!f.models.length && !state.inviteSeeded && inv.models.length) {
+      state.inviteSeeded = true;
+      f.models = [orId(inv.models[0])];
+    }
+  }
+  if (!own) return;
+  f.runs = Math.min(f.runs, own.max_attempts);
+  f.concurrent = Math.min(f.concurrent, own.max_concurrent);
+  f.timeout = Math.min(f.timeout, own.max_timeout_min);
+  f.retries = Math.min(f.retries, own.max_retries);
+}
+
 function renderNew(view) {
+  clampToOwn();
   const f = state.form;
   const st = state.status;
+  const own = ownLimits();
+  // The sandbox is the one the session's keys are for.
+  if (TRIAL) f.environment = trial.session.provider;
   if (needsModel(f.agent) && f.models.length && state.modelCatalog.size === 0) {
     ensureModelsLoaded();
   }
@@ -1926,7 +2142,7 @@ function renderNew(view) {
   if (st && !st.docker.ok) kids.push(banner(["Docker isn't running: start Colima with ", h("code", {}, "colima start"), "."], st.docker.error));
   if (st && st.jobs_warning) kids.push(banner(st.jobs_warning));
   if (st && !st.harbor.ok) kids.push(banner(["Harbor didn't answer ", h("code", {}, "harbor --version"), ". Is it installed and on PATH?"], st.harbor.error));
-  if (st && !hasConfiguredKey() && needsModel(f.agent)) {
+  if (!TRIAL && st && !hasConfiguredKey() && needsModel(f.agent)) {
     kids.push(h("div", { class: "banner warn", role: "alert" },
       h("span", {}, "No API key configured in ", h("code", {}, "bench/agent/.env"), ": OpenRouter runs need ", h("code", {}, "OPENROUTER_API_KEY"), "."),
       h("button", { type: "button", class: "btn peach", onclick: openSettingsModal }, "⚙ Configure API Keys")));
@@ -2021,14 +2237,15 @@ function renderNew(view) {
       h("div", {}, rowIcon("models"), h("span", { class: "row-lbl" }, "Models"), h("div", { class: "val" }, modelVal)),
       h("div", {}, rowIcon("runs"), h("span", { class: "row-lbl" }, "Runs"), h("span", { class: "val" },
         h("input", {
-          class: "num v", type: "number", min: "1", max: "100", value: String(f.runs), "aria-label": "Runs per task and model",
-          onchange: (e) => { f.runs = clampInt(e.target.value, 1, 100, 1); saveForm(); renderView(); },
+          class: "num v", type: "number", min: "1", max: String(maxAttempts()), value: String(f.runs), "aria-label": "Runs per task and model",
+          onchange: (e) => { f.runs = clampInt(e.target.value, 1, maxAttempts(), 1); saveForm(); renderView(); },
         }),
         h("span", { class: "v" }, "each"),
-        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment]}` : ""}`))))));
+        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"}${inviteLimits() ? "" : ` · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}`}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment] || "no sandbox"}` : ""}`))))));
 
   if (state.picker.open && needsModel(f.agent)) kids.push(renderPicker());
 
+  if (TRIAL) kids.push(turnstileBox(trial.session.turnstile_site_key));
   kids.push(renderPrompt());
   if (state.note) kids.push(h("div", { class: `note ${state.noteErr ? "err" : ""}`, role: "status" }, state.note));
 
@@ -2092,6 +2309,7 @@ function renderPrompt() {
     oninput: () => renderCmds(), onkeydown: onAskKey,
   });
 
+  const inv = inviteLimits();
   const agentSel = renderSelect({
     id: "agent",
     label: "Agent",
@@ -2121,7 +2339,7 @@ function renderPrompt() {
       { value: 2, label: "2 at once", desc: "Run 2 trials concurrently" },
       { value: 4, label: "4 at once", desc: "Run 4 trials concurrently" },
       { value: 8, label: "8 at once", desc: "Run 8 trials concurrently" },
-    ],
+    ].filter((o) => !ownLimits() || o.value <= ownLimits().max_concurrent),
     onChange: (val) => {
       f.concurrent = +val;
       saveForm();
@@ -2129,7 +2347,7 @@ function renderPrompt() {
     },
   });
 
-  const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b);
+  const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b).filter((m) => !ownLimits() || m <= ownLimits().max_timeout_min);
   const timeSel = renderSelect({
     id: "timeout",
     label: "Agent timeout",
@@ -2149,7 +2367,7 @@ function renderPrompt() {
   });
 
   const bar = h("div", { class: "bar" },
-    agentSel,
+    inv ? null : agentSel,
     needsModel(f.agent)
       ? h("button", {
           type: "button",
@@ -2157,8 +2375,7 @@ function renderPrompt() {
           onclick: () => openPicker(state.picker.open ? null : ""),
         }, `${f.models.length} model${f.models.length === 1 ? "" : "s"}`, h("span", { class: "faint", style: "font-size:10px" }, "▾"))
       : null,
-    concSel,
-    timeSel,
+    inv ? h("span", { class: "faint m", title: "Invite runs use the operator's sandbox and settings" }, `on ${ENVIRONMENTS[f.environment] || "no sandbox"}`) : [concSel, timeSel],
     needsModel(f.agent) ? h("span", { class: "faint m" }, "OpenRouter") : null,
     h("button", {
       type: "button",
@@ -2241,12 +2458,16 @@ function runCommand(line) {
   }
   const [cmd, ...rest] = line.split(/\s+/);
   const arg = rest.join(" ");
+  if (inviteLimits() && (cmd === "/timeout" || cmd === "/agent")) {
+    return say(`An invite run uses the operator's ${cmd.slice(1)}.`, true);
+  }
   switch (cmd) {
     case "/run":
       return startRun();
     case "/settings":
       return openSettingsModal();
     case "/model": {
+      if (!allowedModel(orId(arg))) return say(`${orId(arg)} is not among the models this invite offers. Open the picker with /models.`, true);
       if (!arg) return say("Usage: /model <OpenRouter id>, e.g. /model z-ai/glm-5.3", true);
       addModel(orId(arg));
       return say(`Added ${orId(arg)}.`);
@@ -2269,7 +2490,7 @@ function runCommand(line) {
         renderSide();
         return say("Runs are in the sidebar. /runs <n> sets the attempts per task and model.");
       }
-      f.runs = clampInt(arg, 1, 100, f.runs);
+      f.runs = clampInt(arg, 1, maxAttempts(), f.runs);
       saveForm();
       return say(`${f.runs} attempt${f.runs === 1 ? "" : "s"} per task and model.`);
     }
@@ -2312,6 +2533,7 @@ function runCommand(line) {
 
 function addModel(id) {
   const f = state.form;
+  if (!allowedModel(id)) return;
   if (!f.models.includes(id)) f.models.push(id);
   if (!needsModel(f.agent)) f.agent = "opencode";
   state.picker.previewId = id;
@@ -2351,7 +2573,8 @@ async function searchModels() {
   const p = state.picker;
   const q = p.q;
   try {
-    const list = await api(`/models?q=${encodeURIComponent(q)}`);
+    let list = await api(`/models?q=${encodeURIComponent(q)}`);
+    if (inviteLimits()) list = (list || []).filter((m) => allowedModel(m.id));
     for (const m of list || []) {
       state.modelCatalog.set(m.id, m);
     }
@@ -2362,7 +2585,10 @@ async function searchModels() {
       p.previewId = sortedModels(list)[0].id;
     }
   } catch (e) {
-    p.err = e.message;
+    if (inviteLimits()) {
+      p.list = inviteLimits().models.map(orId).filter((id) => id.includes(q)).map((id) => ({ id, name: id }));
+      p.err = "";
+    } else p.err = e.message;
   }
   if (p.open) renderPickerList();
 }
@@ -2404,7 +2630,7 @@ function renderPicker() {
   return h("div", { class: "picker", id: "picker", onkeydown: (e) => { if (e.key === "Escape" && !state.openSelect) { openPicker(null); } } },
     h("div", { class: "picker-top" },
       h("input", {
-        id: "pick-q", type: "search", value: p.q, placeholder: "Search OpenRouter models: glm, nemotron, claude, gemini, deepseek…", "aria-label": "Search models",
+        id: "pick-q", type: "search", value: p.q, placeholder: inviteLimits() ? "Search the models this invite offers" : "Search OpenRouter models: glm, nemotron, claude, gemini, deepseek…", "aria-label": "Search models",
         oninput: (e) => { p.q = e.target.value; clearTimeout(pickerTimer); pickerTimer = setTimeout(searchModels, 180); },
       }),
       renderSelect({ id: "pick-sort", label: "Sort models", value: state.form.modelSort || "", compact: true, options: MODEL_SORTS, onChange: setModelSort }),
@@ -2497,27 +2723,42 @@ function canRun() {
   if (state.status && state.status.jobs_warning && f.environment === "docker") return state.status.jobs_warning;
   if (!state.tasks || !state.tasks.length) return "No task to run.";
   if (!chosenTasks().length) return "Choose at least one arm.";
+  const own = ownLimits();
+  const total = attemptsCount() * (f.retries + 1);
+  if (own && total > own.max_trials) return `A run may have at most ${own.max_trials} attempts, retries included, here; this one has ${total}.`;
+  if (inviteLimits() && !f.environment) return "The operator's sandbox is unavailable right now.";
   if (envProblem(f.environment)) return environmentHint(f.environment);
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + Add OpenRouter model, or /model <id>.";
   return "";
 }
 
 async function startRun() {
+  clampToOwn();
   const f = state.form;
   const why = canRun();
   if (why) return say(why, true);
-  const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent, retries: f.retries };
-  if (f.environment !== "docker") body.environment = f.environment;
+  const body = { tasks: chosenTasks(), attempts: f.runs };
+  if (!inviteLimits()) Object.assign(body, { agent: f.agent, concurrent: f.concurrent, retries: f.retries });
+  if (f.environment !== "docker" && !TRIAL) body.environment = f.environment;
+  if (TRIAL && trial.session.turnstile_site_key) {
+    if (!turnstileToken()) return say("Complete the check first.", true);
+    body.turnstile_token = turnstileToken();
+  }
   if (needsModel(f.agent)) body.models = f.models.map((m) => `openrouter/${m}`);
-  if (f.timeout) body.timeout_sec = f.timeout * 60;
+  if (f.timeout && !inviteLimits()) body.timeout_sec = f.timeout * 60;
   state.starting = true;
   say("Starting Harbor…");
   try {
     const job = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     state.note = "";
+    if (TRIAL) {
+      resetTurnstile();
+      await loadTrialSession();
+    }
     location.hash = `#/jobs/${encodeURIComponent(job.id)}`;
   } catch (e) {
     say(`Harbor didn't start: ${e.message}`, true);
+    if (TRIAL) resetTurnstile();
   } finally {
     state.starting = false;
   }
@@ -3147,7 +3388,9 @@ function sessionState(t) {
 }
 
 function openInOpenCode(t, job) {
-  if (STATIC) return null; // the session is on the machine that ran it
+  // The session is on the machine that ran it: a copy, or the public trial,
+  // which keeps its addresses and files to itself.
+  if (STATIC || TRIAL) return null;
   const oc = t.opencode;
   if (t.status === "running" && oc && oc.url && !oc.finished) {
     return h("a", { class: "btn blue", href: oc.web || oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
@@ -3191,6 +3434,7 @@ function runControl(job) {
   }
   if (job.status === "pausing") return h("span", { class: "note" }, "Pausing: Harbor is cancelling the attempts in progress.");
   if (job.status !== "running") return null;
+  if (!job.stoppable && TRIAL) return null;
   if (!job.stoppable) {
     return h("span", { class: "note" },
       h("button", { type: "button", class: "btn", disabled: true }, "Pause run"), " ",
@@ -3201,7 +3445,7 @@ function runControl(job) {
   const ask = (what) => { state.confirm = what; renderView(); document.getElementById("confirm-yes").focus(); };
   if (state.confirm !== "pause" && state.confirm !== "stop") {
     return [
-      h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
+      TRIAL && trial.session && trial.session.invite ? null : h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
       h("button", { type: "button", class: "btn", onclick: () => ask("stop") }, "Stop run…"),
       state.actionErr ? h("span", { class: "bad" }, " ", state.actionErr) : null,
     ];
@@ -3476,6 +3720,11 @@ document.addEventListener("keydown", (e) => {
       renderSide();
       return;
     }
+    if (e.key === ",") {
+      e.preventDefault();
+      if (!state.settings.open) openSettingsModal();
+      return;
+    }
     if (k === "j" || e.key === "\\") {
       if (current.view === "new" || current.view === "runs") {
         e.preventDefault();
@@ -3520,9 +3769,9 @@ window.addEventListener("hashchange", onRoute);
 // don't change.
 if (!STATIC) {
   loadStatus();
-  loadSettings();
-  connectEvents();
+  if (!TRIAL) loadSettings();
   setInterval(loadStatus, 15000);
+  connectEvents();
 }
 loadTasks();
 loadJobs();
@@ -3530,3 +3779,45 @@ enterView(() => {
   renderAll();
   if (current.job) return refreshJob();
 });
+
+// The trial's "Copy share link" on a run's page.
+function shareButton() {
+  const b = h("button", { type: "button", class: "btn", title: "Copy a link to this run", onclick: async () => {
+    try { await navigator.clipboard.writeText(location.href); b.textContent = "Link copied"; } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = "Copy share link"; }, 1800);
+  } }, "Copy share link");
+  return b;
+}
+
+// trialFoot is the sidebar's foot in the trial, shaped like the local one:
+// Harbor and the sandbox in place of Docker, and the session's state in
+// place of Settings, which a visitor has no use for.
+function trialFoot() {
+  const s = trial.session || {};
+  const st = state.status;
+  const left = s.invite_runs_left ?? 0;
+  const badge = s.has_keys ? "Keys held" : s.invite ? `Invite · ${left} run${left === 1 ? "" : "s"} left` : "";
+  return h("div", { class: "side-foot" },
+    st ? h("div", { class: "side-env-row" },
+      h("span", { class: "side-env-items" },
+        h("span", { title: st.harbor.ok ? `Harbor ${st.harbor.version}` : st.harbor.error },
+          h("span", { class: `dot ${st.harbor.ok ? "" : "bad"}` }), "harbor"),
+        trialReady() ? h("span", { title: "Where this session's attempts execute" },
+          h("span", { class: `dot ${s.provider ? "" : "bad"}` }), s.provider || "none") : null),
+      h("span", { class: "m" }, location.host)) : null,
+    h("button", {
+      type: "button",
+      class: `side-settings-btn ${state.settings.open ? "active" : ""}`,
+      title: "Open settings (⌘,)",
+      "aria-haspopup": "dialog",
+      "aria-expanded": String(state.settings.open),
+      onclick: () => openSettingsModal(),
+    },
+      h("span", { class: "side-settings-left" },
+        h("span", { class: "side-settings-ic", "aria-hidden": "true" }, "⚙"),
+        h("span", {}, "Settings")),
+      h("span", { class: `key-badge ${badge ? "ok" : "warn"}` }, badge || "Set up")),
+    h("div", { class: "side-static side-links" },
+      trialReady() ? null : h("a", { href: "#/" }, "Set up a trial"),
+      h("a", { href: "#/trial/about" }, "About the trial")));
+}

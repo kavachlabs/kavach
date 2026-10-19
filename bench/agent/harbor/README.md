@@ -195,6 +195,20 @@ environment, e.g. `uv tool install --with 'harbor[daytona]' harbor` (also
 otherwise. Your key is billed by the provider; bench never prints or returns
 its value.
 
+For a public trial (`bench api -trial`, see
+[console/API.md](../console/API.md#trial-mode)), visitors bring their own keys.
+The console starts their Harbor with exactly those keys in its process
+environment, not `--env-file`, and holds them in memory only; it does not
+pass on its own environment (R2 keys, its own model key). Such a Harbor gets
+a home folder of its own and its output is redacted of those keys before it
+reaches the log. Run a public trial only behind Cloudflare Tunnel
+(`cloudflared` on the same machine, `-addr 127.0.0.1:PORT -trust-cf`): its
+limits depend on the real client address, which only the tunnel supplies (see
+the note in [API.md](../console/API.md#trial-mode)).
+Restart the console only through its own process (systemd `KillMode=process`):
+a visitor's Harbor is run by detached helper processes named `bench _logpipe`,
+and `pkill bench` or a signal to the whole control group stops those runs.
+
 ### Backing runs up to R2
 
 Harbor can only write a run to a folder on the machine that started it, even

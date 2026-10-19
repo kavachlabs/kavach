@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
 // command is one bench subcommand.
@@ -23,6 +25,7 @@ var commands = []command{
 	{"", "open the terminal console (serving the API itself if none is running)", cmdConsole},
 	{"web", "open the web console, serving the API unless a server already runs", cmdWeb},
 	{"sync", "back finished runs up to R2 once, and exit", cmdSync},
+	{"trial", "edit the public trial's invites, tasks and models (see deploy/trial/ONBOARDING.md)", cmdTrial},
 	{"export", "write a read-only copy of the web console and some runs, for a static host", cmdExport},
 }
 
@@ -34,6 +37,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	name := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
+	}
+	if name == harbor.LogPipeCommand { // hidden: how a visitor's Harbor is run
+		return harbor.RunLogPipe(args)
 	}
 	if name == "help" {
 		fmt.Fprint(stdout, usage())

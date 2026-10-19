@@ -28,6 +28,10 @@ type AttemptInput struct {
 	Result json.RawMessage   `json:"result,omitempty"`
 	Kavach json.RawMessage   `json:"kavach,omitempty"`
 	Log    []json.RawMessage `json:"log,omitempty"`
+	// What a remote sandbox's attempt has while its agent runs: the live
+	// copy of OpenCode's event log, and its session export, as text.
+	Live   string `json:"live,omitempty"`
+	Export string `json:"export,omitempty"`
 }
 
 // files lays the input out as the trial directory it came from. A field that
@@ -48,6 +52,8 @@ func (a AttemptInput) files() fstest.MapFS {
 		log.WriteByte('\n')
 	}
 	put("agent/opencode.txt", log.Bytes())
+	put("agent/opencode-live.txt", []byte(a.Live))
+	put("agent/opencode-session.json", []byte(a.Export))
 	return fsys
 }
 

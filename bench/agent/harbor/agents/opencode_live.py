@@ -26,10 +26,14 @@ See README.md.
 """
 
 import asyncio
+import base64
 import contextlib
 import copy
 import ipaddress
+import importlib.metadata
+import inspect
 import json
+import logging
 import os
 import shlex
 import socket
@@ -51,6 +55,10 @@ from harbor.models.environment_type import EnvironmentType
 
 LIVE_FILE = "opencode-live.json"
 EXPORT_FILE = "opencode-session.json"
+# The live copy of OpenCode's event log, for sandboxes that do not mount the
+# logs directory (Daytona, Modal): Harbor downloads opencode.txt only when the
+# agent ends.
+LIVE_LOG = "opencode-live.txt"
 INSTRUCTION_FILE = "instruction.md"
 MODELS_URL = "https://models.dev/api.json"
 PINNED_VERSION = "1.1.8"
@@ -59,6 +67,11 @@ MODEL_PORT = 8080
 PROXY_SERVICE = "proxy"
 # Pause between copies of the running session to the trial directory.
 MIRROR_SEC = 15
+# Pause between copies of the event log's new bytes, and the most one exec
+# returns: base64 of it stays well under the ~1 MB remote execs return.
+TAIL_SEC = 3
+TAIL_CHUNK = 256 << 10
+EXPORT_WARN_EVERY = 20
 # Outside every private range, then the Docker host's usual services: none may
 # accept a connection from a sealed task container.
 OUTSIDE = "1.1.1.1"
@@ -141,6 +154,45 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def pull_before_up(strategy: type | None = None) -> bool:
+    """Harbor 0.24's Daytona DinD strategy runs `docker compose up -d` with a
+    120 s limit, and the image pull happens inside it, so a large prebuilt image
+    dies mid-extract. Run `docker compose pull` first, under the task's
+    build_timeout_sec. Modal's strategy already gives `up` that limit.
+    Returns whether the patch is in place; does nothing on another Harbor or if
+    the method is not what it was in 0.24.0."""
+    if strategy is None:
+        try:
+            if not importlib.metadata.version("harbor").startswith("0.24."):
+                return False
+            from harbor.environments.daytona.environment import _DaytonaDinD as strategy
+        except (ImportError, importlib.metadata.PackageNotFoundError):
+            return False
+    original = getattr(strategy, "_compose_exec", None)
+    if getattr(original, "_kavach_pulls", False):
+        return True
+    if not inspect.iscoroutinefunction(original) or list(inspect.signature(original).parameters) != [
+        "self", "subcommand", "timeout_sec"
+    ]:
+        return False
+
+    async def compose_exec(self, subcommand, timeout_sec=None):
+        if subcommand == ["up", "-d"] and timeout_sec == 120:
+            # A failed pull is left to `up`, which reports it.
+            await original(
+                self, ["pull", "--ignore-buildable"], round(self._env.task_env_config.build_timeout_sec)
+            )
+        return await original(self, subcommand, timeout_sec)
+
+    compose_exec._kavach_pulls = True
+    strategy._compose_exec = compose_exec
+    logging.getLogger(__name__).info("docker compose pull runs before up on Daytona, under build_timeout_sec")
+    return True
+
+
+pull_before_up()
+
+
 class KavachOpenCode(OpenCode):
     options_model = KavachOpenCodeOptions
     options: KavachOpenCodeOptions
@@ -155,6 +207,7 @@ class KavachOpenCode(OpenCode):
         self._version = self._version or PINNED_VERSION
         self._proxy_started = False
         self._session: str | None = None
+        self._export_failures = 0
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
@@ -375,6 +428,40 @@ class KavachOpenCode(OpenCode):
             await self._quietly(self._export(environment, env))
             await asyncio.sleep(MIRROR_SEC)
 
+    async def _tail_once(self, environment: BaseEnvironment) -> bool:
+        """Append the bytes the sandbox's event log gained since the last
+        call to the trial's live copy. Returns False once the log is in the
+        trial directory itself (a bind mount): there is nothing to copy."""
+        if (self.logs_dir / self._OUTPUT_FILENAME).exists():
+            return False
+        remote = shlex.quote((self.environment_logs_dir / self._OUTPUT_FILENAME).as_posix())
+        while True:
+            result = await environment.exec(
+                f"tail -c +{self._live_offset + 1} {remote} 2>/dev/null | head -c {TAIL_CHUNK} | base64 | tr -d '\\n'",
+                timeout_sec=60,
+            )
+            if result.return_code:
+                return True
+            data = base64.b64decode(result.stdout or "")
+            if not data:
+                return True
+            with (self.logs_dir / LIVE_LOG).open("ab") as f:
+                f.write(data)
+            self._live_offset += len(data)
+            if len(data) < TAIL_CHUNK:
+                return True
+
+    async def _tail(self, environment: BaseEnvironment) -> None:
+        """Keep the live copy of the event log current while the agent runs."""
+        self._live_offset = 0
+        while True:
+            try:
+                if not await self._tail_once(environment):
+                    return
+            except Exception:
+                self.logger.exception("copying the event log failed; retrying")
+            await asyncio.sleep(TAIL_SEC)
+
     @override
     @with_prompt_template
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
@@ -388,6 +475,7 @@ class KavachOpenCode(OpenCode):
         }
         serving = False
         mirror: asyncio.Task | None = None
+        tail: asyncio.Task | None = None
         try:
             check_modal_runtime(environment)
             if self.options.isolate:
@@ -420,6 +508,7 @@ class KavachOpenCode(OpenCode):
                 serving = True
                 attach = f"--attach http://127.0.0.1:{SERVER_PORT} "
                 mirror = asyncio.create_task(self._mirror(environment, env, directory, view_url))
+                tail = asyncio.create_task(self._tail(environment))
 
             # The instruction goes in on stdin, which `opencode run` appends to
             # the message. On the command line, the agent's own `pkill -f
@@ -442,10 +531,11 @@ class KavachOpenCode(OpenCode):
             )
         finally:
             # Each step runs even if an earlier one fails.
-            if mirror:
-                mirror.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await mirror
+            for task in (mirror, tail):
+                if task:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
             await self._quietly(self._mark_finished())
             if serving:
                 await self._quietly(environment.exec("kill $(cat /tmp/opencode-serve.pid) 2>/dev/null; true", user="root"))
@@ -476,12 +566,29 @@ class KavachOpenCode(OpenCode):
                     break
         if not self._session:
             return
-        result = await environment.exec(
-            f"{NVM}opencode export {shlex.quote(self._session)} 2>/dev/null", env=env, timeout_sec=120
-        )
+        # Not through exec stdout: remote exec APIs truncate large output, and
+        # sessions outgrow that. A file transfer has no such cap.
+        remote = "/tmp/kavach-export.json"
+        local = self.logs_dir / (EXPORT_FILE + ".download")
         try:
-            json.loads(result.stdout)
-        except (ValueError, TypeError):
-            self.logger.warning(f"opencode export failed: {result.stdout!r:.200} {result.stderr}")
+            result = await environment.exec(
+                f"{NVM}opencode export {shlex.quote(self._session)} > {remote}.tmp 2>/dev/null && mv {remote}.tmp {remote}",
+                env=env,
+                timeout_sec=120,
+            )
+            if result.return_code:
+                raise RuntimeError(f"opencode export exited {result.return_code}")
+            await environment.download_file(remote, local)
+            json.loads(local.read_text())
+            local.replace(self.logs_dir / EXPORT_FILE)
+        except Exception as exc:
+            self._export_failures += 1
+            if self._export_failures % EXPORT_WARN_EVERY == 1:
+                size = local.stat().st_size if local.exists() else None
+                self.logger.warning(
+                    f"opencode export failed ({self._export_failures} in a row, downloaded {size} bytes): {exc!r:.200}"
+                )
             return
-        self._write_atomic(EXPORT_FILE, result.stdout)
+        finally:
+            local.unlink(missing_ok=True)
+        self._export_failures = 0

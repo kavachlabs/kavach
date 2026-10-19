@@ -177,6 +177,14 @@ console reads, appears once the session exists:
 
 and gains `"finished": "<RFC3339>"` when the run ends.
 
+On a sandbox that does not mount the logs directory (Daytona, Modal),
+Harbor downloads `opencode.txt` only when the agent ends. Until then the
+agent copies the log's new bytes every 3 seconds, through `environment.exec`
+in base64 chunks of 256 KiB, into `<trial-dir>/agent/opencode-live.txt`, and
+the console reads its steps from there (else from the session export). On
+local Docker the log is in the trial directory already, and nothing is
+copied.
+
 ### A live view on local Docker
 
 For OpenCode's own TUI or web UI on a local Docker run, publish the proxy's
@@ -242,6 +250,8 @@ API (`exec`, `service_exec`, `upload_file`); it does not call `docker`:
    `opencode.txt` and Harbor's trajectory conversion are unchanged.
 5. Finds the session (`GET /session` from inside the container), writes
    `opencode-live.json`, and mirrors the session every 15 seconds (an export that is still running holds back the next).
+   Without a bind mount, also copies the event log's new bytes to
+   `opencode-live.txt` every 3 seconds.
 6. Afterwards, also on failure or timeout: marks the file finished, stops the
    server, exports the session once more and saves the proxy's log
    (`proxy.log`). Harbor's `compose down` removes the proxy.
@@ -269,6 +279,12 @@ the same thing on every provider (Harbor 0.24.0, `harbor/environments`):
   task's file (`daytona/environment.py` 552, `modal.py` 589,
   `vercel/compose.py` ~409), which cuts `main` off from the proxy as well and
   cannot be combined with `networks:`.
+- Harbor 0.24's Daytona strategy runs `docker compose up -d` with a 120 s limit
+  (`daytona/environment.py` 773), and the image pull happens inside it, so a
+  large prebuilt image dies mid-extract. `opencode_live.pull_before_up` runs
+  `docker compose pull --ignore-buildable` first under `build_timeout_sec`; it
+  applies only on Harbor 0.24.x with `_DaytonaDinD._compose_exec` as it is
+  there. Modal's strategy already gives `up` that limit.
 
 So the task's Compose file does the sealing, with the same Compose features
 everywhere: `main` is only on `sealed`, an `internal: true` network with no
