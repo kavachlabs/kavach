@@ -179,10 +179,19 @@ and gains `"finished": "<RFC3339>"` when the run ends.
 
 On a sandbox that does not mount the logs directory (Daytona, Modal),
 Harbor downloads `opencode.txt` only when the agent ends. Until then the
-agent copies the log's new bytes every 3 seconds, through `environment.exec`
-in base64 chunks of 256 KiB, into `<trial-dir>/agent/opencode-live.txt`, and
-the console reads its steps from there (else from the session export). On
-local Docker the log is in the trial directory already, and nothing is
+agent keeps a live copy of it in `<trial-dir>/agent/opencode-live.txt`, and
+the console reads its steps from there (else from the session export):
+
+- On Daytona and Modal it follows the log as it is written: `tail -F` on the
+  sandbox's own machine, which holds the log at the same path (Harbor's DinD
+  strategies bind `/logs` to itself there), streamed back through the
+  provider's SDK (a Daytona session command's log websocket; Modal's
+  `sandbox.exec` stdout). A follow ends after 10 minutes and starts again.
+- Before each follow, and on any other provider, or when the log is not on
+  the sandbox's machine, it polls: the log's new bytes every 3 seconds,
+  through `environment.exec` in base64 chunks of 256 KiB.
+
+On local Docker the log is in the trial directory already, and nothing is
 copied.
 
 ### A live view on local Docker
@@ -250,8 +259,9 @@ API (`exec`, `service_exec`, `upload_file`); it does not call `docker`:
    `opencode.txt` and Harbor's trajectory conversion are unchanged.
 5. Finds the session (`GET /session` from inside the container), writes
    `opencode-live.json`, and mirrors the session every 15 seconds (an export that is still running holds back the next).
-   Without a bind mount, also copies the event log's new bytes to
-   `opencode-live.txt` every 3 seconds.
+   Without a bind mount, also keeps `opencode-live.txt`, a live copy of the
+   event log: followed through the provider's streaming exec on Daytona and
+   Modal, polled every 3 seconds elsewhere.
 6. Afterwards, also on failure or timeout: marks the file finished, stops the
    server, exports the session once more and saves the proxy's log
    (`proxy.log`). Harbor's `compose down` removes the proxy.
