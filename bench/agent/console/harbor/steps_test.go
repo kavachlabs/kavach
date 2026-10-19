@@ -151,7 +151,18 @@ func TestStepsFromSessionExport(t *testing.T) {
 	  ]}
 	]}`
 	fsys := fstest.MapFS{"agent/opencode-session.json": {Data: []byte(export)}}
+	// While the attempt is live, the running read is a step, marked running.
 	steps, err := stepsFrom(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 4 || steps[3].Kind != KindRead || steps[3].Title != "src/a.rs" || !steps[3].Running ||
+		steps[3].TMs != 800 || steps[3].Exit != nil || steps[2].Running {
+		t.Fatalf("live steps %+v", steps)
+	}
+	// Once the agent finished, a call the export still shows as running is not.
+	fsys["agent/opencode-live.json"] = &fstest.MapFile{Data: []byte(`{"finished": "2026-10-19T10:00:00Z"}`)}
+	steps, err = stepsFrom(fsys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,6 +281,20 @@ func TestKavachCLISteps(t *testing.T) {
 	for _, cmd := range []string{"grep -rn kavach src/", "ls ~/kavach-old", "# then run the kavach replay\nmake -j4"} {
 		if s := toolStep("bash", map[string]any{"command": cmd}, "", nil); s.Kavach {
 			t.Errorf("%q marked as a Kavach step", cmd)
+		}
+	}
+}
+
+func TestTailLines(t *testing.T) {
+	long := strings.Repeat("x", 3000)
+	for _, c := range []struct{ in, want string }{
+		{"a\nb\n", "a\nb\n"},
+		{strings.Repeat("y", 1500) + "\n" + strings.Repeat("z", 1000) + "\n", strings.Repeat("z", 1000) + "\n"},
+		{long, long[1000:]},
+		{"é" + strings.Repeat("x", 1999), strings.Repeat("x", 1999)},
+	} {
+		if got := tailLines(c.in, maxRunningOutput); got != c.want {
+			t.Errorf("tailLines(%d bytes) = %d bytes %.20q, want %d bytes", len(c.in), len(got), got, len(c.want))
 		}
 	}
 }

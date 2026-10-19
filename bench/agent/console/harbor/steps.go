@@ -37,6 +37,9 @@ type Step struct {
 	Exit   *int     `json:"exit,omitempty"` // a shell command's exit status, when known
 	Tokens *Tokens  `json:"tokens,omitempty"`
 	Cost   *float64 `json:"cost,omitempty"`
+	// Running is set on a tool call that has not ended, which only the
+	// session export shows; Detail is then the end of its output so far.
+	Running bool `json:"running,omitempty"`
 
 	// For Kavach's MCP tools (named kavach_*) and the kavach CLI run in a
 	// shell. Verdict and Passed are set when the output carries a verdict:
@@ -156,28 +159,128 @@ func stepsFrom(fsys fs.FS) ([]Step, error) {
 		// its session export.
 		f, err = fsys.Open("agent/opencode-live.txt")
 	}
-	if errors.Is(err, os.ErrNotExist) {
-		return exportSteps(fsys)
+	var lg openCodeLog
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		lg, err = exportLog(fsys)
+	case err != nil:
+	default:
+		defer f.Close()
+		lg, err = readOpenCodeLog(f)
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	return openCodeSteps(f)
+	return withRunning(fsys, lg), nil
 }
 
-// exportSteps reads steps from the session export the opencode-live agent
+// maxRunningOutput bounds the output shown of a call still running.
+const maxRunningOutput = 2000
+
+// withRunning adds to a live attempt's steps the tool calls its session
+// export shows running and the steps do not hold as ended: OpenCode logs a
+// call only when it ends, so a long command would show nothing until then.
+// They come last, in the export's order, at the call's start but never
+// before the step before.
+func withRunning(fsys fs.FS, lg openCodeLog) []Step {
+	steps := lg.steps
+	if !liveTrial(fsys) {
+		return steps
+	}
+	b, err := fs.ReadFile(fsys, "agent/opencode-session.json")
+	if err != nil {
+		return steps
+	}
+	var export struct {
+		Messages []struct {
+			Info struct {
+				Role string `json:"role"`
+			} `json:"info"`
+			Parts []struct {
+				ID    string `json:"id"`
+				Type  string `json:"type"`
+				Tool  string `json:"tool"`
+				State struct {
+					Status   string         `json:"status"`
+					Input    map[string]any `json:"input"`
+					Metadata map[string]any `json:"metadata"`
+					Time     struct {
+						Start int64 `json:"start"`
+					} `json:"time"`
+				} `json:"state"`
+			} `json:"parts"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(b, &export) != nil {
+		return steps
+	}
+	t0 := lg.t0
+	var last int64
+	if len(steps) > 0 {
+		last = steps[len(steps)-1].TMs
+	}
+	for _, m := range export.Messages {
+		if m.Info.Role != "assistant" {
+			continue
+		}
+		for _, p := range m.Parts {
+			if p.Type != "tool" || p.State.Status != "running" || (p.ID != "" && lg.ended[p.ID]) {
+				continue
+			}
+			s := toolStep(p.Tool, p.State.Input, "", nil)
+			s.Running, s.Exit, s.Verdict, s.Passed, s.Contract = true, nil, "", nil, nil
+			s.Detail = tailLines(str(p.State.Metadata["output"]), maxRunningOutput)
+			if start := p.State.Time.Start; start > 0 {
+				if t0 == 0 {
+					t0 = start
+				}
+				last = max(last, start-t0)
+			}
+			s.TMs = last
+			steps = append(steps, s)
+		}
+	}
+	return steps
+}
+
+// liveTrial reports whether a trial's agent may still be running: it has no
+// result, and the agent has not marked its live file finished.
+func liveTrial(fsys fs.FS) bool {
+	if b, err := fs.ReadFile(fsys, "result.json"); err == nil && len(b) > 0 && string(b) != "null" {
+		return false
+	}
+	var live liveFile
+	return readJSONFS(fsys, "agent/opencode-live.json", &live) != nil || live.Finished == ""
+}
+
+// tailLines is the end of s, at most n bytes, starting at a line, or the
+// last n bytes when its last line is longer.
+func tailLines(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := s[len(s)-n:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 && i+1 < len(cut) {
+		return cut[i+1:]
+	}
+	for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
+		cut = cut[1:]
+	}
+	return cut
+}
+
+// exportLog reads steps from the session export the opencode-live agent
 // mirrors every few seconds. A sandbox without a bind mount (Daytona, Modal)
 // sends Harbor opencode.txt only when the agent ends, so while it runs the
 // export is all there is. Its assistant messages hold the same parts the
 // event log does; they are written out as the log's events and read as one.
-func exportSteps(fsys fs.FS) ([]Step, error) {
+func exportLog(fsys fs.FS) (openCodeLog, error) {
 	b, err := fs.ReadFile(fsys, "agent/opencode-session.json")
 	if errors.Is(err, fs.ErrNotExist) {
-		return []Step{}, nil
+		return openCodeLog{steps: []Step{}}, nil
 	}
 	if err != nil {
-		return nil, err
+		return openCodeLog{}, err
 	}
 	var export struct {
 		Messages []struct {
@@ -192,7 +295,7 @@ func exportSteps(fsys fs.FS) ([]Step, error) {
 	}
 	if err := json.Unmarshal(b, &export); err != nil {
 		// The export is replaced atomically, so this is not a partial write.
-		return nil, fmt.Errorf("opencode-session.json: %w", err)
+		return openCodeLog{}, fmt.Errorf("opencode-session.json: %w", err)
 	}
 	var log bytes.Buffer
 	var last int64
@@ -243,12 +346,12 @@ func exportSteps(fsys fs.FS) ([]Step, error) {
 				Part      json.RawMessage `json:"part"`
 			}{typ, ts, raw})
 			if err != nil {
-				return nil, err
+				return openCodeLog{}, err
 			}
 			log.Write(append(line, '\n'))
 		}
 	}
-	return openCodeSteps(&log)
+	return readOpenCodeLog(&log)
 }
 
 // atifSteps converts an ATIF trajectory (Harbor's agent-neutral format).
@@ -345,6 +448,7 @@ type openCodeEvent struct {
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
 	Part      struct {
+		ID    string `json:"id"`
 		Text  string `json:"text"`
 		Tool  string `json:"tool"`
 		State struct {
@@ -376,17 +480,31 @@ type openCodeEvent struct {
 // stdout and stderr into one file, so lines that are not JSON events are
 // skipped, as is a last line still being written.
 func openCodeSteps(r io.Reader) ([]Step, error) {
+	lg, err := readOpenCodeLog(r)
+	return lg.steps, err
+}
+
+// openCodeLog is what an event log gives: its steps, the timestamp they
+// count from, and the ids of the tool calls that ended.
+type openCodeLog struct {
+	steps []Step
+	t0    int64
+	ended map[string]bool
+}
+
+func readOpenCodeLog(r io.Reader) (openCodeLog, error) {
 	steps := []Step{}
+	ended := map[string]bool{}
 	br := bufio.NewReader(r)
 	var t0 int64
 	calls := 0
 	for {
 		line, err := br.ReadBytes('\n')
 		if err == io.EOF {
-			return steps, nil
+			return openCodeLog{steps, t0, ended}, nil
 		}
 		if err != nil {
-			return nil, err
+			return openCodeLog{}, err
 		}
 		var e openCodeEvent
 		if !bytes.HasPrefix(line, []byte("{")) || json.Unmarshal(line, &e) != nil {
@@ -403,6 +521,9 @@ func openCodeSteps(r io.Reader) ([]Step, error) {
 				steps = append(steps, Step{TMs: ms, Kind: KindText, Title: clip(text)})
 			}
 		case "tool_use":
+			if p.ID != "" {
+				ended[p.ID] = true
+			}
 			var s Step
 			if p.State.Status == "error" {
 				s = Step{Kind: KindError, Tool: p.Tool, Title: clip(p.Tool + ": " + fmt.Sprint(p.State.Error))}

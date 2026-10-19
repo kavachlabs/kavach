@@ -37,6 +37,9 @@ type TimelineStep struct {
 	Title  string   `json:"title"`
 	Tokens *Tokens  `json:"tokens,omitempty"`
 	Cost   *float64 `json:"cost,omitempty"`
+	// A tool call that has not ended, and the end of its output so far.
+	Running bool   `json:"running,omitempty"`
+	Output  string `json:"output,omitempty"`
 }
 
 // Handle reads one attempt's steps and emits them on "timeline".
@@ -52,7 +55,11 @@ func (r *TimelineReader) Handle(env kavach.Env, in kavach.Input) error {
 		steps = nil
 	}
 	for _, st := range steps {
-		tl.Steps = append(tl.Steps, TimelineStep{TMs: st.TMs, Kind: st.Kind, Title: clipTo(st.Title, 80), Tokens: st.Tokens, Cost: st.Cost})
+		ts := TimelineStep{TMs: st.TMs, Kind: st.Kind, Title: clipTo(st.Title, 80), Tokens: st.Tokens, Cost: st.Cost, Running: st.Running}
+		if st.Running {
+			ts.Output = st.Detail
+		}
+		tl.Steps = append(tl.Steps, ts)
 	}
 	b, err := json.Marshal(tl)
 	if err != nil {
@@ -83,6 +90,52 @@ func (r *TimelineReader) Invariants() []kavach.Invariant {
 			}
 			return nil
 		}},
+		{Name: "running-calls-while-live", Check: func() error {
+			// Only a live attempt has running steps: one per call the export
+			// shows running that the steps do not hold as ended, in the
+			// export's order, after every other step, described as the
+			// ended call will be, with the end of its output so far.
+			for _, s := range r.seen {
+				w := agentWork(s.in)
+				var running []Step
+				for i, st := range s.steps {
+					if st.Running {
+						running = append(running, st)
+					} else if len(running) > 0 {
+						return fmt.Errorf("%s: step %d (%s) comes after a running step", s.id, i, clipTo(st.Title, 60))
+					}
+				}
+				if len(running) > 0 && !liveAttempt(s.in) {
+					return fmt.Errorf("%s: %d running steps, and the attempt has ended", s.id, len(running))
+				}
+				var calls []runningCall
+				for _, c := range w.running {
+					if !w.ended[c.id] {
+						calls = append(calls, c)
+					}
+				}
+				if len(running) > len(calls) {
+					return fmt.Errorf("%s: %d running steps, the export has %d running calls not yet ended", s.id, len(running), len(calls))
+				}
+				for i, st := range running {
+					c := calls[i]
+					switch {
+					case st.Exit != nil || st.Verdict != "" || st.Passed != nil:
+						return fmt.Errorf("%s: running step %q has an exit status or a verdict", s.id, clipTo(st.Title, 60))
+					case c.tool == "bash" && st.Title != clip(c.command):
+						return fmt.Errorf("%s: running step %q is not its command %q", s.id, clipTo(st.Title, 60), clipTo(c.command, 60))
+					case len(st.Detail) > 2000:
+						return fmt.Errorf("%s: running step %q has %d bytes of output", s.id, clipTo(st.Title, 60), len(st.Detail))
+					case !strings.HasSuffix(c.output, st.Detail):
+						return fmt.Errorf("%s: running step %q's output is not the end of the call's", s.id, clipTo(st.Title, 60))
+					}
+					if cut := len(c.output) - len(st.Detail); cut > 0 && c.output[cut-1] != '\n' && strings.Contains(st.Detail, "\n") {
+						return fmt.Errorf("%s: running step %q's output starts inside a line", s.id, clipTo(st.Title, 60))
+					}
+				}
+			}
+			return nil
+		}},
 		{Name: "only-the-agents-work", Check: func() error {
 			// Every step is one the agent took, in the file the steps come
 			// from: no more text, tool or usage steps than it holds, and
@@ -91,15 +144,17 @@ func (r *TimelineReader) Invariants() []kavach.Invariant {
 				w := agentWork(s.in)
 				var text, tools, usage int
 				for _, st := range s.steps {
-					switch st.Kind {
-					case KindText:
+					switch {
+					case st.Running:
+						// Calls that have not ended: running-calls-while-live.
+					case st.Kind == KindText:
 						text++
 						for _, u := range w.user {
 							if u != "" && st.Title == clip(u) {
 								return fmt.Errorf("%s: the user's message is shown as a step", s.id)
 							}
 						}
-					case KindUsage:
+					case st.Kind == KindUsage:
 						usage++
 					default:
 						tools++
@@ -124,15 +179,38 @@ func (r *TimelineReader) Invariants() []kavach.Invariant {
 type work struct {
 	text, tools, usage int
 	user               []string
+	// The ids of the ended tool calls the steps come from, and the calls
+	// the session export shows running, whichever the steps come from.
+	ended   map[string]bool
+	running []runningCall
+}
+
+type runningCall struct {
+	id, tool, command, output string
+}
+
+// liveAttempt reports whether the attempt's agent may still be running: it
+// has no result, and the agent has not marked its live file finished.
+func liveAttempt(a AttemptInput) bool {
+	if len(a.Result) > 0 && string(a.Result) != "null" {
+		return false
+	}
+	var f struct {
+		Finished string `json:"finished"`
+	}
+	return json.Unmarshal(a.LiveFile, &f) != nil || f.Finished == ""
 }
 
 // agentWork reads the first of the event log, its live copy and the session
 // export that the attempt has.
 func agentWork(a AttemptInput) work {
-	var w work
+	w := work{ended: map[string]bool{}}
 	countEvent := func(line string) {
 		var ev struct {
 			Type string `json:"type"`
+			Part struct {
+				ID string `json:"id"`
+			} `json:"part"`
 		}
 		if !strings.HasPrefix(line, "{") || json.Unmarshal([]byte(line), &ev) != nil {
 			return
@@ -142,6 +220,9 @@ func agentWork(a AttemptInput) work {
 			w.text++
 		case "tool_use", "error":
 			w.tools++
+			if ev.Part.ID != "" {
+				w.ended[ev.Part.ID] = true
+			}
 		case "step_finish":
 			w.usage++
 		}
@@ -157,38 +238,56 @@ func agentWork(a AttemptInput) work {
 		for sc.Scan() {
 			countEvent(sc.Text())
 		}
-	case a.Export != "":
-		var export struct {
-			Messages []struct {
-				Info struct {
-					Role string `json:"role"`
-				} `json:"info"`
-				Parts []struct {
-					Type  string `json:"type"`
-					Text  string `json:"text"`
-					State struct {
-						Status string `json:"status"`
-					} `json:"state"`
-				} `json:"parts"`
-			} `json:"messages"`
-		}
-		if json.Unmarshal([]byte(a.Export), &export) != nil {
-			return w
-		}
-		for _, m := range export.Messages {
-			for _, p := range m.Parts {
-				switch {
-				case m.Info.Role != "assistant":
-					if p.Type == "text" {
-						w.user = append(w.user, strings.TrimSpace(p.Text))
-					}
-				case p.Type == "text":
-					w.text++
-				case p.Type == "tool" && (p.State.Status == "completed" || p.State.Status == "error"):
-					w.tools++
-				case p.Type == "step-finish":
-					w.usage++
+	}
+	var export struct {
+		Messages []struct {
+			Info struct {
+				Role string `json:"role"`
+			} `json:"info"`
+			Parts []struct {
+				ID    string `json:"id"`
+				Type  string `json:"type"`
+				Text  string `json:"text"`
+				Tool  string `json:"tool"`
+				State struct {
+					Status string `json:"status"`
+					Input  struct {
+						Command string `json:"command"`
+					} `json:"input"`
+					Metadata struct {
+						Output string `json:"output"`
+					} `json:"metadata"`
+				} `json:"state"`
+			} `json:"parts"`
+		} `json:"messages"`
+	}
+	if a.Export == "" || json.Unmarshal([]byte(a.Export), &export) != nil {
+		return w
+	}
+	fromExport := len(a.Log) == 0 && a.Live == ""
+	for _, m := range export.Messages {
+		for _, p := range m.Parts {
+			ended := p.Type == "tool" && (p.State.Status == "completed" || p.State.Status == "error")
+			if m.Info.Role == "assistant" && p.Type == "tool" && p.State.Status == "running" {
+				w.running = append(w.running, runningCall{p.ID, p.Tool, p.State.Input.Command, p.State.Metadata.Output})
+			}
+			if !fromExport {
+				continue
+			}
+			switch {
+			case m.Info.Role != "assistant":
+				if p.Type == "text" {
+					w.user = append(w.user, strings.TrimSpace(p.Text))
 				}
+			case p.Type == "text":
+				w.text++
+			case ended:
+				w.tools++
+				if p.ID != "" {
+					w.ended[p.ID] = true
+				}
+			case p.Type == "step-finish":
+				w.usage++
 			}
 		}
 	}

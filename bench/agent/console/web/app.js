@@ -3286,7 +3286,10 @@ function renderStep(s, i, isLastText, model) {
     title = [h("span", { class: "m" }, firstLine), more, s.exit ? h("span", { class: "x" }, `exit ${s.exit}`) : null];
   }
   if (s.kavach) label = "Kavach";
-  const cls = `step ${s.kind}${s.kavach ? " kavach" : ""}`;
+  // A call that has not ended, from the session export: shown with what it
+  // has printed so far until the log has it as ended.
+  if (s.running) title = [...title, h("span", { class: "run" }, "running")];
+  const cls = `step ${s.kind}${s.kavach ? " kavach" : ""}${s.running ? " running" : ""}`;
   const head = [h("span", { class: "k" }, label), h("span", { class: "t" }, title), ts];
   const verdict = (s.kavach || s.contract) && (s.verdict || s.variants || s.contract) ? h("div", { class: "verdict" },
     s.verdict || s.contract ? h("span", { class: `pill ${(s.contract ? s.contract.passed : s.passed) ? "pass" : (s.contract || s.passed === false) ? "fail" : "queued"}` }, s.verdict || s.contract.verdict) : null,
@@ -3306,7 +3309,7 @@ function renderStep(s, i, isLastText, model) {
   const detailText = s.kavach ? compactKavachJSON(s.detail) : s.detail;
   const body = s.kind === "edit" ? diffView(detailText) : h("pre", {}, detailText);
   if (verdict) return h("div", { class: cls }, h("details", { dataset: { i } }, h("summary", {}, head), body), verdict);
-  return h("details", { class: cls, dataset: { i } }, h("summary", {}, head), body);
+  return h("details", { class: cls, dataset: { i }, open: s.running || null }, h("summary", {}, head), body);
 }
 
 function diffView(text) {

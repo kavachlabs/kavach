@@ -2129,6 +2129,9 @@ details.err-more > pre {
 .step[open] .t, .step details[open] .t { white-space: pre-wrap; overflow-wrap: anywhere; }
 .step .ts { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .step .x { color: var(--bad); font-size: 11.5px; margin-left: 8px; }
+.step .run { color: var(--blue); font-size: 11.5px; margin-left: 8px; animation: run-pulse 1.6s ease-in-out infinite; }
+@keyframes run-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .step .run { animation: none; } }
 .step pre {
   margin: 4px 0 6px 68px;
   background: var(--bar);

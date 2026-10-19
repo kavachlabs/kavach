@@ -1,0 +1,19 @@
+{
+  "spec": "../SPEC.md",
+  "feature_steps": [
+    9,
+    21,
+    31,
+    33,
+    39,
+    41
+  ],
+  "invariants": [
+    "steps-in-time-order",
+    "only-the-agents-work",
+    "running-calls-while-live"
+  ],
+  "invariant_sources": [
+    "../../../../timeline.go"
+  ]
+}
