@@ -221,7 +221,7 @@ function terms() {
     sec("As is",
       "This is a free trial, provided as is, with no guarantee that it works, stays up, keeps your runs, or that results are correct. We may change or stop it at any time."),
     h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "kavachlabs.dev"), "."),
-    h("p", { class: "tl-alt" }, h("a", { href: "#/trial/keys" }, "Bring your keys"), " · ", h("a", { href: "#/trial/invite" }, "Use an invite code")));
+    h("p", { class: "tl-alt" }, h("a", { href: "#/trial/keys" }, "Bring your keys"), " · ", h("a", { href: "#/trial/invite" }, "Use an invite code"), " · ", h("a", { href: "#/trial/about" }, "About the trial")));
 }
 
 function runsSection(title, sub, jobs, empty) {
@@ -279,7 +279,7 @@ function keysForm() {
     if (!r.ok) { keys.err = r.err; return redraw(); }
     Object.assign(keys, { model_key: "", daytona_api_key: "", modal_token_id: "", modal_token_secret: "" });
     await loadTrialSession();
-    location.hash = "#/new";
+    location.hash = "#/";
   } },
     h("fieldset", {},
       h("legend", {}, "Model"),
@@ -325,7 +325,7 @@ function inviteForm() {
     invite.code = "";
     history.replaceState(null, "", "#/trial/invite"); // the code leaves the address bar and history
     await loadTrialSession();
-    location.hash = "#/new";
+    location.hash = "#/";
   } },
     field({ id: "inv", label: "Invite code", value: invite.code, onInput: (v) => { invite.code = v; } }),
     invite.err ? h("p", { class: "tf-err", role: "alert" }, invite.err) : null,

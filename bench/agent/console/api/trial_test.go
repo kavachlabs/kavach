@@ -41,7 +41,7 @@ func newTrialServer(t *testing.T, script string, mutate func(*Config, *TrialConf
 	if script == "" {
 		script = "env > " + dir + "/env.txt\necho \"$@\" > " + dir + "/args.txt\ntrap 'exit 130' INT\nwhile :; do sleep 0.05; done\n"
 	}
-	os.WriteFile(harborCmd, []byte("#!/bin/sh\n"+script), 0o755)
+	os.WriteFile(harborCmd, []byte("#!/bin/sh\n[ \"$1\" = --version ] && { echo 'harbor 0.24.0'; exit 0; }\n"+script), 0o755)
 	envFile := filepath.Join(dir, "server.env")
 	os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=sk-or-v1-server-secret-9999\nDAYTONA_API_KEY=dtn-server-secret-8888\nR2_SECRET_ACCESS_KEY=r2-server-secret-7777\n"), 0o600)
 	t.Setenv("R2_ACCESS_KEY_ID", "r2-process-secret-6666")
@@ -401,6 +401,9 @@ func TestTrialOwnership(t *testing.T) {
 	_, raw, _ = e.raw(a, "GET", "/api/status", "")
 	if strings.Contains(string(raw), e.cfg.TasksDir) || strings.Contains(string(raw), e.jobs) {
 		t.Errorf("status names a local path: %s", raw)
+	}
+	if !strings.Contains(string(raw), "0.24.0") {
+		t.Errorf("status lacks Harbor's version: %s", raw)
 	}
 
 	// Ownership survives a restart; the list still shows the run.

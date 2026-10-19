@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
@@ -55,10 +56,22 @@ func (s *Server) trialRoutes() {
 	}
 }
 
-// getTrialStatus is /api/status without the server's paths, tools and keys.
+// getTrialStatus is /api/status without the server's paths, keys and Docker:
+// visitors run on remote sandboxes, so only Harbor's version is told, and
+// not its error, which could name a path.
 func (s *Server) getTrialStatus(w http.ResponseWriter, r *http.Request) {
+	s.statusMu.Lock()
+	if time.Since(s.statusTime) > statusTTL {
+		s.status = Status{Harbor: check(r.Context(), s.cfg.Harbor, "--version")}
+		s.statusTime = time.Now()
+	}
+	harborCheck := s.status.Harbor
+	s.statusMu.Unlock()
+	if !harborCheck.OK {
+		harborCheck = Check{Error: "harbor is not available"}
+	}
 	writeJSON(w, http.StatusOK, Status{
-		Docker: Check{OK: true}, Harbor: Check{OK: true}, Tasks: len(s.trial.allowedTasks()),
+		Docker: Check{OK: true}, Harbor: harborCheck, Tasks: len(s.trial.allowedTasks()),
 		Environments: []EnvironmentStatus{}, Sync: SyncStatus{Keys: []SyncKey{}},
 	})
 }

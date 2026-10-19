@@ -443,7 +443,9 @@ function route() {
   if (parts[0] === "jobs" && parts[1]) return { view: parts[2] === "compare" ? "compare" : "runs", job: parts[1] };
   if (TRIAL) {
     if (parts[0] === "trial" && TRIAL_VIEWS.includes(parts[1])) return { view: parts[1] };
-    if (parts[0] === "new") return { view: "new", task: parts[1] || "" };
+    if (parts[0] === "trial" && parts[1] === "about") return { view: "landing" };
+    // A session that can run opens on the console's own home, as locally.
+    if (parts[0] === "new" || (trialReady() && !parts[0])) return { view: "new", task: parts[0] === "new" ? parts[1] || "" : "" };
     return { view: "landing" };
   }
   // A copy has no new-run form: it opens on its landing run's results.
@@ -770,6 +772,13 @@ function syncPill(sync) {
     h("span", { class: `dot ${dot}` }), held ? `${label} · ${sync.skipped} held back` : label);
 }
 
+// sandboxPill is where the session's runs execute, in the header and foot of the trial.
+function sandboxPill() {
+  const p = trial.session && trial.session.provider;
+  return h("span", { class: "status-pill", title: p ? "Where this session's attempts execute" : "No sandbox is available for this session" },
+    h("span", { class: `dot ${p ? "" : "bad"}` }), p || "no sandbox");
+}
+
 function renderTop() {
   const right = document.getElementById("right");
   const title = document.getElementById("title-text");
@@ -794,7 +803,7 @@ function renderTop() {
       job.status === "running" || job.status === "done" ? `${doneOf} done` : `${job.status} · ${doneOf}`));
     if (job.environment && ENVIRONMENTS[job.environment]) kids.push(h("span", { class: "status-pill", title: "Where this run's attempts execute" }, ENVIRONMENTS[job.environment]));
     kids.push(syncPill(job.sync));
-    if (TRIAL) kids.push(h("a", { class: "btn wide", href: "#/" }, "Home"), shareButton());
+    if (TRIAL) kids.push(trialReady() ? null : h("a", { class: "btn wide", href: "#/" }, "Home"), shareButton());
     if (job.cost) kids.push(h("span", { class: "status-pill cost" }, fmtCost(job.cost)));
     if (job.started) {
       kids.push(h("span", { class: "wide" },
@@ -810,11 +819,10 @@ function renderTop() {
     }
   } else if (current.view !== "new") {
     text = current.job;
-  } else if (!TRIAL) {
-    if (state.status) {
-      kids.push(statusDot("docker", state.status.docker), statusDot("harbor", state.status.harbor));
-      if (state.jobs) kids.push(h("span", { class: "wide" }, `${state.jobs.length} run${state.jobs.length === 1 ? "" : "s"} saved`));
-    }
+  } else if (state.status) {
+    // Docker is the operator's machine, not a visitor's: the sandbox is.
+    kids.push(TRIAL ? null : statusDot("docker", state.status.docker), statusDot("harbor", state.status.harbor), TRIAL ? sandboxPill() : null);
+    if (state.jobs) kids.push(h("span", { class: "wide" }, `${state.jobs.length} run${state.jobs.length === 1 ? "" : "s"} saved`));
   }
 
   kids.push(themeToggle());
@@ -967,7 +975,7 @@ function makeResizeSash(side) {
 function renderNav() {
   const nav = document.getElementById("nav");
   const kids = STATIC ? [] : [h("a", { href: "#/new" }, h("span", {}, "+ New benchmark run"), h("span", { class: "dim m" }, "#/new"))];
-  if (TRIAL) kids.unshift(h("a", { href: "#/" }, h("span", {}, "Home")));
+  if (TRIAL) kids.unshift(trialReady() ? h("a", { href: "#/trial/about" }, h("span", {}, "About the trial")) : h("a", { href: "#/" }, h("span", {}, "Home")));
   if (current.job) {
     const enc = encodeURIComponent(current.job);
     kids.push(h("a", { href: `#/jobs/${enc}` }, "Matrix & Step Inspector", h("span", { class: "dim m" }, current.job)));
@@ -2012,7 +2020,7 @@ function renderNew(view) {
   if (st && !st.docker.ok) kids.push(banner(["Docker isn't running: start Colima with ", h("code", {}, "colima start"), "."], st.docker.error));
   if (st && st.jobs_warning) kids.push(banner(st.jobs_warning));
   if (st && !st.harbor.ok) kids.push(banner(["Harbor didn't answer ", h("code", {}, "harbor --version"), ". Is it installed and on PATH?"], st.harbor.error));
-  if (st && !hasConfiguredKey() && needsModel(f.agent)) {
+  if (!TRIAL && st && !hasConfiguredKey() && needsModel(f.agent)) {
     kids.push(h("div", { class: "banner warn", role: "alert" },
       h("span", {}, "No API key configured in ", h("code", {}, "bench/agent/.env"), ": OpenRouter runs need ", h("code", {}, "OPENROUTER_API_KEY"), "."),
       h("button", { type: "button", class: "btn peach", onclick: openSettingsModal }, "⚙ Configure API Keys")));
@@ -3631,11 +3639,9 @@ window.addEventListener("hashchange", onRoute);
 // A copy has no server: no status, settings or live events, and its runs
 // don't change.
 if (!STATIC) {
-  if (!TRIAL) {
-    loadStatus();
-    loadSettings();
-    setInterval(loadStatus, 15000);
-  }
+  loadStatus();
+  if (!TRIAL) loadSettings();
+  setInterval(loadStatus, 15000);
   connectEvents();
 }
 loadTasks();
@@ -3654,12 +3660,27 @@ function shareButton() {
   return b;
 }
 
-// trialFoot is the sidebar's foot in the trial: the keys' state, in place of
-// the machine's status and Settings.
+// trialFoot is the sidebar's foot in the trial, shaped like the local one:
+// Harbor and the sandbox in place of Docker, and the session's state in
+// place of Settings, which a visitor has no use for.
 function trialFoot() {
   const s = trial.session || {};
-  return h("div", { class: "side-foot side-static" },
-    h("span", {}, s.has_keys ? "Your keys are held for this session." : s.invite ? `Invite accepted · ${s.invite_runs_left ?? 0} run${s.invite_runs_left === 1 ? "" : "s"} left.` : "No keys yet."),
-    h("a", { href: trialReady() ? "#/new" : "#/" }, trialReady() ? "Start another run" : "Set up a trial"),
-    s.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null);
+  const st = state.status;
+  const left = s.invite_runs_left ?? 0;
+  const [who, badge] = s.has_keys ? ["Your keys", "Keys held"] : s.invite ? ["Invite", `${left} run${left === 1 ? "" : "s"} left`] : ["No keys yet", ""];
+  return h("div", { class: "side-foot" },
+    st ? h("div", { class: "side-env-row" },
+      h("span", { class: "side-env-items" },
+        h("span", { title: st.harbor.ok ? `Harbor ${st.harbor.version}` : st.harbor.error },
+          h("span", { class: `dot ${st.harbor.ok ? "" : "bad"}` }), "harbor"),
+        trialReady() ? h("span", { title: "Where this session's attempts execute" },
+          h("span", { class: `dot ${s.provider ? "" : "bad"}` }), s.provider || "no sandbox") : null),
+      h("span", { class: "m" }, location.host)) : null,
+    h("div", { class: "side-settings-btn side-session" },
+      h("span", { class: "side-settings-left" }, h("span", { class: "side-settings-ic", "aria-hidden": "true" }, "🔒"), h("span", {}, who)),
+      badge ? h("span", { class: "key-badge ok" }, badge) : null),
+    h("div", { class: "side-static side-links" },
+      trialReady() ? null : h("a", { href: "#/" }, "Set up a trial"),
+      s.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null,
+      h("a", { href: "#/trial/about" }, "About the trial")));
 }
