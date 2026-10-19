@@ -3354,6 +3354,14 @@ function errorView(t) {
   return d;
 }
 
+// noPatchReason says why a finished attempt has no patch. Harbor runs the
+// task's collect hook, which saves it, even when the agent failed; the hook
+// fails when the agent's sandbox is gone, e.g. killed for lack of memory.
+function noPatchReason(t) {
+  if (t.error) return `No patch was saved: the attempt failed (${errorSummary(t.error)}), and the hook that saves the patch could not run, most likely because the agent's sandbox had already stopped. Its error is in the trial log.`;
+  return "No patch was saved: the task has no collect hook, or the hook failed. Its error is in the trial log.";
+}
+
 function patchView(t) {
   const d = h("details", { class: "patch" }, h("summary", {}, "Patch"));
   d.addEventListener("toggle", async () => {
@@ -3362,7 +3370,7 @@ function patchView(t) {
     let body;
     try {
       const resp = await fetch(apiURL(`/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}/patch`));
-      if (resp.status === 404) body = h("div", { class: "dim" }, "No patch was saved: the task has no collect hook, or Harbor never reached it.");
+      if (resp.status === 404) body = h("div", { class: "dim" }, noPatchReason(t));
       else if (!resp.ok) body = h("div", { class: "bad" }, `Couldn't load the patch: ${resp.status}`);
       else {
         const text = await resp.text();

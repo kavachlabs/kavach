@@ -18,6 +18,11 @@ Per task this (idempotently):
     build from (README.md, "Images"). The tags are content keys, so this
     check fails after a change to a Dockerfile or a file it copies; run
     sync-tasks.py to update them;
+  - sizes the agent's and the grader's sandboxes (`cpus`, `memory_mb`,
+    `storage_mb` in `[environment]`, copied to `[verifier.environment]`):
+    without them Harbor asks for nothing and Daytona gives its default
+    sandbox, 1 vCPU and 1 GiB, in which `make -j4` or a Rust link is killed
+    for lack of memory (exit 137) (README.md, "Sandbox size");
   - gives task.toml a second `[[verifier.collect]]` hook that copies the final
     version of every changed source file to /logs/artifacts/source, for the
     bench console. It is derived from the patch hook, so it starts from the
@@ -91,6 +96,11 @@ BUILD_BLOCK = re.compile(
 )
 IMAGE_COMMENT = "# Prebuilt, so a remote provider pulls it and never builds (README.md, \"Images\").\n"
 ENV_IMAGE = re.compile(r"(?:#[^\n]*\n)?docker_image = [^\n]*\n")
+# Per sandbox. Daytona's largest sandbox on its default tier is 4 vCPU,
+# 8 GiB and 10 GiB of disk; the Rust task needs the most to link its tests.
+RESOURCES = {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
+RESOURCES_FOR = {"axum-1934": {"cpus": 4, "memory_mb": 8192, "storage_mb": 10240}}
+RESOURCE_LINE = re.compile(r"^(?:cpus|memory_mb|storage_mb) = [^\n]*\n", re.M)
 VERIFIER_ENV = re.compile(r"\[verifier\.environment\]\n(?:[^\n\[][^\n]*\n)*\n")
 AGENT_NETWORK = re.compile(
     r"(?:#[^\n]*\n)*network_mode = \"no-network\"\n"
@@ -162,8 +172,11 @@ def toml_for(task: Path, text: str) -> str:
     name = task.name.removesuffix("-" + arm)
     text = VERIFIER_ENV.sub("", ENV_IMAGE.sub("", text))
     env = re.search(r"^\[environment\]\n((?:[a-z_]+ = [^\n]*\n)+)", text, re.M)
-    fields = env.group(1)
-    text = text[: env.start(1)] + f'{IMAGE_COMMENT}docker_image = "{image_tag.ref(name, arm)}"\n' + text[env.start(1) :]
+    sizes = "".join(f"{k} = {v}\n" for k, v in RESOURCES_FOR.get(name, RESOURCES).items())
+    fields = RESOURCE_LINE.sub("", env.group(1)) + sizes
+    text = text[: env.start(1)] + fields + text[env.end(1) :]
+    at = env.start(1)
+    text = text[:at] + f'{IMAGE_COMMENT}docker_image = "{image_tag.ref(name, arm)}"\n' + text[at:]
     block = f'[verifier.environment]\n{IMAGE_COMMENT}docker_image = "{image_tag.ref(name, "grader")}"\n{fields}\n'
     return source_hook(text.replace("[[verifier.collect]]", block + "[[verifier.collect]]", 1))
 
