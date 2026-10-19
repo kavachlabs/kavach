@@ -329,11 +329,13 @@ func editList(list []string, seed []string, args []string, add bool) ([]string, 
 	return list, nil
 }
 
-// trialArms are the arms a visitor runs: both sides of an incident.
+// trialArms are the arms every trial task must have: both sides of an
+// incident. A feature task also has workflow and kavach-implement arms.
 var trialArms = []string{"control", "kavach"}
 
 // resolveTasks maps what the operator typed to Harbor task names. A base
-// name means its control and kavach arms; a folder name means itself.
+// name means every arm it has, which must include control and kavach; a
+// folder name means itself.
 func resolveTasks(all []harbor.Task, args []string) (names []string, notes []string, err error) {
 	for _, a := range args {
 		var task *harbor.Task
@@ -364,7 +366,9 @@ func resolveTasks(all []harbor.Task, args []string) (names []string, notes []str
 			if !slices.Contains(have, want) {
 				return nil, nil, fmt.Errorf("task %s has no %s arm (it has %s)", a, want, strings.Join(have, ", "))
 			}
-			names = append(names, a+"-"+want)
+		}
+		for _, arm := range task.Arms {
+			names = append(names, arm.Task)
 		}
 	}
 	return names, notes, nil
@@ -426,7 +430,7 @@ func taskEdit(o *trialOpts, fs *flag.FlagSet, add bool) func(io.Writer) error {
 			// A base name removes whichever of its arms are listed.
 			for _, a := range fs.Args() {
 				names = append(names, a)
-				for _, arm := range trialArms {
+				for _, arm := range harbor.Arms {
 					names = append(names, a+"-"+arm)
 				}
 			}

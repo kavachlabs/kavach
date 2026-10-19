@@ -95,10 +95,10 @@ func TestTrialCLITasksAndModels(t *testing.T) {
 		t.Fatalf("a task without both arms: %d %q", code, errs)
 	}
 	code, out, errs := run("task", "add", "inc")
-	if code != 0 || !strings.Contains(out, "inc: arms control, workflow, kavach") || !strings.Contains(out, "bench-inc:kavach-abc is not published") || !strings.Contains(out, "trial tasks: inc-control, inc-kavach") {
+	if code != 0 || !strings.Contains(out, "inc: arms control, workflow, kavach") || !strings.Contains(out, "bench-inc:kavach-abc is not published") || !strings.Contains(out, "trial tasks: inc-control, inc-workflow, inc-kavach") {
 		t.Fatalf("task add: %d\n%s%s", code, out, errs)
 	}
-	if code, out, _ := run("task", "add", "half-control"); code != 0 || !strings.Contains(out, "inc-control, inc-kavach, half-control") {
+	if code, out, _ := run("task", "add", "half-control"); code != 0 || !strings.Contains(out, "inc-control, inc-workflow, inc-kavach, half-control") {
 		t.Fatalf("a folder name: %d %s", code, out)
 	}
 	if _, out, _ := run("task", "list"); !strings.Contains(out, "inc-kavach (arm kavach)") {
@@ -127,7 +127,7 @@ func TestTrialCLISeedsFromEnvFile(t *testing.T) {
 	run, config, _ := trialCLI(t)
 	envFile := filepath.Join(filepath.Dir(config), "trial.env")
 	os.WriteFile(envFile, []byte("TRIAL_TASKS=half-control\nTRIAL_MODELS=openrouter/m/one\n"), 0o600)
-	if code, out, _ := run("task", "add", "-env", envFile, "inc"); code != 0 || !strings.Contains(out, "half-control, inc-control, inc-kavach") {
+	if code, out, _ := run("task", "add", "-env", envFile, "inc"); code != 0 || !strings.Contains(out, "half-control, inc-control, inc-workflow, inc-kavach") {
 		t.Fatalf("task add: %d %s", code, out)
 	}
 	if code, out, _ := run("model", "add", "-env", envFile, "openrouter/m/two"); code != 0 || !strings.Contains(out, "openrouter/m/one, openrouter/m/two") {

@@ -74,8 +74,10 @@ A visitor can run a task only when all of this holds:
    kavach-trial task add redis-10068
    ```
 
-   A base name adds its control and kavach arms (a folder name such as
-   `redis-10068-kavach` adds just that one). It prints the arms found, adds
+   A base name adds every arm the task has, which must include control and
+   kavach: an incident's two, a feature's four (control, workflow, kavach,
+   kavach-implement). A folder name such as `redis-10068-kavach` adds just
+   that one, and `task remove` with a base name removes all its arms. It prints the arms found, adds
    them, and warns when an image in the `task.toml` is not published (checked
    with `docker manifest inspect` where the command runs: the VM; no docker
    there, no check). The first edit starts from `TRIAL_TASKS` in `trial.env`,
