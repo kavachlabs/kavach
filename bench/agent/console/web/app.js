@@ -3388,7 +3388,9 @@ function sessionState(t) {
 }
 
 function openInOpenCode(t, job) {
-  if (STATIC) return null; // the session is on the machine that ran it
+  // The session is on the machine that ran it: a copy, or the public trial,
+  // which keeps its addresses and files to itself.
+  if (STATIC || TRIAL) return null;
   const oc = t.opencode;
   if (t.status === "running" && oc && oc.url && !oc.finished) {
     return h("a", { class: "btn blue", href: oc.web || oc.url, target: "_blank", rel: "noopener" }, "Open in OpenCode ↗");
