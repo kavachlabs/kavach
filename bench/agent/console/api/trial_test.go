@@ -549,6 +549,25 @@ func TestTrialTurnstile(t *testing.T) {
 	}
 }
 
+// An invited run is not checked: the code says who runs, and caps their runs.
+func TestTrialTurnstileSkipsInvites(t *testing.T) {
+	verifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("an invited run was sent to Turnstile")
+		json.NewEncoder(w).Encode(map[string]bool{"success": false})
+	}))
+	defer verifier.Close()
+	e := newTrialServer(t, "", func(_ *Config, tc *TrialConfig) {
+		tc.TurnstileSecret, tc.TurnstileSiteKey, tc.TurnstileURL = "ts-secret", "site-key", verifier.URL
+		tc.Tasks, tc.InviteCodes = []string{"hello-world-kavach"}, []string{"alpha-code"}
+	})
+	c := e.visitor()
+	e.invite(c)
+	if _, raw, _ := e.raw(c, "GET", "/api/trial/session", ""); !strings.Contains(string(raw), `"turnstile_site_key": ""`) {
+		t.Errorf("an invite session is shown the check: %s", raw)
+	}
+	e.start(c)
+}
+
 func TestTrialRateLimit(t *testing.T) {
 	e := newTrialServer(t, "", func(_ *Config, tc *TrialConfig) { tc.RatePerMin = 3; tc.TrustCF = true })
 	c := e.visitor()
