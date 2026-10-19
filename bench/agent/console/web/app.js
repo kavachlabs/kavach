@@ -1017,6 +1017,7 @@ function sideOpen() {
 }
 
 function hasConfiguredKey() {
+  if (TRIAL) return !!(trial.session && (trial.session.has_keys || trial.session.invite));
   if (state.settings.data && state.settings.data.keys) {
     return state.settings.data.keys.some((k) => k.set && !k.name.startsWith("R2_"));
   }
@@ -1187,6 +1188,7 @@ let settingsOpener = null;
 // are not a visitor's, so it offers the session's keys and invite instead.
 const TRIAL_SETTINGS_TABS = [
   { id: "session", label: "Session", desc: "Which sandbox this session runs on, and the keys or invite code behind it." },
+  { id: "keys", label: "API keys", desc: "Your OpenRouter key and a sandbox key, held in this server's memory for this session only." },
   { id: "about", label: "About", desc: "What the trial is, and how your keys are handled.", foot: true },
 ];
 const settingsTabs = () => (TRIAL ? TRIAL_SETTINGS_TABS : SETTINGS_TABS);
@@ -1553,7 +1555,7 @@ function settingsShortcutsTab() {
 
 const SETTINGS_RENDER = {
   general: settingsGeneralTab,
-  keys: settingsKeysTab,
+  keys: () => (TRIAL ? trialKeysTab() : settingsKeysTab()),
   environment: settingsEnvironmentTab,
   shortcuts: settingsShortcutsTab,
   session: trialSessionTab,
@@ -1596,7 +1598,6 @@ function trialInput(id, label, key, { type = "password", placeholder = "" } = {}
 function trialSessionTab() {
   const s = trial.session || {};
   const left = s.invite_runs_left ?? 0;
-  const closeThen = () => closeSettingsModal();
   const groups = [settingsGroup("This session", [
     settingsRow({
       label: "Status",
@@ -1611,41 +1612,7 @@ function trialSessionTab() {
     }),
   ])];
 
-  const submitMsg = h("span", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg);
-  if (s.has_keys) {
-    const modal = tset.provider === "modal";
-    const labelId = "ts-prov-lbl";
-    groups.push(settingsGroup("Your keys", [
-      settingsRow({
-        label: "Sandbox provider", labelId,
-        control: segmented({
-          id: "ts-prov", labelledBy: labelId, value: tset.provider,
-          options: [{ value: "daytona", label: "Daytona" }, { value: "modal", label: "Modal" }],
-          onChange: (v) => { tset.provider = v; renderSettingsModal(); },
-        }),
-      }),
-      trialInput("ts-or", "OpenRouter API key", "model_key", { placeholder: "Paste a new OpenRouter key" }),
-      modal ? [
-        trialInput("ts-mid", "Modal token ID", "modal_id"),
-        trialInput("ts-msec", "Modal token secret", "modal_secret"),
-      ] : trialInput("ts-day", "Daytona API key", "daytona"),
-    ], "Replacing the keys starts a fresh session. The runs you started stay yours and can still be stopped, resumed and retried; a run in progress keeps the keys it began with, and runs you start or resume from now on use the new ones. Any invite code is dropped."));
-    groups.push(h("form", {
-      class: "settings-actions",
-      onsubmit: (e) => {
-        e.preventDefault();
-        const body = { model_key: tset.model_key, provider: tset.provider };
-        if (modal) Object.assign(body, { modal_token_id: tset.modal_id, modal_token_secret: tset.modal_secret });
-        else body.daytona_api_key = tset.daytona;
-        sendTrial("/trial/keys", body, "Keys replaced.");
-      },
-    },
-      submitMsg,
-      h("button", { type: "button", class: "btn danger", onclick: async () => { await forgetKeys(); closeThen(); } }, "Forget my keys"),
-      h("button", { type: "submit", class: "btn peach", disabled: tset.busy }, tset.busy ? "Saving…" : "Replace keys")));
-  }
-
-  if (s.has_keys || s.invite) {
+  {
     groups.push(settingsGroup("Invite code", [
       settingsRow({
         label: h("label", { for: "ts-code" }, s.invite ? "Redeem a different code" : "Have an invite code?"),
@@ -1659,11 +1626,58 @@ function trialSessionTab() {
       s.invite ? settingsRow({
         label: "Your own keys",
         hint: "Leave the invite and run on your own OpenRouter and sandbox keys.",
-        control: h("a", { class: "btn", href: "#/trial/keys", onclick: closeThen }, "Use my own keys"),
+        control: h("button", { type: "button", class: "btn", onclick: () => selectSettingsTab("keys") }, "Use my own keys"),
       }) : null,
     ]));
-    if (!s.has_keys) groups.push(h("p", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg));
+    groups.push(h("p", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg));
   }
+  return groups;
+}
+
+// trialKeysTab takes a visitor's own keys, the first time or to replace
+// them, as the trial's keys page does.
+function trialKeysTab() {
+  const s = trial.session || {};
+  const modal = tset.provider === "modal";
+  const labelId = "ts-prov-lbl";
+  const note = s.has_keys
+    ? "Replacing the keys starts a fresh session. The runs you started stay yours and can still be stopped, resumed and retried; a run in progress keeps the keys it began with, and runs you start or resume from now on use the new ones. Any invite code is dropped."
+    : s.invite
+      ? "Saving your keys leaves the invite: runs from then on use your keys and bill your accounts. The runs you started stay yours."
+      : "Runs on your keys bill your OpenRouter and sandbox accounts, so use keys with a spending limit. They stay in this server's memory and are dropped when you forget them, after 24 hours idle, or when the server restarts.";
+  const groups = [settingsGroup(s.has_keys ? "Your keys" : "Bring your keys", [
+    settingsRow({
+      label: "Status",
+      control: h("span", { class: `key-badge ${s.has_keys ? "ok" : "warn"}` }, s.has_keys ? "Keys set" : "No keys"),
+    }),
+    settingsRow({
+      label: "Sandbox provider", labelId,
+      control: segmented({
+        id: "ts-prov", labelledBy: labelId, value: tset.provider,
+        options: [{ value: "daytona", label: "Daytona" }, { value: "modal", label: "Modal" }],
+        onChange: (v) => { tset.provider = v; renderSettingsModal(); },
+      }),
+    }),
+    trialInput("ts-or", "OpenRouter API key", "model_key", { placeholder: s.has_keys ? "Paste a new OpenRouter key" : "sk-or-…" }),
+    modal ? [
+      trialInput("ts-mid", "Modal token ID", "modal_id"),
+      trialInput("ts-msec", "Modal token secret", "modal_secret"),
+    ] : trialInput("ts-day", "Daytona API key", "daytona"),
+  ], note)];
+  groups.push(h("form", {
+    class: "settings-actions",
+    onsubmit: (e) => {
+      e.preventDefault();
+      const body = { model_key: tset.model_key, provider: tset.provider };
+      if (modal) Object.assign(body, { modal_token_id: tset.modal_id, modal_token_secret: tset.modal_secret });
+      else body.daytona_api_key = tset.daytona;
+      sendTrial("/trial/keys", body, s.has_keys ? "Keys replaced." : "Keys saved. You can start a run.");
+    },
+  },
+    h("span", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg),
+    s.has_keys ? h("button", { type: "button", class: "btn danger", onclick: async () => { await forgetKeys(); closeSettingsModal(); } }, "Forget my keys") : null,
+    h("button", { type: "submit", class: "btn peach", disabled: tset.busy }, tset.busy ? "Saving…" : s.has_keys ? "Replace keys" : "Save keys")));
+  groups.push(h("p", { class: "dim" }, h("a", { href: "#/trial/terms", onclick: () => closeSettingsModal() }, "Terms and how your keys are handled")));
   return groups;
 }
 
