@@ -8,6 +8,7 @@ without Docker. It calls no model: the "upstream" is a local fake.
 """
 
 import asyncio
+import contextlib
 import importlib.util
 import ipaddress
 import json
@@ -600,6 +601,151 @@ class LiveLog(unittest.TestCase):
         self.assertFalse(self.tail(self.environment()))
         self.assertEqual(self.execs, [])
         self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+
+
+@unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
+class FollowLog(LiveLog):
+    """Where the provider streams (Daytona, Modal), the log is followed with
+    tail -F on the sandbox's machine; it is polled before each follow and
+    where it cannot be followed."""
+
+    def setUp(self):
+        super().setUp()
+        # The Daytona SDK is there when Harbor runs on Daytona; the agent
+        # takes only the request type from it.
+        sdk = self.ns(SessionExecuteRequest=lambda **kw: self.ns(**kw))
+        patcher = mock.patch.dict(sys.modules, {"daytona": sdk})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def daytona(self, chunks, exit_code=0, hang=False):
+        test = self
+
+        class Process:
+            sessions, deleted, commands = [], [], []
+
+            async def create_session(self, sid):
+                self.sessions.append(sid)
+
+            async def execute_session_command(self, sid, req):
+                test.assertTrue(req.run_async)
+                self.commands.append(req.command)
+                return test.ns(cmd_id="c1")
+
+            async def get_session_command_logs_async(self, sid, cid, on_stdout, on_stderr):
+                for c in chunks:
+                    on_stdout(c)
+                if hang:
+                    await asyncio.Event().wait()
+
+            async def get_session_command(self, sid, cid):
+                return test.ns(exit_code=exit_code)
+
+            async def delete_session(self, sid):
+                self.deleted.append(sid)
+
+        return test.ns(process=Process())
+
+    def modal(self, chunks, exit_code=0):
+        test = self
+
+        class Stream:
+            def __aiter__(self):
+                async def gen():
+                    for c in chunks:
+                        yield c
+
+                return gen()
+
+        class Wait:
+            async def aio(self):
+                return exit_code
+
+        class Exec:
+            calls = []
+
+            async def aio(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                return test.ns(stdout=Stream(), wait=Wait())
+
+        return test.ns(exec=Exec())
+
+    def env_of(self, kind, sandbox):
+        env = self.environment()
+        env.type = lambda: kind
+        env._sandbox = sandbox
+        return env
+
+    def run_tail(self, env, rounds=2):
+        """Run _tail until its rounds-th pause."""
+        sleeps = 0
+
+        async def sleep(_):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps >= rounds:
+                raise asyncio.CancelledError
+
+        with mock.patch.object(type(self.agent), "environment_logs_dir", Path("/logs/agent"), create=True), \
+                mock.patch.object(opencode_live.asyncio, "sleep", sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(self.agent._tail(env))
+
+    def test_daytona_follows_from_the_end_of_the_copy(self):
+        self.remote = b'{"type":"text"}\n'
+        sandbox = self.daytona(['{"type":"tool_use","part":{"tool":"bash"}}\n', '{"type":"step_fi', 'nish"}\n'])
+        self.run_tail(self.env_of(opencode_live.EnvironmentType.DAYTONA, sandbox), rounds=1)
+        self.assertEqual(self.live(), b'{"type":"text"}\n{"type":"tool_use","part":{"tool":"bash"}}\n{"type":"step_finish"}\n')
+        cmd = sandbox.process.commands[0]
+        self.assertIn("tail -c +17 -F /logs/agent/opencode.txt", cmd)
+        self.assertIn(f"timeout {opencode_live.FOLLOW_SEC} ", cmd)
+        self.assertEqual(sandbox.process.deleted, sandbox.process.sessions)
+
+    def test_a_cancelled_follow_deletes_its_session(self):
+        self.remote = b'{"type":"text"}\n'
+        sandbox = self.daytona(['{"type":"text"}\n'], hang=True)
+        env = self.env_of(opencode_live.EnvironmentType.DAYTONA, sandbox)
+
+        async def run():
+            with mock.patch.object(type(self.agent), "environment_logs_dir", Path("/logs/agent"), create=True):
+                task = asyncio.create_task(self.agent._tail(env))
+                for _ in range(20):
+                    await asyncio.sleep(0)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+        asyncio.run(run())
+        self.assertEqual(len(sandbox.process.sessions), 1)
+        self.assertEqual(sandbox.process.deleted, sandbox.process.sessions)
+
+    def test_modal_follows_in_bytes(self):
+        self.remote = b'{"type":"text"}\n'
+        sandbox = self.modal(['{"type":"text","part":{"text":"é"}}\n'.encode()[:20], '{"type":"text","part":{"text":"é"}}\n'.encode()[20:]])
+        self.run_tail(self.env_of(opencode_live.EnvironmentType.MODAL, sandbox), rounds=1)
+        self.assertEqual(self.live(), b'{"type":"text"}\n' + '{"type":"text","part":{"text":"é"}}\n'.encode())
+        args, kwargs = sandbox.exec.calls[0]
+        self.assertEqual(args[:2], ("sh", "-c"))
+        self.assertFalse(kwargs["text"])
+
+    def test_no_follow_before_the_log_exists(self):
+        sandbox = self.daytona(["x"])
+        self.run_tail(self.env_of(opencode_live.EnvironmentType.DAYTONA, sandbox), rounds=2)
+        self.assertEqual(sandbox.process.commands, [])
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+
+    def test_a_log_not_on_the_machine_is_polled(self):
+        self.remote = b'{"type":"text"}\n'
+        sandbox = self.daytona([], exit_code=opencode_live.NO_LOG_HERE)
+        self.run_tail(self.env_of(opencode_live.EnvironmentType.DAYTONA, sandbox), rounds=3)
+        self.assertEqual(len(sandbox.process.commands), 1)
+        self.agent.logger.warning.assert_called_once()
+        self.assertEqual(self.live(), self.remote)
+
+    def test_other_providers_are_polled(self):
+        env = self.env_of(opencode_live.EnvironmentType.DOCKER, object())
+        self.assertIsNone(self.agent._follower(env))
+        self.assertIsNone(self.agent._follower(self.environment()))
 
 
 if __name__ == "__main__":

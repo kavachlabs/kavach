@@ -71,6 +71,13 @@ MIRROR_SEC = 15
 # returns: base64 of it stays well under the ~1 MB remote execs return.
 TAIL_SEC = 3
 TAIL_CHUNK = 256 << 10
+# Where the provider can stream a command's output (Daytona, Modal), the log
+# is followed with `tail -F` instead, on the sandbox's own machine, which
+# holds it at the same path (Harbor's DinD strategies self-bind the logs
+# directory). A follow ends after this long and starts again, so one whose
+# reader went away (Modal cannot stop a command) does not outlive it long.
+FOLLOW_SEC = 600
+NO_LOG_HERE = 3
 EXPORT_WARN_EVERY = 20
 # Outside every private range, then the Docker host's usual services: none may
 # accept a connection from a sealed task container.
@@ -428,6 +435,62 @@ class KavachOpenCode(OpenCode):
             await self._quietly(self._export(environment, env))
             await asyncio.sleep(MIRROR_SEC)
 
+    def _append_live(self, data: bytes) -> None:
+        with (self.logs_dir / LIVE_LOG).open("ab") as f:
+            f.write(data)
+        self._live_offset += len(data)
+
+    def _follow_command(self) -> str:
+        # Exits NO_LOG_HERE when the log is not on this machine: following
+        # stops, and polling goes on.
+        remote = shlex.quote((self.environment_logs_dir / self._OUTPUT_FILENAME).as_posix())
+        return (
+            f"[ -f {remote} ] || exit {NO_LOG_HERE}; "
+            f"exec timeout {FOLLOW_SEC} tail -c +{self._live_offset + 1} -F {remote} 2>/dev/null"
+        )
+
+    def _follower(self, environment: BaseEnvironment):
+        """The provider's streaming exec, as a function that follows the log
+        from the live copy's end until the stream ends and returns the exit
+        status, or None where the provider has none (then the log is
+        polled)."""
+        sandbox = getattr(environment, "_sandbox", None)
+        if sandbox is None:
+            return None
+        kind = environment.type()
+        if kind == EnvironmentType.DAYTONA:
+            return lambda: self._follow_daytona(sandbox)
+        if kind == EnvironmentType.MODAL:
+            return lambda: self._follow_modal(sandbox)
+        return None
+
+    async def _follow_daytona(self, sandbox) -> int | None:
+        from daytona import SessionExecuteRequest
+
+        session = f"kavach-live-{os.urandom(4).hex()}"
+        await sandbox.process.create_session(session)
+        try:
+            cmd = await sandbox.process.execute_session_command(
+                session, SessionExecuteRequest(command=self._follow_command(), run_async=True)
+            )
+            # The SDK decodes the stream incrementally as UTF-8, so a character
+            # split across messages arrives whole.
+            await sandbox.process.get_session_command_logs_async(
+                session, cmd.cmd_id, lambda text: self._append_live(text.encode()), lambda _: None
+            )
+            done = await sandbox.process.get_session_command(session, cmd.cmd_id)
+            return done.exit_code
+        finally:
+            # Deleting the session stops its tail.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(sandbox.process.delete_session(session))
+
+    async def _follow_modal(self, sandbox) -> int | None:
+        process = await sandbox.exec.aio("sh", "-c", self._follow_command(), text=False)
+        async for chunk in process.stdout:
+            self._append_live(chunk)
+        return await process.wait.aio()
+
     async def _tail_once(self, environment: BaseEnvironment) -> bool:
         """Append the bytes the sandbox's event log gained since the last
         call to the trial's live copy. Returns False once the log is in the
@@ -445,21 +508,31 @@ class KavachOpenCode(OpenCode):
             data = base64.b64decode(result.stdout or "")
             if not data:
                 return True
-            with (self.logs_dir / LIVE_LOG).open("ab") as f:
-                f.write(data)
-            self._live_offset += len(data)
+            self._append_live(data)
             if len(data) < TAIL_CHUNK:
                 return True
 
     async def _tail(self, environment: BaseEnvironment) -> None:
-        """Keep the live copy of the event log current while the agent runs."""
+        """Keep the live copy of the event log current while the agent runs:
+        follow it where the provider streams, and poll it between follows
+        (which also copies what was written before one started) and where
+        it does not."""
         self._live_offset = 0
+        follow = self._follower(environment)
+        failures = 0
         while True:
             try:
                 if not await self._tail_once(environment):
                     return
-            except Exception:
-                self.logger.exception("copying the event log failed; retrying")
+                # Once the log exists: until then there is nothing to follow.
+                if follow and self._live_offset and await follow() == NO_LOG_HERE:
+                    self.logger.warning("the event log is not on the sandbox's machine; polling it instead")
+                    follow = None
+                failures = 0
+            except Exception as exc:
+                failures += 1
+                if failures % EXPORT_WARN_EVERY == 1:
+                    self.logger.warning(f"copying the event log failed ({failures} in a row): {exc!r:.200}")
             await asyncio.sleep(TAIL_SEC)
 
     @override
