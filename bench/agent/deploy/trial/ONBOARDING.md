@@ -98,8 +98,10 @@ their own accounts, but each run is still a Harbor process on this VM, so the
 server caps them: 10 attempts per task and model, 4 at once, 2 Harbor retries
 per erroring attempt, 40 attempts in a run counting retries (retries + 1 x
 tasks x models x attempts), 5 retry requests per run, a 2-hour timeout
-override. Invite sessions keep the allow-lists above and
-cannot pause, resume or retry. To change the caps, set `own_max_attempts`,
+override. Invite sessions keep the allow-lists above and cannot pause or
+resume; they can retry a failed or errored attempt of a run they started on
+the invite, on the server's keys, which uses none of the invite's runs (the
+5 retry requests per run apply). To change the caps, set `own_max_attempts`,
 `own_max_concurrent`, `own_max_trials`, `own_max_retries` and
 `own_max_retry_requests` in `/etc/kavach/trial.json` (taking
 effect within a request), or `TRIAL_OWN_MAX_*` (`..._RETRY_REQUESTS` for the last) in `trial.env`. The one-live-run
