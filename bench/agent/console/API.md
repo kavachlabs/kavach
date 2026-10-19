@@ -98,7 +98,10 @@ Settings come from the environment (and the config file below):
 | --- | --- |
 | `TRIAL_MODELS` | `openrouter/z-ai/glm-5.3`; comma-separated allowlist. All of a run's models must share a provider, whose usual key variable (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `NVIDIA_API_KEY`, `ZAI_API_KEY`) carries the visitor's key |
 | `TRIAL_TASKS` | every task folder under `--tasks`; entries are folder names or base names |
-| `TRIAL_MAX_ATTEMPTS` | 2 |
+| `TRIAL_MAX_ATTEMPTS` | 2; for invite sessions |
+| `TRIAL_OWN_MAX_ATTEMPTS` | 10 attempts per task and model, for a session with its own keys |
+| `TRIAL_OWN_MAX_CONCURRENT` | 4 attempts at once in one run, for a session with its own keys |
+| `TRIAL_OWN_MAX_TRIALS` | 40 attempts in one run (tasks x models x attempts), for a session with its own keys |
 | `TRIAL_MAX_RUNNING` | 3 live runs, all visitors together; more gets 429 |
 | `TRIAL_INVITE_CODES` | none; comma-separated |
 | `TRIAL_INVITE_RUNS` | 5 runs per code |
@@ -120,11 +123,15 @@ keys themselves stay in the environment:
   "tasks": ["redis-10068-control", "redis-10068-kavach"],
   "models": ["openrouter/z-ai/glm-5.3"],
   "max_attempts": 2,
+  "own_max_attempts": 10,
+  "own_max_concurrent": 4,
+  "own_max_trials": 40,
   "showcase": []
 }
 ```
 
-`tasks`, `models`, `max_attempts` and `showcase` replace the `TRIAL_*` value
+`tasks`, `models`, `max_attempts`, `own_max_attempts`, `own_max_concurrent`,
+`own_max_trials` and `showcase` replace the `TRIAL_*` value
 of the same name when they are set, and the variable applies where they are
 empty. Codes in `TRIAL_INVITE_CODES` stay valid beside the file's, each with
 `TRIAL_INVITE_RUNS`; a code in both is the file's, so it can revoke one. With
@@ -222,13 +229,15 @@ left alone when the home folder is `/root`.
 {
   "has_keys": true, "provider": "daytona", "invite": false,
   "runs": ["brisk-cobalt-heron-x7k2p9q"],
-  "limits": {"models": ["openrouter/z-ai/glm-5.3"], "tasks": ["redis-10068-control", "redis-10068-kavach"], "max_attempts": 2},
+  "limits": {"models": ["openrouter/z-ai/glm-5.3"], "tasks": ["redis-10068-control", "redis-10068-kavach"], "max_attempts": 2,
+             "own": {"max_attempts": 10, "max_concurrent": 4, "max_trials": 40, "max_timeout_min": 120}},
   "turnstile_site_key": "",
   "invite_runs_left": 4
 }
 ```
 
-`invite_runs_left` appears only for an invite session. `provider` of an invite
+`limits.own` appears only for a session with its own keys, and then `tasks`
+lists every task. `invite_runs_left` appears only for an invite session. `provider` of an invite
 session is the first of `daytona`, `modal` the server has keys for.
 
 `POST /api/trial/keys` `{"model_key", "provider": "daytona"|"modal",
@@ -246,15 +255,37 @@ without runs left. A code's runs started are kept in
 `<jobs>/.bench/invites-used.json` under the SHA-256 of the code.
 
 **Starting a run.** `POST /api/jobs` needs a session with keys or an invite
-(401 otherwise) and takes `{"tasks", "models", "attempts", "turnstile_token"}`.
-Unknown fields are rejected with 400, as everywhere; the fields of the
-ordinary request (`agent`, `environment`, `name`, `concurrent`, `retries`,
-`timeout_sec`) are known and overridden.
+(401 otherwise). A session that brings its **own keys** gets the same run
+form and controls as the local console, for its own runs; an **invite**
+session, whose runs bill the operator, keeps the limited form below. Unknown
+fields are rejected with 400, as everywhere (`env` is not a request field).
+`turnstile_token` is read in both.
+
+*Invite session.* Takes `{"tasks", "models", "attempts", "turnstile_token"}`;
+the other fields of the ordinary request (`agent`, `environment`, `name`,
+`concurrent`, `retries`, `timeout_sec`) are known and overridden.
 `models` defaults to the first allowed one. The server forces the rest:
 `environment` is the session's provider, `agent` the repository's OpenCode
 agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
-400 for a model, task or attempts count
-outside the limits; 400/403 for a missing/failed Turnstile token; 429 when
+400 for a model, task or attempts count outside `TRIAL_MODELS`,
+`TRIAL_TASKS` and `TRIAL_MAX_ATTEMPTS`.
+
+*Session with its own keys.* Takes every field of the ordinary request,
+checked on the server: `tasks` any task arm in `--tasks` (the invite
+`TRIAL_TASKS` do not apply; an absolute path is not a task); `agent`
+`opencode` (default), `oracle` or `nop`, never an import path; `models` for
+`opencode`, none for the others, each `openrouter/<vendor>/<name>` and in
+OpenRouter's model list (502 if the list cannot be fetched; the key form takes
+an OpenRouter key, so no other provider's models); `attempts` 1 to
+`TRIAL_OWN_MAX_ATTEMPTS`, `concurrent` 1 to `TRIAL_OWN_MAX_CONCURRENT`,
+tasks x models x attempts at most `TRIAL_OWN_MAX_TRIALS`, `retries` 0-5,
+`timeout_sec` 0 (the task's own) to 7200; `environment` omitted or the
+session's own provider (`docker` and the other providers are 400: docker
+would run on this server). `name` is ignored and generated. Harbor gets the
+session's sandbox keys, and its model key when the agent calls a model, as
+above and nothing of the server's.
+
+Both: 400/403 for a missing/failed Turnstile token; 429 when
 the session, or another session from the same network address, already has a
 live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent or revoked. A
 bad key is an ordinary failed run: the job turns `stopped` or its trials
@@ -264,13 +295,36 @@ bad key is an ordinary failed run: the job turns `stopped` or its trials
 (in memory and `<jobs>/.bench/<id>.owner`, so it survives a restart). GETs of
 jobs and trials stay public, as share links (`#/jobs/<id>`), but only for
 trial runs and `TRIAL_SHOWCASE`: `GET /api/jobs` lists only those and any
-other job or trial is 404. `stoppable` is true only for the owner, and
-`resumable`, `retryable` and `sync` are always false/absent. `POST
-/api/jobs/{id}/stop` is for the owner (else 403). `/api/settings`, `pause`,
-`resume`, `retry`, `sync` and `/api/tasks/{task}/environment` answer 404;
-`/api/status` and `/api/tasks` carry no local paths; the invariants view
-shows patches rather than starting containers. The event stream is filtered
-the same way; it reflects the cookie it was opened with.
+other job or trial is 404. `stoppable` is true only for the owner, `sync` is always absent, and
+`resumable` and `retryable` are true only for the owner when the session is
+not an invite's. `POST /api/jobs/{id}/stop` is for the owner (else 403).
+
+**Controls for runs on own keys.** `POST /api/jobs/{id}/pause`, `POST
+/api/jobs/{id}/resume` and `POST /api/trials/{job}/{trial}/retry` work for the
+owner (by the hashed session id) of a session that is not an invite's; anyone
+else, an invite session included, gets the 404 they always had. Resume and
+retry start Harbor again, so they go through the same path as starting: the
+session's own keys in the isolated environment and home folder, the
+`_logpipe` helper, never `--env-file`, never the server's keys; the live-run
+limits (one per session, one per address, `TRIAL_MAX_RUNNING`) apply, so
+resuming a run beside a live one is 429. They are refused with 409 when the
+server no longer holds the session's keys (forgotten, expired, a restart):
+`enter your keys again to resume`; nothing is started, and the server's
+environment is never the fallback. They are also 409 when the run used a
+sandbox other than the session's provider, or a model other than OpenRouter's
+(a run another session began, carried over when a session was replaced).
+Turnstile is checked when a run starts, not on resume or retry: a resumed run
+was started through it, and a fresh token per click would need the widget on
+every run page; the address's write rate limit applies to both.
+
+**Locked for everyone**, own keys included, and 404 whoever asks:
+`/api/settings` (it reads and writes the server's env file and keys),
+`POST /api/jobs/{id}/sync` (the server's R2 backup), and
+`/api/tasks/{task}/environment` (it builds with the server's Docker and names
+local paths). A run on `docker` is refused for the same reason: runs go to
+Daytona or Modal. `/api/status` and `/api/tasks` carry no local paths; the
+invariants view shows patches rather than starting containers. The event stream
+is filtered the same way; it reflects the cookie it was opened with.
 
 **Requests.** The host check is off. A write with an `Origin` must match the
 request's host or `-origin`. Each address may make 20 writes (POST, DELETE) a

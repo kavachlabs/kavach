@@ -30,7 +30,7 @@ async function send(method, path, body) {
   }
 }
 
-async function forgetKeys() {
+export async function forgetKeys() {
   await send("DELETE", "/trial/keys");
   await loadTrialSession();
   location.hash = "#/";
@@ -183,6 +183,12 @@ function landing() {
       h("span", { class: "faint" }, "A free trial, provided as is.")));
 }
 
+// ownCaps states the caps of a session with its own keys, when it has them.
+function ownCaps() {
+  const own = trial.session && trial.session.limits && trial.session.limits.own;
+  return own ? `: up to ${own.max_attempts} attempts per task and model, ${own.max_concurrent} at once, ${own.max_trials} in a run` : "";
+}
+
 // terms is the fuller statement. Each claim is backed by api/trial.go and
 // API.md "Trial mode"; change the code and this together.
 function terms() {
@@ -192,18 +198,20 @@ function terms() {
     "Plain version. This is a trial, so it is short.",
     sec("Your keys",
       "The console holds them in this server's memory only. It never writes them to disk or logs them, and never sends them back to your browser. The tools that run your job might write them into the run's files or its temporary home folder: we redact the files when the run ends and delete the home folder then.",
-      "Passed only to the run you start, as environment variables of its process, and used only to call your model provider and your sandbox provider (Daytona or Modal).",
+      "Passed only to the runs you start, and to a run of yours that you resume or retry, as environment variables of its process, and used only to call your model provider and your sandbox provider (Daytona or Modal). Each run's process has a home folder of its own and gets none of this server's keys.",
       "Dropped from your session when you click Forget my keys, after 24 hours without use, or when the server restarts. A run's key values stay in memory, from its start until shortly after it ends, only to redact them from that run's output.",
-      "Forgetting your keys does not stop a run that has already started: use Stop on the run. It keeps the keys it began with until it ends.",
+      "Forgetting your keys does not stop a run that has already started: use Stop on the run. It keeps the keys it began with until it ends. Until you enter your keys again you cannot resume or retry a run; the server never uses its own keys for that.",
       "Logs are redacted as they are written, and a run's files are redacted when it ends. What the server shows is also redacted while it holds the run's key values."),
     sec("What it costs you",
       "Runs bill your own accounts: model tokens at your model provider and sandbox time at Daytona or Modal. We do not charge you and cannot cap what your providers charge.",
+      "With your own keys you choose the incident, model, attempts and how many attempts run at once, as in the full console, up to limits the server enforces" + ownCaps() + ". Those limits do not cap what your providers charge.",
+      "Each run is driven by a process on our server, with its sandboxes in your Daytona or Modal account, so a run can be refused while the trial is busy.",
       "Set a spend limit on every key you paste. Use a key you can revoke afterwards.",
       "With an invite code the run uses our keys instead, up to the number of runs the code allows."),
     sec("What we store",
       "Each run's folder: the task, model and settings you chose, the agent's transcript, its patch, Kavach's verdicts, grading results and logs (with keys redacted). Finished runs may also be copied to our backup storage.",
       "They are kept until we delete them. We make no promise about how long that is.",
-      "A one-way hash of your session id (to let you stop your own runs), and for an invite code a hash of the code with a count of its runs. Your network address is held in memory to rate-limit requests.",
+      "A one-way hash of your session id (to let you stop, pause, resume and retry your own runs), and for an invite code a hash of the code with a count of its runs. Your network address is held in memory to rate-limit requests.",
       "A session cookie. There are no accounts, and we do not ask for your name or email.",
       "The site is served through Cloudflare, which sees your traffic. If the check on the run form is on, your network address is also sent to Cloudflare's Turnstile service to verify it."),
     sec("What we don't",
@@ -343,7 +351,15 @@ function loadTurnstile() {
   return tsLoading;
 }
 
-function turnstileBox(siteKey) {
+export const turnstileToken = () => run.token;
+
+// resetTurnstile asks for a new token: each is good for one start.
+export function resetTurnstile() {
+  run.token = "";
+  if (tsBox && window.turnstile) window.turnstile.reset(tsBox);
+}
+
+export function turnstileBox(siteKey) {
   if (!siteKey) return null;
   if (!tsBox) {
     tsBox = h("div", { class: "tf-ts" });
@@ -405,8 +421,7 @@ export function renderTrialNew(view) {
     run.busy = false;
     if (!r.ok) {
       run.err = r.err;
-      run.token = "";
-      if (tsBox && window.turnstile) window.turnstile.reset(tsBox);
+      resetTurnstile();
       return redraw();
     }
     await loadTrialSession();

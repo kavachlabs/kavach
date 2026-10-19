@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,10 @@ type TrialFile struct {
 	Models      []string      `json:"models,omitempty"`
 	MaxAttempts int           `json:"max_attempts,omitempty"`
 	Showcase    []string      `json:"showcase,omitempty"`
+	// The caps on a session with its own keys (see ownLimits).
+	OwnMaxAttempts   int `json:"own_max_attempts,omitempty"`
+	OwnMaxConcurrent int `json:"own_max_concurrent,omitempty"`
+	OwnMaxTrials     int `json:"own_max_trials,omitempty"`
 }
 
 // TrialInvite is one invite code, which runs on the server's keys.
@@ -90,8 +95,8 @@ func (f *TrialFile) Validate() error {
 			return fmt.Errorf("model %q is not provider/name", m)
 		}
 	}
-	if f.MaxAttempts < 0 {
-		return errors.New("max_attempts is negative")
+	if f.MaxAttempts < 0 || f.OwnMaxAttempts < 0 || f.OwnMaxConcurrent < 0 || f.OwnMaxTrials < 0 {
+		return errors.New("max_attempts, own_max_attempts, own_max_concurrent and own_max_trials are not negative")
 	}
 	return nil
 }
@@ -248,6 +253,7 @@ type trialSettings struct {
 	tasks       []string
 	maxAttempts int
 	showcase    map[string]bool
+	own         ownLimits
 }
 
 // invite finds the invite whose code is code. Every code is compared, so the
@@ -275,6 +281,12 @@ func (t *trial) build(f *TrialFile) *trialSettings {
 		tasks:       nonEmpty(f.Tasks, t.cfg.Tasks),
 		maxAttempts: t.cfg.MaxAttempts,
 		showcase:    map[string]bool{},
+		own: ownLimits{
+			MaxAttempts:   cmp.Or(f.OwnMaxAttempts, t.cfg.OwnMaxAttempts),
+			MaxConcurrent: cmp.Or(f.OwnMaxConcurrent, t.cfg.OwnMaxConcurrent),
+			MaxTrials:     cmp.Or(f.OwnMaxTrials, t.cfg.OwnMaxTrials),
+			MaxTimeoutMin: ownMaxTimeoutMin,
+		},
 	}
 	if f.MaxAttempts > 0 {
 		s.maxAttempts = f.MaxAttempts

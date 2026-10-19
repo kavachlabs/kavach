@@ -143,13 +143,13 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	// A trial server shows each viewer only its jobs, and as they may see them.
-	var viewer string
+	var who viewer
 	if s.trial != nil {
-		viewer = s.trial.viewer(r)
+		who = s.trial.viewer(r)
 	}
 	send := func(e event) {
 		if s.trial != nil {
-			e = s.trial.shapeEvent(viewer, e)
+			e = s.trial.shapeEvent(who, e)
 		}
 		writeEvent(w, e)
 	}

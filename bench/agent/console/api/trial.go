@@ -38,6 +38,10 @@ type TrialConfig struct {
 	Models      []string // allowed models
 	Tasks       []string // allowed task folders or base names; empty: every task
 	MaxAttempts int
+	// What a session with its own keys may ask for, which bills its own
+	// accounts but runs on this machine (see ownLimits). Defaults: 10
+	// attempts, 4 at once, 40 attempts in all.
+	OwnMaxAttempts, OwnMaxConcurrent, OwnMaxTrials int
 	// ConfigPath is the trial config file (see TrialFile). The server reloads
 	// it when it changes; the fields above apply where it says nothing, or
 	// is absent.
@@ -78,6 +82,9 @@ func TrialFromEnv(getenv func(string) string) *TrialConfig {
 		Models:           list("TRIAL_MODELS"),
 		Tasks:            list("TRIAL_TASKS"),
 		MaxAttempts:      num("TRIAL_MAX_ATTEMPTS", 2),
+		OwnMaxAttempts:   num("TRIAL_OWN_MAX_ATTEMPTS", 0),
+		OwnMaxConcurrent: num("TRIAL_OWN_MAX_CONCURRENT", 0),
+		OwnMaxTrials:     num("TRIAL_OWN_MAX_TRIALS", 0),
 		MaxRunning:       num("TRIAL_MAX_RUNNING", 3),
 		Showcase:         list("TRIAL_SHOWCASE"),
 		ConfigPath:       cmp.Or(getenv("TRIAL_CONFIG"), DefaultTrialConfig),
@@ -171,6 +178,9 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	if cfg.MaxAttempts < 1 {
 		cfg.MaxAttempts = 2
 	}
+	cfg.OwnMaxAttempts = cmp.Or(cfg.OwnMaxAttempts, 10)
+	cfg.OwnMaxConcurrent = cmp.Or(cfg.OwnMaxConcurrent, 4)
+	cfg.OwnMaxTrials = cmp.Or(cfg.OwnMaxTrials, 40)
 	if cfg.MaxRunning < 1 {
 		cfg.MaxRunning = 3
 	}
@@ -357,6 +367,9 @@ type limits struct {
 	Models      []string `json:"models"`
 	Tasks       []string `json:"tasks"`
 	MaxAttempts int      `json:"max_attempts"`
+	// Own is set for a session with its own keys, whose Tasks are all the
+	// tasks and whose model and attempt limits are Own's.
+	Own *ownLimits `json:"own,omitempty"`
 }
 
 func (t *trial) view(s *session) sessionView {
@@ -372,6 +385,10 @@ func (t *trial) view(s *session) sessionView {
 	t.mu.Lock()
 	v.Runs = append(v.Runs, s.runs...)
 	keys, invite := s.keys, s.invite
+	if keys != nil {
+		own := conf.own
+		v.Limits.Own, v.Limits.Tasks = &own, t.allTasks()
+	}
 	left := 0
 	if inv, ok := conf.invite(invite); ok && !inv.Revoked {
 		left = max(inv.Runs-t.used[digest(invite)].runs(), 0)
@@ -511,21 +528,28 @@ func (t *trial) inviteProvider() string {
 	return ""
 }
 
-// runEnv is the environment Harbor gets for a run: the visitor's keys, or,
-// for an invite, the server's keys the run needs and nothing else.
-func (t *trial) runEnv(k *visitorKeys, model string) (env map[string]string, provider string, err error) {
+// ownEnv is the environment Harbor gets for a run on a visitor's keys:
+// the sandbox keys, and the model key if the run calls a model. It holds
+// nothing of the server's.
+func ownEnv(k *visitorKeys, withModel bool) map[string]string {
+	env := map[string]string{}
+	if withModel {
+		env[modelKeyVars["openrouter"]] = k.model
+	}
+	if k.provider == "daytona" {
+		env["DAYTONA_API_KEY"] = k.daytona
+	} else {
+		env["MODAL_TOKEN_ID"], env["MODAL_TOKEN_SECRET"] = k.modalID, k.modalSecret
+	}
+	return env
+}
+
+// runEnv is the environment Harbor gets for an invite run: the server's
+// keys the run needs and nothing else.
+func (t *trial) runEnv(model string) (env map[string]string, provider string, err error) {
 	keyVar, ok := modelKeyVars[strings.SplitN(model, "/", 2)[0]]
 	if !ok {
 		return nil, "", errors.New("no key variable is known for model " + model)
-	}
-	if k != nil {
-		env = map[string]string{keyVar: k.model}
-		if k.provider == "daytona" {
-			env["DAYTONA_API_KEY"] = k.daytona
-		} else {
-			env["MODAL_TOKEN_ID"], env["MODAL_TOKEN_SECRET"] = k.modalID, k.modalSecret
-		}
-		return env, k.provider, nil
 	}
 	provider = t.inviteProvider()
 	if provider == "" || t.runner.Getenv(keyVar) == "" {
@@ -548,6 +572,8 @@ type trialRunError struct {
 	code int
 	msg  string
 }
+
+func (e *trialRunError) Error() string { return e.msg }
 
 func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	t := s.trial
@@ -578,6 +604,10 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rr := req.RunRequest
+	if keys != nil {
+		s.postOwnJob(w, r, sess, id, invite, rr, req.TurnstileToken)
+		return
+	}
 	conf := t.settings()
 	if len(rr.Models) == 0 {
 		rr.Models = conf.models[:1]
@@ -611,7 +641,7 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	rr.Agent, rr.Concurrent, rr.Retries, rr.TimeoutSec, rr.Name = harbor.LiveAgent, maxConcurrent, 0, 0, ""
 
 	// A models list of mixed providers would need several keys.
-	env, provider, err := t.runEnv(keys, rr.Models[0])
+	env, provider, err := t.runEnv(rr.Models[0])
 	for _, m := range rr.Models[1:] {
 		if modelKeyVars[strings.SplitN(m, "/", 2)[0]] != modelKeyVars[strings.SplitN(rr.Models[0], "/", 2)[0]] {
 			err = errors.New("models of different providers cannot share a key")
@@ -631,14 +661,13 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJob(w, r, http.StatusAccepted, name)
 }
 
-// startRun applies the run limits and starts Harbor, all under t.mu so that
-// two requests cannot both pass a limit.
-func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequest) (string, *trialRunError) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// admit applies the limits on live runs that starting, resuming and
+// retrying share: one per session, one per address, MaxRunning in all.
+// t.mu must be held.
+func (t *trial) admit(sess *session, ip string) *trialRunError {
 	for _, run := range sess.runs {
 		if t.runner.Alive(run) {
-			return "", &trialRunError{http.StatusTooManyRequests, "you already have a run in progress; stop it or wait for it to finish"}
+			return &trialRunError{http.StatusTooManyRequests, "you already have a run in progress; stop it or wait for it to finish"}
 		}
 	}
 	// A finished run's files were scrubbed by its helper; its secrets are no
@@ -653,7 +682,7 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		case !t.runner.Alive(run):
 			delete(t.runIP, run)
 		case rip == ip:
-			return "", &trialRunError{http.StatusTooManyRequests, "another run from your network address is in progress; wait for it to finish"}
+			return &trialRunError{http.StatusTooManyRequests, "another run from your network address is in progress; wait for it to finish"}
 		}
 	}
 	running := 0
@@ -663,7 +692,18 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		}
 	}
 	if running >= t.cfg.MaxRunning {
-		return "", &trialRunError{http.StatusTooManyRequests, "the trial is busy (" + strconv.Itoa(running) + " runs in progress); try again in a few minutes"}
+		return &trialRunError{http.StatusTooManyRequests, "the trial is busy (" + strconv.Itoa(running) + " runs in progress); try again in a few minutes"}
+	}
+	return nil
+}
+
+// startRun applies the run limits and starts Harbor, all under t.mu so that
+// two requests cannot both pass a limit.
+func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequest) (string, *trialRunError) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if re := t.admit(sess, ip); re != nil {
+		return "", re
 	}
 	var code string
 	if invite != "" {
@@ -788,26 +828,35 @@ func (t *trial) visible(id string) bool {
 	return ok || t.settings().showcase[id]
 }
 
-// viewer is the owner digest of the request's session, or "".
-func (t *trial) viewer(r *http.Request) string {
+// viewer is who a request comes from: the owner digest of its session, ""
+// if it has none, and whether that session may pause, resume and retry its
+// runs, which an invite session may not (its runs bill the operator).
+type viewer struct {
+	owner   string
+	control bool
+}
+
+func (t *trial) viewer(r *http.Request) viewer {
 	sid, sess := t.lookup(r)
 	if sess == nil {
-		return ""
+		return viewer{}
 	}
-	return digest(sid)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return viewer{digest(sid), sess.invite == ""}
 }
 
 // owns reports whether the visitor with this session cookie started the job.
 func (t *trial) owns(r *http.Request, id string) bool { return t.ownedBy(t.viewer(r), id) }
 
-func (t *trial) ownedBy(viewer, id string) bool {
+func (t *trial) ownedBy(v viewer, id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return viewer != "" && t.owners[id] == viewer
+	return v.owner != "" && t.owners[id] == v.owner
 }
 
 // shapeEvent applies shape to a job event for one viewer.
-func (t *trial) shapeEvent(viewer string, e event) event {
+func (t *trial) shapeEvent(v viewer, e event) event {
 	if e.name == "trial" {
 		return t.shapeTrialEvent(e)
 	}
@@ -818,7 +867,7 @@ func (t *trial) shapeEvent(viewer string, e event) event {
 	if json.Unmarshal(e.data, &j) != nil {
 		return e
 	}
-	t.shape(&j, t.ownedBy(viewer, j.ID))
+	t.shape(&j, v, t.ownedBy(v, j.ID))
 	e.data, _ = json.Marshal(j)
 	e.data = t.scrubSecrets(j.ID, e.data)
 	return e
@@ -836,11 +885,14 @@ func (t *trial) shapeTrialEvent(e event) event {
 	return e
 }
 
-// shape makes a job as a visitor may see it: it can be stopped only by its
-// owner and never paused, resumed, retried or synced.
-func (t *trial) shape(j *harbor.Job, owner bool) {
+// shape makes a job as a visitor may see it: it can be stopped, and by a
+// session that is not an invite's resumed and retried, only by its owner,
+// and is never synced.
+func (t *trial) shape(j *harbor.Job, v viewer, owner bool) {
 	j.Stoppable = j.Stoppable && owner
-	j.Resumable, j.Retryable, j.Sync = false, false, nil
+	j.Resumable = j.Resumable && owner && v.control
+	j.Retryable = j.Retryable && owner && v.control
+	j.Sync = nil
 	j.Error = classifyJobError(j.Error)
 }
 

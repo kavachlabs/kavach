@@ -45,7 +45,11 @@ func newTrialServer(t *testing.T, script string, mutate func(*Config, *TrialConf
 	envFile := filepath.Join(dir, "server.env")
 	os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=sk-or-v1-server-secret-9999\nDAYTONA_API_KEY=dtn-server-secret-8888\nR2_SECRET_ACCESS_KEY=r2-server-secret-7777\n"), 0o600)
 	t.Setenv("R2_ACCESS_KEY_ID", "r2-process-secret-6666")
-	cfg := Config{Harbor: harborCmd, JobsDir: copyJobs(t), TasksDir: testdata + "/tasks", EnvFile: envFile}
+	or := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"id":"z-ai/glm-5.3"},{"id":"anthropic/claude-sonnet-5.5"},{"id":"~moonshotai/kimi-latest"},{"id":"qwen/qwen3-coder:free"}]}`)
+	}))
+	t.Cleanup(or.Close)
+	cfg := Config{Harbor: harborCmd, JobsDir: copyJobs(t), TasksDir: testdata + "/tasks", EnvFile: envFile, ModelsURL: or.URL}
 	tc := &TrialConfig{
 		Models: []string{"openrouter/z-ai/glm-5.3"}, MaxAttempts: 2, MaxRunning: 3, InviteRuns: 5, RatePerMin: 1000,
 		Showcase: []string{"oracle-both"},
@@ -98,6 +102,13 @@ func (e *trialEnv) setKeys(c *http.Client) {
 }
 
 const runBody = `{"tasks":["hello-world-kavach"],"models":["openrouter/z-ai/glm-5.3"],"attempts":1}`
+
+func (e *trialEnv) invite(c *http.Client) {
+	e.t.Helper()
+	if code, v := e.do(c, "POST", "/api/trial/invite", `{"code":"alpha-code"}`); code != 200 || v["invite"] != true {
+		e.t.Fatalf("invite: %d %v", code, v)
+	}
+}
 
 func (e *trialEnv) start(c *http.Client) string {
 	e.t.Helper()
@@ -248,7 +259,7 @@ func TestTrialRun(t *testing.T) {
 	}
 	b, _ := os.ReadFile(filepath.Join(e.jobs, ".bench", id+".json"))
 	json.Unmarshal(b, &cfg)
-	if cfg.Environment.Type != "daytona" || cfg.Concurrent != 2 || cfg.Retry.MaxRetries != 0 || cfg.Attempts != 1 ||
+	if cfg.Environment.Type != "daytona" || cfg.Concurrent != 1 || cfg.Retry.MaxRetries != 0 || cfg.Attempts != 1 ||
 		len(cfg.Agents) != 1 || cfg.Agents[0]["import_path"] != "bench.agent.harbor.agents:KavachOpenCode" ||
 		cfg.Agents[0]["model_name"] != "openrouter/z-ai/glm-5.3" || cfg.Agents[0]["override_timeout_sec"] != nil {
 		t.Fatalf("config %s", b)
@@ -282,10 +293,14 @@ func TestTrialRun(t *testing.T) {
 	e.start(c)
 }
 
-func TestTrialLimits(t *testing.T) {
-	e := newTrialServer(t, "", func(_ *Config, tc *TrialConfig) { tc.MaxRunning = 1; tc.Tasks = []string{"hello-world-kavach"} })
+func TestTrialInviteLimits(t *testing.T) {
+	e := newTrialServer(t, "", func(_ *Config, tc *TrialConfig) {
+		tc.MaxRunning = 1
+		tc.Tasks = []string{"hello-world-kavach"}
+		tc.InviteCodes = []string{"alpha-code"}
+	})
 	c := e.visitor()
-	e.setKeys(c)
+	e.invite(c)
 	for _, body := range []string{
 		`{"tasks":["hello-world-kavach"],"models":["openrouter/anthropic/claude-sonnet-5.5"]}`,
 		`{"tasks":["hello-world-control"],"models":["openrouter/z-ai/glm-5.3"]}`,
@@ -316,7 +331,7 @@ func TestTrialLimits(t *testing.T) {
 
 	// The global cap.
 	c2 := e.visitor()
-	e.setKeys(c2)
+	e.invite(c2)
 	if code, v := e.do(c2, "POST", "/api/jobs", runBody); code != 429 {
 		t.Errorf("global cap: %d %v", code, v)
 	}
@@ -372,9 +387,8 @@ func TestTrialOwnership(t *testing.T) {
 	}
 
 	for _, r := range [][2]string{
-		{"GET", "/api/settings"}, {"POST", "/api/settings"}, {"POST", "/api/jobs/" + id + "/pause"},
-		{"POST", "/api/jobs/" + id + "/resume"}, {"POST", "/api/jobs/" + id + "/sync"},
-		{"POST", "/api/trials/" + id + "/x/retry"}, {"GET", "/api/tasks/hello-world-kavach/environment"},
+		{"GET", "/api/settings"}, {"POST", "/api/settings"}, {"POST", "/api/jobs/" + id + "/sync"},
+		{"GET", "/api/tasks/hello-world-kavach/environment"},
 	} {
 		if code, _ := e.do(a, r[0], r[1], `{"keys":{}}`); code != 404 {
 			t.Errorf("%s %s: %d", r[0], r[1], code)

@@ -87,6 +87,20 @@ A model's provider must be one with a key variable (`openrouter`,
 `anthropic`, `openai`, `nvidia`, `zai`), and invite runs need that variable
 in `trial.env`.
 
+## Visitors with their own keys
+
+A visitor who enters their own OpenRouter and Daytona or Modal keys gets the
+full run form: any task, any OpenRouter model, attempts, attempts at once,
+retries, timeout, and Pause, Resume and Retry on their own runs. They bill
+their own accounts, but each run is still a Harbor process on this VM, so the
+server caps them: 10 attempts per task and model, 4 at once, 40 attempts in a
+run, a 2-hour timeout override. Invite sessions keep the allow-lists above and
+cannot pause, resume or retry. To change the caps, set `own_max_attempts`,
+`own_max_concurrent` and `own_max_trials` in `/etc/kavach/trial.json` (taking
+effect within a request), or `TRIAL_OWN_MAX_*` in `trial.env`. The one-live-run
+limits and `TRIAL_MAX_RUNNING` apply to them as before; lower
+`own_max_concurrent` first if the VM is short of memory.
+
 ## Ship a console change
 
 ```sh

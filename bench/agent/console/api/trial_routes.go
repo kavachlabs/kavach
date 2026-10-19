@@ -23,6 +23,9 @@ func (s *Server) trialRoutes() {
 	h("GET /api/jobs/{id}", s.getJob)
 	h("GET /api/jobs/{id}/compare", s.getCompare)
 	h("POST /api/jobs/{id}/stop", s.stopTrialJob)
+	h("POST /api/jobs/{id}/pause", s.pauseTrialJob)
+	h("POST /api/jobs/{id}/resume", s.resumeTrialJob)
+	h("POST /api/trials/{job}/{trial}/retry", s.retryTrialJob)
 	h("GET /api/trials/{job}/{trial}", s.getTrialTrial)
 	h("GET /api/trials/{job}/{trial}/steps", s.getSteps)
 	h("GET /api/trials/{job}/{trial}/patch", s.getPatch)
@@ -34,15 +37,18 @@ func (s *Server) trialRoutes() {
 	h("GET /api/trials/{job}/{trial}/variants", s.getVariants)
 	h("GET /api/trials/{job}/{trial}/variants/{round}/{id}", s.getVariant)
 	h("GET /api/events", s.getEvents)
-	// Settings, pause, resume, retry, sync and the task environment (which
-	// names local paths) answer 404 rather than the mux's 405.
-	for _, p := range []string{
-		"/api/settings", "/api/tasks/{task}/environment", "/api/jobs/{id}/pause", "/api/jobs/{id}/resume",
-		"/api/jobs/{id}/sync", "/api/trials/{job}/{trial}/retry",
-	} {
+	// Settings, sync and the task environment answer 404 rather than the
+	// mux's 405, whoever asks: settings hold the server's keys, sync its
+	// backup bucket, and the task environment runs the server's own Docker
+	// and names local paths. The routes that act on a run (pause, resume,
+	// retry) are above, and 404 for a session that may not use them.
+	for _, p := range []string{"/api/settings", "/api/tasks/{task}/environment", "/api/jobs/{id}/sync"} {
 		for _, m := range []string{"GET", "POST"} {
 			h(m+" "+p, func(w http.ResponseWriter, r *http.Request) { writeError(w, http.StatusNotFound, "not found") })
 		}
+	}
+	for _, p := range []string{"/api/jobs/{id}/pause", "/api/jobs/{id}/resume", "/api/trials/{job}/{trial}/retry"} {
+		h("GET "+p, func(w http.ResponseWriter, r *http.Request) { writeError(w, http.StatusNotFound, "not found") })
 	}
 	if s.cfg.Web != nil {
 		s.mux.Handle("GET /", http.FileServerFS(s.cfg.Web))
@@ -65,6 +71,9 @@ func (s *Server) getTrialTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := s.trial.allowedTasks()
+	if s.trial.hasKeys(r) {
+		allowed = s.trial.allTasks()
+	}
 	out := []harbor.Task{}
 	for _, task := range all {
 		arms := []harbor.TaskArm{}
@@ -89,14 +98,14 @@ func (s *Server) getTrialJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	viewer := s.trial.viewer(r)
+	v := s.trial.viewer(r)
 	out := []harbor.Job{}
 	for _, j := range jobs {
 		if !s.trial.visible(j.ID) {
 			continue
 		}
 		j.Trials = nil
-		s.trial.shape(&j, s.trial.ownedBy(viewer, j.ID))
+		s.trial.shape(&j, v, s.trial.ownedBy(v, j.ID))
 		out = append(out, j)
 	}
 	writeJSON(w, http.StatusOK, out)

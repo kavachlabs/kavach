@@ -363,7 +363,8 @@ func (s *Server) writeJob(w http.ResponseWriter, r *http.Request, code int, id s
 		Trials []harbor.Trial `json:"trials"`
 	}
 	if s.trial != nil {
-		s.trial.shape(&j, s.trial.owns(r, id))
+		v := s.trial.viewer(r)
+		s.trial.shape(&j, v, s.trial.ownedBy(v, id))
 		for i := range j.Trials {
 			s.trial.shapeTrial(&j.Trials[i])
 		}

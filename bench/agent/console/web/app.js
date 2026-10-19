@@ -6,7 +6,7 @@ import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
-import { TRIAL_VIEWS, renderTrialNew, renderTrialView } from "./trial.js";
+import { TRIAL_VIEWS, forgetKeys, renderTrialNew, renderTrialView, resetTurnstile, turnstileBox, turnstileToken } from "./trial.js";
 import { NARROW, UI_PREFS_KEY, initialPanes, prefsJSON, readPrefs, sideOpen as sideOpenOn, statusRedraw, toggleFold, toggleRight, toggleSide } from "./uistate.js";
 
 // Where the theme a person picked is kept; index.html reads it too.
@@ -261,7 +261,14 @@ const LANDING = staticMeta ? staticMeta.content : "";
 export let TRIAL = !STATIC && document.querySelector('meta[name="bench-trial"]') !== null;
 export const trial = { session: null };
 
+// fullConsole is whether the console draws its ordinary run form and run
+// controls: always outside the trial, and in it for a session with its own
+// keys. An invite session gets the limited form. The server checks it all.
+export const fullConsole = () => !TRIAL || !!(trial.session && trial.session.has_keys);
+const ownLimits = () => (TRIAL && trial.session && trial.session.limits && trial.session.limits.own) || null;
+
 export async function loadTrialSession() {
+  const had = fullConsole();
   try {
     const resp = await fetch("/api/trial/session");
     if (resp.ok) {
@@ -269,6 +276,8 @@ export async function loadTrialSession() {
       TRIAL = true;
     }
   } catch {}
+  // Own keys list every task; other sessions only the trial's.
+  if (state.tasks && had !== fullConsole()) loadTasks();
 }
 if (!STATIC) await loadTrialSession();
 
@@ -760,7 +769,7 @@ function renderTop() {
   const title = document.getElementById("title-text");
   let text = "New run";
   const kids = [];
-  document.querySelector(".app").classList.toggle("trial-bare", TRIAL && (current.view === "new" || TRIAL_VIEWS.includes(current.view)));
+  document.querySelector(".app").classList.toggle("trial-bare", TRIAL && ((current.view === "new" && !fullConsole()) || TRIAL_VIEWS.includes(current.view)));
   if (TRIAL && TRIAL_VIEWS.includes(current.view)) {
     title.textContent = current.view === "landing" ? "kavach bench · trial" : current.view === "terms" ? "Terms" : "Trial setup";
     document.title = "Try Kavach bench";
@@ -805,7 +814,7 @@ function renderTop() {
   kids.push(themeToggle());
 
   // Antigravity symmetrical right-hand Auxiliary Pane toggle icon on #/new and #/jobs/<id>
-  if ((current.view === "new" && !TRIAL) || current.view === "runs") {
+  if ((current.view === "new" && fullConsole()) || current.view === "runs") {
     kids.push(h("button", {
       id: "aux-toggle",
       type: "button",
@@ -1093,9 +1102,9 @@ function renderSide() {
   }
 
   // A task's link opens the new-run form, which a copy doesn't have.
-  if (!STATIC && !TRIAL) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
+  if (!STATIC && fullConsole()) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  const tasksShut = STATIC || TRIAL || state.folded.has("tasks");
+  const tasksShut = STATIC || !fullConsole() || state.folded.has("tasks");
   if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
   // Incidents first, then features; each task names the benchmark it came from.
   const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
@@ -1161,6 +1170,11 @@ const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 let settingsOpener = null;
 
 function openSettingsModal(tab) {
+  // The server's settings are not a visitor's: the trial has its own keys form.
+  if (TRIAL) {
+    location.hash = "#/trial/keys";
+    return;
+  }
   if (!state.settings.open) settingsOpener = document.activeElement;
   // tab is ignored when this runs as an event handler.
   if (typeof tab === "string" && SETTINGS_TABS.some((t) => t.id === tab)) state.settings.tab = tab;
@@ -1702,7 +1716,7 @@ function renderAll() {
 export function renderView() {
   const view = document.getElementById("view");
   if (TRIAL && TRIAL_VIEWS.includes(current.view)) return renderTrialView(view, current.view);
-  if (current.view === "new") return TRIAL ? renderTrialNew(view) : renderNew(view);
+  if (current.view === "new") return fullConsole() ? renderNew(view) : renderTrialNew(view);
   if (state.jobErr) {
     const msg = state.jobErr === "notfound"
       ? STATIC
@@ -1941,9 +1955,24 @@ function rowIcon(name) {
   return ic;
 }
 
+// clampToOwn brings saved form values within the caps a session with its own
+// keys has; the server enforces them whatever the form says.
+function clampToOwn() {
+  const own = ownLimits();
+  const f = state.form;
+  if (!own) return;
+  f.runs = Math.min(f.runs, own.max_attempts);
+  f.concurrent = Math.min(f.concurrent, own.max_concurrent);
+  f.timeout = Math.min(f.timeout, own.max_timeout_min);
+}
+
 function renderNew(view) {
+  clampToOwn();
   const f = state.form;
   const st = state.status;
+  const own = ownLimits();
+  // The sandbox is the one the session's keys are for.
+  if (TRIAL) f.environment = trial.session.provider;
   if (needsModel(f.agent) && f.models.length && state.modelCatalog.size === 0) {
     ensureModelsLoaded();
   }
@@ -2057,14 +2086,15 @@ function renderNew(view) {
       h("div", {}, rowIcon("models"), h("span", { class: "row-lbl" }, "Models"), h("div", { class: "val" }, modelVal)),
       h("div", {}, rowIcon("runs"), h("span", { class: "row-lbl" }, "Runs"), h("span", { class: "val" },
         h("input", {
-          class: "num v", type: "number", min: "1", max: "100", value: String(f.runs), "aria-label": "Runs per task and model",
-          onchange: (e) => { f.runs = clampInt(e.target.value, 1, 100, 1); saveForm(); renderView(); },
+          class: "num v", type: "number", min: "1", max: String(own ? own.max_attempts : 100), value: String(f.runs), "aria-label": "Runs per task and model",
+          onchange: (e) => { f.runs = clampInt(e.target.value, 1, own ? own.max_attempts : 100, 1); saveForm(); renderView(); },
         }),
         h("span", { class: "v" }, "each"),
         h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment]}` : ""}`))))));
 
   if (state.picker.open && needsModel(f.agent)) kids.push(renderPicker());
 
+  if (TRIAL) kids.push(turnstileBox(trial.session.turnstile_site_key));
   kids.push(renderPrompt());
   if (state.note) kids.push(h("div", { class: `note ${state.noteErr ? "err" : ""}`, role: "status" }, state.note));
 
@@ -2157,7 +2187,7 @@ function renderPrompt() {
       { value: 2, label: "2 at once", desc: "Run 2 trials concurrently" },
       { value: 4, label: "4 at once", desc: "Run 4 trials concurrently" },
       { value: 8, label: "8 at once", desc: "Run 8 trials concurrently" },
-    ],
+    ].filter((o) => !ownLimits() || o.value <= ownLimits().max_concurrent),
     onChange: (val) => {
       f.concurrent = +val;
       saveForm();
@@ -2165,7 +2195,7 @@ function renderPrompt() {
     },
   });
 
-  const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b);
+  const timeouts = [...new Set([0, 15, 30, 60, 120, f.timeout])].sort((a, b) => a - b).filter((m) => !ownLimits() || m <= ownLimits().max_timeout_min);
   const timeSel = renderSelect({
     id: "timeout",
     label: "Agent timeout",
@@ -2305,7 +2335,7 @@ function runCommand(line) {
         renderSide();
         return say("Runs are in the sidebar. /runs <n> sets the attempts per task and model.");
       }
-      f.runs = clampInt(arg, 1, 100, f.runs);
+      f.runs = clampInt(arg, 1, ownLimits() ? ownLimits().max_attempts : 100, f.runs);
       saveForm();
       return say(`${f.runs} attempt${f.runs === 1 ? "" : "s"} per task and model.`);
     }
@@ -2533,17 +2563,24 @@ function canRun() {
   if (state.status && state.status.jobs_warning && f.environment === "docker") return state.status.jobs_warning;
   if (!state.tasks || !state.tasks.length) return "No task to run.";
   if (!chosenTasks().length) return "Choose at least one arm.";
+  const own = ownLimits();
+  if (own && attemptsCount() > own.max_trials) return `A run may have at most ${own.max_trials} attempts here; this one has ${attemptsCount()}.`;
   if (envProblem(f.environment)) return environmentHint(f.environment);
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + Add OpenRouter model, or /model <id>.";
   return "";
 }
 
 async function startRun() {
+  clampToOwn();
   const f = state.form;
   const why = canRun();
   if (why) return say(why, true);
   const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent, retries: f.retries };
-  if (f.environment !== "docker") body.environment = f.environment;
+  if (f.environment !== "docker" && !TRIAL) body.environment = f.environment;
+  if (TRIAL && trial.session.turnstile_site_key) {
+    if (!turnstileToken()) return say("Complete the check first.", true);
+    body.turnstile_token = turnstileToken();
+  }
   if (needsModel(f.agent)) body.models = f.models.map((m) => `openrouter/${m}`);
   if (f.timeout) body.timeout_sec = f.timeout * 60;
   state.starting = true;
@@ -2554,6 +2591,7 @@ async function startRun() {
     location.hash = `#/jobs/${encodeURIComponent(job.id)}`;
   } catch (e) {
     say(`Harbor didn't start: ${e.message}`, true);
+    if (TRIAL) resetTurnstile();
   } finally {
     state.starting = false;
   }
@@ -3218,7 +3256,7 @@ function openInOpenCode(t, job) {
 }
 
 function runControl(job) {
-  if (job.resumable && !TRIAL) {
+  if (job.resumable) {
     const warning = state.status && state.status.jobs_warning;
     return h("span", { class: "note" },
       h("button", { type: "button", class: "btn blue", disabled: !!warning, onclick: () => jobAction("resume") }, "Resume run"),
@@ -3238,7 +3276,7 @@ function runControl(job) {
   const ask = (what) => { state.confirm = what; renderView(); document.getElementById("confirm-yes").focus(); };
   if (state.confirm !== "pause" && state.confirm !== "stop") {
     return [
-      TRIAL ? null : h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
+      TRIAL && trial.session && trial.session.invite ? null : h("button", { type: "button", class: "btn", onclick: () => running ? ask("pause") : jobAction("pause") }, running ? "Pause run…" : "Pause run"), " ",
       h("button", { type: "button", class: "btn", onclick: () => ask("stop") }, "Stop run…"),
       state.actionErr ? h("span", { class: "bad" }, " ", state.actionErr) : null,
     ];
@@ -3262,7 +3300,7 @@ function runControl(job) {
 
 // retryControl offers to run a failed attempt again once its run has ended.
 function retryControl(t, job) {
-  if (TRIAL || !job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
+  if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
   if (state.confirm !== `retry:${t.id}`) {
     return h("button", { type: "button", class: "btn", onclick: () => {
       state.confirm = `retry:${t.id}`;
@@ -3585,5 +3623,6 @@ function trialFoot() {
   const s = trial.session || {};
   return h("div", { class: "side-foot side-static" },
     h("span", {}, s.has_keys ? "Your keys are held for this session." : s.invite ? "Invite accepted." : "No keys yet."),
-    h("a", { href: trialReady() ? "#/new" : "#/" }, trialReady() ? "Start another run" : "Set up a trial"));
+    h("a", { href: trialReady() ? "#/new" : "#/" }, trialReady() ? "Start another run" : "Set up a trial"),
+    s.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null);
 }

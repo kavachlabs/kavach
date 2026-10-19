@@ -479,7 +479,13 @@ func (r *Runner) Pause(id string) error {
 // keeps the finished attempts and runs the rest, including those cancelled
 // mid-way, from the start. A run stopped before Harbor wrote its job folder
 // is started again instead.
-func (r *Runner) Resume(id string) error {
+func (r *Runner) Resume(id string) error { return r.ResumeWithEnv(id, nil) }
+
+// ResumeWithEnv is Resume for a run with its own keys: Harbor gets env as
+// Start gives it for a RunRequest's Env, and never the env file. A non-nil
+// env is what tells the two apart, so a caller holding no keys must refuse
+// rather than pass nil.
+func (r *Runner) ResumeWithEnv(id string, env map[string]string) error {
 	if !r.launched(id) {
 		return ErrNotStopped
 	}
@@ -492,14 +498,17 @@ func (r *Runner) Resume(id string) error {
 	if readJSON(filepath.Join(r.JobsDir, id, "result.json"), &res) == nil && res.FinishedAt != nil {
 		return ErrNotStopped
 	}
-	return r.resumeLocked(id)
+	return r.resumeLocked(id, env)
 }
 
 // Retry runs one attempt of a finished, stopped or paused run again. The
 // attempt's folder moves to <jobs>/.bench/retried/<id>/, and `harbor jobs
 // resume` then runs the attempt it no longer finds, under a new id, along
 // with any others the run had not finished.
-func (r *Runner) Retry(id, trial string) error {
+func (r *Runner) Retry(id, trial string) error { return r.RetryWithEnv(id, trial, nil) }
+
+// RetryWithEnv is Retry for a run with its own keys; see ResumeWithEnv.
+func (r *Runner) RetryWithEnv(id, trial string, env map[string]string) error {
 	if !r.launched(id) || !validName(trial) {
 		return ErrNotFound
 	}
@@ -522,10 +531,10 @@ func (r *Runner) Retry(id, trial string) error {
 	if err := os.Rename(src, dst); err != nil {
 		return err
 	}
-	return r.resumeLocked(id)
+	return r.resumeLocked(id, env)
 }
 
-func (r *Runner) resumeLocked(id string) error {
+func (r *Runner) resumeLocked(id string, env map[string]string) error {
 	dir := filepath.Join(r.JobsDir, id)
 	if exists(filepath.Join(dir, "config.json")) {
 		if err := prepareResume(dir, id); err != nil {
@@ -534,7 +543,18 @@ func (r *Runner) resumeLocked(id string) error {
 	}
 	envFile, _ := filepath.Abs(r.EnvFile) // . searches PATH for a bare name
 	var cmd *exec.Cmd
+	home := ""
 	switch {
+	case env != nil:
+		home = r.file("home/"+id, "")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			return err
+		}
+		cmdline := []string{r.Harbor, "run", "-c", r.file(id, ".json"), "-y"}
+		if exists(filepath.Join(dir, "config.json")) {
+			cmdline = []string{r.Harbor, "jobs", "resume", "-p", dir}
+		}
+		cmd = r.logPipe(id, home, env, cmdline)
 	case exists(filepath.Join(dir, "config.json")) && r.EnvFile != "" && exists(r.EnvFile):
 		// Unlike run, resume has no --env-file; the shell loads it, so
 		// the key never passes through bench.
@@ -550,6 +570,9 @@ func (r *Runner) resumeLocked(id string) error {
 		cmd = exec.Command(r.Harbor, args...)
 	}
 	if err := r.spawn(id, cmd); err != nil {
+		if home != "" {
+			os.RemoveAll(home)
+		}
 		return err
 	}
 	os.Remove(r.file(id, ".paused"))
