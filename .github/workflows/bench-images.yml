@@ -111,6 +111,17 @@ jobs:
               --cache-to "type=registry,ref=ghcr.io/kavachlabs/bench-cache:$TASK-$ARCH,mode=max" \
               --tag "$ref-$ARCH" \
               --push .
+            # Daytona and Modal run every command with `bash -lc`, whose
+            # /etc/profile resets PATH; the image must put its own back
+            # (bench/agent/harbor/README.md, "Images").
+            docker pull -q "$ref-$ARCH"
+            for user in root agent; do
+              docker run --rm -u "$user" --entrypoint bash "$ref-$ARCH" -c '
+                got=$(bash -lc "echo \$PATH")
+                for d in ${PATH//:/ }; do
+                  case ":$got:" in *":$d:"*) ;; *) echo "::error::$0 as $1: a login shell loses $d from PATH"; exit 1 ;; esac
+                done' "$TASK:$target" "$user"
+            done
           done
 
   merge:

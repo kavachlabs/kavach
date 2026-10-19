@@ -34,6 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global init.defaultBranch main \
@@ -59,6 +62,8 @@ COPY bench/agent/tasks/redis-11734/redis-kavach.patch /tmp/redis-kavach.patch
 RUN git apply /tmp/redis-kavach.patch && git add -A && git commit -qm "kavach integration" \
  && make -j4 >/tmp/make.log 2>&1 && rm /tmp/make.log || (tail -50 /tmp/make.log; exit 1)
 USER root
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 RUN mkdir -p /opt/redis-old && cp /work/src/redis-server /opt/redis-old/
 COPY bench/agent/tasks/redis-11734/task.md /task/TASK.md
 COPY bench/agent/tasks/redis-11734/incident.kavach /task/incident.kavach

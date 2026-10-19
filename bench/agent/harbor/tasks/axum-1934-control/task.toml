@@ -13,7 +13,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-axum-1934:control-e57ba217f77a"
+docker_image = "ghcr.io/kavachlabs/bench-axum-1934:control-ceb6e095bbfc"
 build_timeout_sec = 1800.0
 workdir = "/work"
 
@@ -29,7 +29,7 @@ env = { ARM = "control" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-axum-1934:grader-e57ba217f77a"
+docker_image = "ghcr.io/kavachlabs/bench-axum-1934:grader-ceb6e095bbfc"
 build_timeout_sec = 1800.0
 workdir = "/work"
 

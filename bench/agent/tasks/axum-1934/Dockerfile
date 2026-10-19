@@ -33,6 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g opencode-ai@1.1.8 && npm cache clean --force
 RUN useradd -m agent && mkdir -p /work /task /out && chown agent /work /out
+# Daytona and Modal run commands in a login shell, whose /etc/profile resets
+# PATH; this puts the image's PATH back after it.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 USER agent
 # Cargo's registry belongs to the agent; the toolchain stays in /usr/local.
 ENV CARGO_HOME=/home/agent/.cargo CARGO_BUILD_JOBS=4
@@ -69,6 +72,8 @@ RUN git apply /tmp/axum-kavach.patch && git add -A && git commit -qm "kavach int
  && cargo test -p axum --lib --no-run >/dev/null 2>&1
 ENV CARGO_NET_OFFLINE=true
 USER root
+# The login shell's PATH, as in base, with the Kavach tools.
+RUN printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/00-image-path.sh
 RUN mkdir -p /opt/axum-old && cp /work/target/debug/kavach-driver /opt/axum-old/
 USER agent
 

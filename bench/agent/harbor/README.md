@@ -64,6 +64,17 @@ and no Dockerfile, so the same rule applies there
 (`models/task/verifier_mode.py` 88-107). A remote provider pulls the image
 into its sandbox's Docker; its `docker compose build` finds nothing to build.
 
+On Daytona and Modal, Harbor runs every command in the main container with
+`bash -lc` (`environments/dind_compose.py` 112); local Docker runs `bash -c`
+(`docker/docker_unix.py` 283). A login shell's `/etc/profile` resets PATH, so
+an image's `ENV PATH` (the Rust or Go toolchain, `/opt/kavach/bin`) is lost
+there and `cargo` or `kavach` is not found. So each Dockerfile writes its PATH
+to `/etc/profile.d/00-image-path.sh`, in `base` and again where the Kavach
+stage adds `/opt/kavach/bin`. `sync-tasks.py --check` fails on an `ENV PATH`
+without it, the workflow fails a pushed image whose login shell loses a
+directory of its PATH (as root and as `agent`), and `test.sh` fails without a
+reward when it does, rather than grading the attempt as failed.
+
 Images are named `ghcr.io/kavachlabs/bench-<task>:<target>-<key>`. `<key>`
 is a hash of the task's Dockerfile, of every repository file its `COPY`
 lines name (path, executable bit and content, through `git hash-object`) and
