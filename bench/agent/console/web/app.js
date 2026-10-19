@@ -6,7 +6,7 @@ import { closeReplay, renderReplay, replayKey } from "./replay.js";
 import { renderHeadline, renderProbe, renderScrubber, renderTrail, showStep, trailRows } from "./trail.js";
 import { LABS } from "./logos.js";
 import { retheme } from "./monaco.js";
-import { TRIAL_VIEWS, forgetKeys, renderTrialNew, renderTrialView, resetTurnstile, turnstileBox, turnstileToken } from "./trial.js";
+import { TRIAL_VIEWS, forgetKeys, renderTrialView, resetTurnstile, turnstileBox, turnstileToken } from "./trial.js";
 import { NARROW, UI_PREFS_KEY, initialPanes, prefsJSON, readPrefs, sideOpen as sideOpenOn, statusRedraw, toggleFold, toggleRight, toggleSide } from "./uistate.js";
 
 // Where the theme a person picked is kept; index.html reads it too.
@@ -263,9 +263,15 @@ export const trial = { session: null };
 
 // fullConsole is whether the console draws its ordinary run form and run
 // controls: always outside the trial, and in it for a session with its own
-// keys. An invite session gets the limited form. The server checks it all.
-export const fullConsole = () => !TRIAL || !!(trial.session && trial.session.has_keys);
+// keys, or an invite code, which the form then holds to the trial's limits.
+// The server checks it all.
+export const fullConsole = () => !TRIAL || !!(trial.session && (trial.session.has_keys || trial.session.invite));
 const ownLimits = () => (TRIAL && trial.session && trial.session.limits && trial.session.limits.own) || null;
+// inviteLimits are the trial's limits, for a session on the operator's keys:
+// the server forces its concurrency, retries, timeout, agent and sandbox.
+const inviteLimits = () => (TRIAL && trial.session && trial.session.invite && trial.session.limits) || null;
+const maxAttempts = () => (ownLimits() || inviteLimits() || { max_attempts: 100 }).max_attempts;
+const allowedModel = (id) => !inviteLimits() || inviteLimits().models.includes(`openrouter/${id}`);
 
 export async function loadTrialSession() {
   const had = fullConsole();
@@ -1716,7 +1722,11 @@ function renderAll() {
 export function renderView() {
   const view = document.getElementById("view");
   if (TRIAL && TRIAL_VIEWS.includes(current.view)) return renderTrialView(view, current.view);
-  if (current.view === "new") return fullConsole() ? renderNew(view) : renderTrialNew(view);
+  if (current.view === "new") {
+    if (fullConsole()) return renderNew(view);
+    history.replaceState(null, "", "#/");
+    return renderTrialView(view, "landing");
+  }
   if (state.jobErr) {
     const msg = state.jobErr === "notfound"
       ? STATIC
@@ -1959,7 +1969,17 @@ function rowIcon(name) {
 // keys has; the server enforces them whatever the form says.
 function clampToOwn() {
   const own = ownLimits();
+  const inv = inviteLimits();
   const f = state.form;
+  if (inv) {
+    f.runs = Math.min(f.runs, inv.max_attempts);
+    f.agent = "opencode";
+    f.models = f.models.filter(allowedModel);
+    if (!f.models.length && !state.inviteSeeded && inv.models.length) {
+      state.inviteSeeded = true;
+      f.models = [orId(inv.models[0])];
+    }
+  }
   if (!own) return;
   f.runs = Math.min(f.runs, own.max_attempts);
   f.concurrent = Math.min(f.concurrent, own.max_concurrent);
@@ -2087,11 +2107,11 @@ function renderNew(view) {
       h("div", {}, rowIcon("models"), h("span", { class: "row-lbl" }, "Models"), h("div", { class: "val" }, modelVal)),
       h("div", {}, rowIcon("runs"), h("span", { class: "row-lbl" }, "Runs"), h("span", { class: "val" },
         h("input", {
-          class: "num v", type: "number", min: "1", max: String(own ? own.max_attempts : 100), value: String(f.runs), "aria-label": "Runs per task and model",
-          onchange: (e) => { f.runs = clampInt(e.target.value, 1, own ? own.max_attempts : 100, 1); saveForm(); renderView(); },
+          class: "num v", type: "number", min: "1", max: String(maxAttempts()), value: String(f.runs), "aria-label": "Runs per task and model",
+          onchange: (e) => { f.runs = clampInt(e.target.value, 1, maxAttempts(), 1); saveForm(); renderView(); },
         }),
         h("span", { class: "v" }, "each"),
-        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"} · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment]}` : ""}`))))));
+        h("span", { class: "faint" }, `${n} attempt${n === 1 ? "" : "s"}${inviteLimits() ? "" : ` · ${conc}${f.retries ? ` · ${f.retries} retr${f.retries === 1 ? "y" : "ies"} on error` : ""}${f.timeout ? ` · ${f.timeout} min timeout` : ""}`}${f.environment !== "docker" ? ` · on ${ENVIRONMENTS[f.environment] || "no sandbox"}` : ""}`))))));
 
   if (state.picker.open && needsModel(f.agent)) kids.push(renderPicker());
 
@@ -2159,6 +2179,7 @@ function renderPrompt() {
     oninput: () => renderCmds(), onkeydown: onAskKey,
   });
 
+  const inv = inviteLimits();
   const agentSel = renderSelect({
     id: "agent",
     label: "Agent",
@@ -2216,7 +2237,7 @@ function renderPrompt() {
   });
 
   const bar = h("div", { class: "bar" },
-    agentSel,
+    inv ? null : agentSel,
     needsModel(f.agent)
       ? h("button", {
           type: "button",
@@ -2224,8 +2245,7 @@ function renderPrompt() {
           onclick: () => openPicker(state.picker.open ? null : ""),
         }, `${f.models.length} model${f.models.length === 1 ? "" : "s"}`, h("span", { class: "faint", style: "font-size:10px" }, "▾"))
       : null,
-    concSel,
-    timeSel,
+    inv ? h("span", { class: "faint m", title: "Invite runs use the operator's sandbox and settings" }, `on ${ENVIRONMENTS[f.environment] || "no sandbox"}`) : [concSel, timeSel],
     needsModel(f.agent) ? h("span", { class: "faint m" }, "OpenRouter") : null,
     h("button", {
       type: "button",
@@ -2308,12 +2328,16 @@ function runCommand(line) {
   }
   const [cmd, ...rest] = line.split(/\s+/);
   const arg = rest.join(" ");
+  if (inviteLimits() && (cmd === "/timeout" || cmd === "/agent")) {
+    return say(`An invite run uses the operator's ${cmd.slice(1)}.`, true);
+  }
   switch (cmd) {
     case "/run":
       return startRun();
     case "/settings":
       return openSettingsModal();
     case "/model": {
+      if (!allowedModel(orId(arg))) return say(`${orId(arg)} is not among the models this invite offers. Open the picker with /models.`, true);
       if (!arg) return say("Usage: /model <OpenRouter id>, e.g. /model z-ai/glm-5.3", true);
       addModel(orId(arg));
       return say(`Added ${orId(arg)}.`);
@@ -2336,7 +2360,7 @@ function runCommand(line) {
         renderSide();
         return say("Runs are in the sidebar. /runs <n> sets the attempts per task and model.");
       }
-      f.runs = clampInt(arg, 1, ownLimits() ? ownLimits().max_attempts : 100, f.runs);
+      f.runs = clampInt(arg, 1, maxAttempts(), f.runs);
       saveForm();
       return say(`${f.runs} attempt${f.runs === 1 ? "" : "s"} per task and model.`);
     }
@@ -2379,6 +2403,7 @@ function runCommand(line) {
 
 function addModel(id) {
   const f = state.form;
+  if (!allowedModel(id)) return;
   if (!f.models.includes(id)) f.models.push(id);
   if (!needsModel(f.agent)) f.agent = "opencode";
   state.picker.previewId = id;
@@ -2418,7 +2443,8 @@ async function searchModels() {
   const p = state.picker;
   const q = p.q;
   try {
-    const list = await api(`/models?q=${encodeURIComponent(q)}`);
+    let list = await api(`/models?q=${encodeURIComponent(q)}`);
+    if (inviteLimits()) list = (list || []).filter((m) => allowedModel(m.id));
     for (const m of list || []) {
       state.modelCatalog.set(m.id, m);
     }
@@ -2429,7 +2455,10 @@ async function searchModels() {
       p.previewId = sortedModels(list)[0].id;
     }
   } catch (e) {
-    p.err = e.message;
+    if (inviteLimits()) {
+      p.list = inviteLimits().models.map(orId).filter((id) => id.includes(q)).map((id) => ({ id, name: id }));
+      p.err = "";
+    } else p.err = e.message;
   }
   if (p.open) renderPickerList();
 }
@@ -2471,7 +2500,7 @@ function renderPicker() {
   return h("div", { class: "picker", id: "picker", onkeydown: (e) => { if (e.key === "Escape" && !state.openSelect) { openPicker(null); } } },
     h("div", { class: "picker-top" },
       h("input", {
-        id: "pick-q", type: "search", value: p.q, placeholder: "Search OpenRouter models: glm, nemotron, claude, gemini, deepseek…", "aria-label": "Search models",
+        id: "pick-q", type: "search", value: p.q, placeholder: inviteLimits() ? "Search the models this invite offers" : "Search OpenRouter models: glm, nemotron, claude, gemini, deepseek…", "aria-label": "Search models",
         oninput: (e) => { p.q = e.target.value; clearTimeout(pickerTimer); pickerTimer = setTimeout(searchModels, 180); },
       }),
       renderSelect({ id: "pick-sort", label: "Sort models", value: state.form.modelSort || "", compact: true, options: MODEL_SORTS, onChange: setModelSort }),
@@ -2567,6 +2596,7 @@ function canRun() {
   const own = ownLimits();
   const total = attemptsCount() * (f.retries + 1);
   if (own && total > own.max_trials) return `A run may have at most ${own.max_trials} attempts, retries included, here; this one has ${total}.`;
+  if (inviteLimits() && !f.environment) return "The operator's sandbox is unavailable right now.";
   if (envProblem(f.environment)) return environmentHint(f.environment);
   if (needsModel(f.agent) && !f.models.length) return "Add a model: + Add OpenRouter model, or /model <id>.";
   return "";
@@ -2577,20 +2607,24 @@ async function startRun() {
   const f = state.form;
   const why = canRun();
   if (why) return say(why, true);
-  const body = { tasks: chosenTasks(), attempts: f.runs, agent: f.agent, concurrent: f.concurrent, retries: f.retries };
+  const body = { tasks: chosenTasks(), attempts: f.runs };
+  if (!inviteLimits()) Object.assign(body, { agent: f.agent, concurrent: f.concurrent, retries: f.retries });
   if (f.environment !== "docker" && !TRIAL) body.environment = f.environment;
   if (TRIAL && trial.session.turnstile_site_key) {
     if (!turnstileToken()) return say("Complete the check first.", true);
     body.turnstile_token = turnstileToken();
   }
   if (needsModel(f.agent)) body.models = f.models.map((m) => `openrouter/${m}`);
-  if (f.timeout) body.timeout_sec = f.timeout * 60;
+  if (f.timeout && !inviteLimits()) body.timeout_sec = f.timeout * 60;
   state.starting = true;
   say("Starting Harbor…");
   try {
     const job = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     state.note = "";
-    if (TRIAL) resetTurnstile();
+    if (TRIAL) {
+      resetTurnstile();
+      await loadTrialSession();
+    }
     location.hash = `#/jobs/${encodeURIComponent(job.id)}`;
   } catch (e) {
     say(`Harbor didn't start: ${e.message}`, true);
@@ -3625,7 +3659,7 @@ function shareButton() {
 function trialFoot() {
   const s = trial.session || {};
   return h("div", { class: "side-foot side-static" },
-    h("span", {}, s.has_keys ? "Your keys are held for this session." : s.invite ? "Invite accepted." : "No keys yet."),
+    h("span", {}, s.has_keys ? "Your keys are held for this session." : s.invite ? `Invite accepted · ${s.invite_runs_left ?? 0} run${s.invite_runs_left === 1 ? "" : "s"} left.` : "No keys yet."),
     h("a", { href: trialReady() ? "#/new" : "#/" }, trialReady() ? "Start another run" : "Set up a trial"),
     s.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null);
 }

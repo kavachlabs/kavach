@@ -335,8 +335,8 @@ function inviteForm() {
     h("p", { class: "tl-alt" }, "No code? ", h("a", { href: "#/trial/keys" }, "Bring your own keys"), "."));
 }
 
-// The run form. Its choices outlive redraws.
-const run = { task: "", models: null, attempts: 1, err: "", busy: false, token: "" };
+// The Turnstile token for the run form, which app.js draws.
+const run = { token: "" };
 let tsBox = null; // the Turnstile widget's element: kept so a redraw does not lose the token
 let tsLoading = null;
 
@@ -367,79 +367,7 @@ export function turnstileBox(siteKey) {
       sitekey: siteKey,
       callback: (t) => { run.token = t; },
       "expired-callback": () => { run.token = ""; },
-    })).catch((e) => { run.err = e.message; renderView(); });
+    })).catch((e) => { tsBox.textContent = e.message; });
   }
   return tsBox;
-}
-
-export function renderTrialNew(view) {
-  if (!trialReady()) {
-    history.replaceState(null, "", "#/");
-    return renderTrialView(view, "landing");
-  }
-  const lim = trial.session.limits || { models: [], tasks: [], max_attempts: 1 };
-  const bases = [...new Set(lim.tasks.map(base))];
-  if (!bases.includes(run.task)) run.task = bases.includes(state.form.task) ? state.form.task : bases[0] || "";
-  if (!run.models) run.models = lim.models.slice(0, 1);
-  run.attempts = Math.min(Math.max(run.attempts, 1), lim.max_attempts || 1);
-  const meta = (name) => (state.tasks || []).find((t) => t.name === name);
-  const redraw = () => renderView();
-
-  const taskCards = bases.map((b) => {
-    const t = meta(b);
-    const on = run.task === b;
-    return h("button", { type: "button", role: "radio", "aria-checked": String(on), class: `tf-opt ${on ? "on" : ""}`, onclick: () => { run.task = b; redraw(); } },
-      h("b", {}, b),
-      t ? h("span", { class: "tf-opt-sub" }, (t.title || "").replace(/^Task:\s*/, "")) : null,
-      t && t.summary ? h("span", { class: "tf-opt-desc" }, t.summary) : null);
-  });
-
-  const modelChips = lim.models.map((m) => {
-    const on = run.models.includes(m);
-    return h("button", { type: "button", class: `chip ${on ? "on" : ""}`, "aria-pressed": String(on), onclick: () => {
-      run.models = on ? run.models.filter((x) => x !== m) : [...run.models, m];
-      redraw();
-    } }, modelName(m));
-  });
-
-  const attempts = [];
-  for (let n = 1; n <= (lim.max_attempts || 1); n++) {
-    attempts.push(h("button", { type: "button", role: "radio", "aria-checked": String(run.attempts === n), class: `tf-seg ${run.attempts === n ? "on" : ""}`, onclick: () => { run.attempts = n; redraw(); } }, String(n)));
-  }
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!run.models.length) { run.err = "Choose at least one model."; return redraw(); }
-    if (trial.session.turnstile_site_key && !run.token) { run.err = "Complete the check first."; return redraw(); }
-    run.busy = true; run.err = ""; redraw();
-    const r = await send("POST", "/jobs", {
-      tasks: lim.tasks.filter((t) => base(t) === run.task),
-      models: run.models,
-      attempts: run.attempts,
-      turnstile_token: run.token,
-    });
-    run.busy = false;
-    if (!r.ok) {
-      run.err = r.err;
-      resetTurnstile();
-      return redraw();
-    }
-    resetTurnstile();
-    await loadTrialSession();
-    location.hash = `#/jobs/${encodeURIComponent(r.body.id || r.body.name)}`;
-  };
-
-  view.replaceChildren(shell("Start a run", "The agent gets the incident and works on a fix. Kavach's arm can replay it; the control arm cannot.",
-    h("form", { class: "tf", onsubmit: submit },
-      h("fieldset", {}, h("legend", {}, "Incident"),
-        h("div", { class: "tf-opts", role: "radiogroup", "aria-label": "Incident" }, taskCards)),
-      h("fieldset", {}, h("legend", {}, "Model"), h("div", { class: "tf-chips" }, modelChips)),
-      lim.max_attempts > 1 ? h("fieldset", {}, h("legend", {}, "Attempts"),
-        h("div", { class: "tf-segs", role: "radiogroup", "aria-label": "Attempts" }, attempts),
-        h("span", { class: "tf-hint" }, "Each attempt runs in both arms.")) : null,
-      turnstileBox(trial.session.turnstile_site_key),
-      run.err ? h("p", { class: "tf-err", role: "alert" }, run.err) : null,
-      h("button", { type: "submit", class: "tl-btn primary", disabled: run.busy || !run.task }, run.busy ? "Starting…" : "Start run"),
-      h("p", { class: "tl-trust" }, h("span", { class: "tl-lock", "aria-hidden": "true" }, "🔒"), trust()),
-      trial.session.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null)));
 }

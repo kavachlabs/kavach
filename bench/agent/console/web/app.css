@@ -3785,7 +3785,7 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
 .tl-btn.primary { background: var(--peach); border-color: var(--peach); color: var(--on-accent); font-weight: 600; box-shadow: var(--shadow-card); }
 .tl-btn.primary:hover { filter: brightness(1.08); background: var(--peach); }
 .tl-btn:disabled { opacity: 0.55; cursor: default; }
-.tl-btn:focus-visible, .tf input:focus-visible, .tf-opt:focus-visible, .tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tl-btn:focus-visible, .tf input:focus-visible, .tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .tl-trust { display: flex; gap: 8px; margin: 4px 0 0; max-width: 62ch; font-size: 12.5px; line-height: 1.55; color: var(--dim); }
 .tl-lock { flex: none; filter: grayscale(0.4); }
 .tl-terms { max-width: 62ch; padding: 12px 14px; border: 1px solid var(--edge); border-radius: 10px; background: var(--panel); font-size: 12.5px; line-height: 1.55; color: var(--dim); display: flex; flex-direction: column; gap: 8px; }
@@ -3825,16 +3825,9 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
 .tf-hint { font-size: 12.5px; color: var(--dim); line-height: 1.5; }
 .tf-hint a { color: var(--blue); }
 .tf-err { margin: 0; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--bad) 50%, transparent); background: var(--bad-bg); color: var(--bad); font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tf-segs, .tf-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.tf-segs { display: flex; flex-wrap: wrap; gap: 8px; }
 .tf-seg { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--edge-strong); background: var(--panel2); color: var(--text); font: 500 13.5px var(--font-ui); cursor: pointer; }
 .tf-seg.on { border-color: var(--peach); color: var(--peach); background: var(--peach-bg); }
-.tf-opts { display: grid; gap: 8px; }
-.tf-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--edge); background: var(--panel2); color: var(--text); font: inherit; cursor: pointer; min-width: 0; }
-.tf-opt:hover { border-color: var(--edge-hover); }
-.tf-opt.on { border-color: var(--peach); background: var(--peach-bg); }
-.tf-opt b { font-family: var(--font-code); font-size: 13.5px; overflow-wrap: anywhere; }
-.tf-opt-sub { font-size: 13px; color: var(--text-2); }
-.tf-opt-desc { font-size: 12.5px; color: var(--dim); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .tf-ts { min-height: 65px; }
 @media (max-width: 760px) {
   .tl { padding: 32px 16px 48px; gap: 40px; }
