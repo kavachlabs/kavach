@@ -103,7 +103,7 @@ Settings come from the environment (and the config file below):
 | `TRIAL_OWN_MAX_CONCURRENT` | 4 attempts at once in one run, for a session with its own keys |
 | `TRIAL_OWN_MAX_TRIALS` | 40 attempts in one run, retries included: (retries + 1) x tasks x models x attempts; for a session with its own keys |
 | `TRIAL_OWN_MAX_RETRIES` | 2 Harbor retries of an erroring attempt, for a session with its own keys |
-| `TRIAL_OWN_MAX_RETRY_REQUESTS` | 5 `retry` requests per run (kept in `<jobs>/.bench/<id>.retries`; more is 429), for a session with its own keys |
+| `TRIAL_OWN_MAX_RETRY_REQUESTS` | 5 `retry` requests per run (kept in `<jobs>/.bench/<id>.retries`; more is 429), for a session with its own keys, and for an invited run's owner |
 | `TRIAL_MAX_RUNNING` | 3 live runs, all visitors together; more gets 429 |
 | `TRIAL_INVITE_CODES` | none; comma-separated |
 | `TRIAL_INVITE_RUNS` | 5 runs per code |
@@ -303,8 +303,9 @@ bad key is an ordinary failed run: the job turns `stopped` or its trials
 jobs and trials stay public, as share links (`#/jobs/<id>`), but only for
 trial runs and `TRIAL_SHOWCASE`: `GET /api/jobs` lists only those and any
 other job or trial is 404. `stoppable` is true only for the owner, `sync` is always absent, and
-`resumable` and `retryable` are true only for the owner when the session is
-not an invite's. `POST /api/jobs/{id}/stop` is for the owner (else 403).
+`resumable` is true only for the owner when the session is not an invite's,
+and `retryable` only for the owner when the session is not an invite's or the
+run was started on an invite. `POST /api/jobs/{id}/stop` is for the owner (else 403).
 
 **Controls for runs on own keys.** `POST /api/jobs/{id}/pause`, `POST
 /api/jobs/{id}/resume` and `POST /api/trials/{job}/{trial}/retry` work for the
@@ -325,6 +326,15 @@ was started through it, and a fresh token per click would need the widget on
 every run page; the address's write rate limit applies to both. A run takes at most
 `TRIAL_OWN_MAX_RETRY_REQUESTS` retry requests (429 after), counted across
 restarts. Each relaunch removes the run's old home folder and starts in a fresh one.
+
+**Retrying an invited run.** The owner of a run started on an invite may also
+`POST /api/trials/{job}/{trial}/retry` while its session is an invite's (pause
+and resume stay 404). The attempt runs again on the server's keys, as the run
+did, and uses none of the invite's runs; the per-run
+`TRIAL_OWN_MAX_RETRY_REQUESTS` cap and the live-run limits apply as above. It
+is 403 when the session's invite code has been revoked, and 409 when the
+server's keys for invites are missing or are now for another sandbox than
+the run used.
 
 **Locked for everyone**, own keys included, and 404 whoever asks:
 `/api/settings` (it reads and writes the server's env file and keys),

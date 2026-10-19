@@ -3492,7 +3492,7 @@ function retryControl(t, job) {
   const others = job.resumable ? " Attempts the run didn't finish run too." : "";
   return h("div", { class: "confirm", role: "alertdialog", "aria-label": "Retry attempt", onkeydown: (e) => { if (e.key === "Escape") { state.confirm = ""; renderView(); } } },
     h("span", {}, h("b", {}, "Run this attempt again? "),
-      `Harbor runs a new attempt of ${t.task}${t.model ? ` with ${shortModel(t.model)}` : ""}, which costs as much as the first. This one leaves the run; its folder is kept in .bench/retried/${job.id}/.${others}`),
+      `Harbor runs a new attempt of ${t.task}${t.model ? ` with ${shortModel(t.model)}` : ""}, ${TRIAL && trial.session && trial.session.invite ? "on the invite's keys; it uses none of the invite's runs" : "which costs as much as the first"}. This one leaves the run${TRIAL ? "" : `; its folder is kept in .bench/retried/${job.id}/`}.${others}`),
     state.actionErr ? h("span", { class: "bad" }, state.actionErr) : null,
     h("div", { class: "row" },
       h("button", { type: "button", id: "confirm-yes", class: "btn blue", onclick: () => retryTrial(t) }, "Retry attempt"),
