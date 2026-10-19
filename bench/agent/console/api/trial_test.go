@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -59,7 +60,28 @@ func newTrialServer(t *testing.T, script string, mutate func(*Config, *TrialConf
 	}
 	cfg.Trial = tc
 	s, ts := newServer(t, cfg)
+	// Runs outlive the console, as they do in production, so a test's fake
+	// Harbor and its log helper would still be writing into the temporary
+	// directories when they are removed. Cleanups run last first, so this
+	// stops them before those directories go.
+	t.Cleanup(func() { stopProcesses(dir, cfg.JobsDir) })
 	return &trialEnv{t: t, s: s, ts: ts, dir: dir, jobs: cfg.JobsDir, cfg: cfg}
+}
+
+// stopProcesses kills every process whose command line names one of dirs,
+// and waits for them to go.
+func stopProcesses(dirs ...string) {
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		left := false
+		for _, d := range dirs {
+			if exec.Command("pkill", "-KILL", "-f", d).Run() == nil {
+				left = true
+			}
+		}
+		if !left {
+			return
+		}
+	}
 }
 
 func (e *trialEnv) visitor() *http.Client {
