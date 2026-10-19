@@ -594,10 +594,7 @@ body.resizing .body {
   border-color: var(--edge-strong);
 }
 .side-env-items > span { white-space: nowrap; }
-.side-session { cursor: default; }
-.side-session:hover { background: var(--panel); border-color: var(--edge); }
 .side-links { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-.side-links .tl-link { font-size: 12px; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .side-settings-btn.active {
   background: var(--panel2);
   border-color: var(--peach);

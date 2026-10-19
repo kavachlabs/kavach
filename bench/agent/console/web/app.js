@@ -1183,23 +1183,28 @@ const SETTINGS_TABS = [
 const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 let settingsOpener = null;
 
+// The trial has the same dialog with panels of its own: the server's settings
+// are not a visitor's, so it offers the session's keys and invite instead.
+const TRIAL_SETTINGS_TABS = [
+  { id: "session", label: "Session", desc: "Which sandbox this session runs on, and the keys or invite code behind it." },
+  { id: "about", label: "About", desc: "What the trial is, and how your keys are handled.", foot: true },
+];
+const settingsTabs = () => (TRIAL ? TRIAL_SETTINGS_TABS : SETTINGS_TABS);
+
 function openSettingsModal(tab) {
-  // The server's settings are not a visitor's: the trial has its own keys form.
-  if (TRIAL) {
-    location.hash = "#/trial/keys";
-    return;
-  }
   if (!state.settings.open) settingsOpener = document.activeElement;
   // tab is ignored when this runs as an event handler.
-  if (typeof tab === "string" && SETTINGS_TABS.some((t) => t.id === tab)) state.settings.tab = tab;
+  if (typeof tab === "string" && settingsTabs().some((t) => t.id === tab)) state.settings.tab = tab;
+  if (!settingsTabs().some((t) => t.id === state.settings.tab)) state.settings.tab = settingsTabs()[0].id;
   state.settings.open = true;
   state.settings.msg = "";
   state.settings.err = "";
   state.settings.drafts = {};
+  if (TRIAL) resetTrialDrafts();
   renderSide();
   renderSettingsModal();
   focusSettingsTab();
-  loadSettings();
+  if (!TRIAL) loadSettings();
 }
 
 function closeSettingsModal() {
@@ -1227,7 +1232,7 @@ function focusSettingsTab() {
 }
 
 function onSettingsTabKey(e) {
-  const ids = SETTINGS_TABS.map((t) => t.id);
+  const ids = settingsTabs().map((t) => t.id);
   let i = ids.indexOf(state.settings.tab);
   // The rail is vertical on desktop and a horizontal strip on phones.
   if (e.key === "ArrowDown" || e.key === "ArrowRight") i = (i + 1) % ids.length;
@@ -1551,7 +1556,124 @@ const SETTINGS_RENDER = {
   keys: settingsKeysTab,
   environment: settingsEnvironmentTab,
   shortcuts: settingsShortcutsTab,
+  session: trialSessionTab,
+  about: trialAboutTab,
 };
+
+// What the trial's settings panel has typed but not sent.
+const tset = { provider: "daytona", model_key: "", daytona: "", modal_id: "", modal_secret: "", code: "", err: "", msg: "", busy: false };
+function resetTrialDrafts() {
+  Object.assign(tset, { provider: (trial.session && trial.session.provider) === "modal" ? "modal" : "daytona", model_key: "", daytona: "", modal_id: "", modal_secret: "", code: "", err: "", msg: "", busy: false });
+}
+
+// sendTrial posts to one of the trial's own endpoints from the panel, then
+// refreshes everything that depends on the session.
+async function sendTrial(path, body, done) {
+  tset.busy = true; tset.err = ""; tset.msg = "";
+  renderSettingsModal();
+  try {
+    await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await loadTrialSession();
+    resetTrialDrafts();
+    tset.msg = done;
+  } catch (e) {
+    tset.err = e.message;
+    tset.busy = false;
+  }
+  renderTop();
+  renderSide();
+  renderSettingsModal();
+}
+
+function trialInput(id, label, key, { type = "password", placeholder = "" } = {}) {
+  return settingsRow({
+    label: h("label", { for: id }, label),
+    below: h("div", { class: "key-input-row" },
+      h("input", { id, type, autocomplete: "off", spellcheck: "false", placeholder, value: tset[key], oninput: (e) => { tset[key] = e.target.value.trim(); } })),
+  });
+}
+
+function trialSessionTab() {
+  const s = trial.session || {};
+  const left = s.invite_runs_left ?? 0;
+  const closeThen = () => closeSettingsModal();
+  const groups = [settingsGroup("This session", [
+    settingsRow({
+      label: "Status",
+      hint: s.has_keys ? "Your keys are held in this server's memory for this session only, and dropped when you forget them, after 24 hours idle, or when the server restarts."
+        : s.invite ? "Runs use the operator's keys, up to the number of runs the code allows." : "No keys and no invite code yet.",
+      control: h("span", { class: `key-badge ${s.has_keys || s.invite ? "ok" : "warn"}` }, s.has_keys ? "Your keys" : s.invite ? `Invite · ${left} run${left === 1 ? "" : "s"} left` : "Not set up"),
+    }),
+    settingsRow({
+      label: "Sandbox",
+      hint: "Where each attempt executes. It follows from the keys, or from the operator's setup for an invite.",
+      control: h("span", { class: `key-badge ${s.provider ? "ok" : "bad"}` }, s.provider ? ENVIRONMENTS[s.provider] || s.provider : "None available"),
+    }),
+  ])];
+
+  const submitMsg = h("span", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg);
+  if (s.has_keys) {
+    const modal = tset.provider === "modal";
+    const labelId = "ts-prov-lbl";
+    groups.push(settingsGroup("Your keys", [
+      settingsRow({
+        label: "Sandbox provider", labelId,
+        control: segmented({
+          id: "ts-prov", labelledBy: labelId, value: tset.provider,
+          options: [{ value: "daytona", label: "Daytona" }, { value: "modal", label: "Modal" }],
+          onChange: (v) => { tset.provider = v; renderSettingsModal(); },
+        }),
+      }),
+      trialInput("ts-or", "OpenRouter API key", "model_key", { placeholder: "Paste a new OpenRouter key" }),
+      modal ? [
+        trialInput("ts-mid", "Modal token ID", "modal_id"),
+        trialInput("ts-msec", "Modal token secret", "modal_secret"),
+      ] : trialInput("ts-day", "Daytona API key", "daytona"),
+    ], "Replacing the keys starts a fresh session. The runs you started stay yours and can still be stopped, resumed and retried; a run in progress keeps the keys it began with, and runs you start or resume from now on use the new ones. Any invite code is dropped."));
+    groups.push(h("form", {
+      class: "settings-actions",
+      onsubmit: (e) => {
+        e.preventDefault();
+        const body = { model_key: tset.model_key, provider: tset.provider };
+        if (modal) Object.assign(body, { modal_token_id: tset.modal_id, modal_token_secret: tset.modal_secret });
+        else body.daytona_api_key = tset.daytona;
+        sendTrial("/trial/keys", body, "Keys replaced.");
+      },
+    },
+      submitMsg,
+      h("button", { type: "button", class: "btn danger", onclick: async () => { await forgetKeys(); closeThen(); } }, "Forget my keys"),
+      h("button", { type: "submit", class: "btn peach", disabled: tset.busy }, tset.busy ? "Saving…" : "Replace keys")));
+  }
+
+  if (s.has_keys || s.invite) {
+    groups.push(settingsGroup("Invite code", [
+      settingsRow({
+        label: h("label", { for: "ts-code" }, s.invite ? "Redeem a different code" : "Have an invite code?"),
+        hint: s.invite
+          ? "Replaces this code with another; the new code's runs are counted on their own. The runs you started stay yours."
+          : "Redeeming a code switches this session to the operator's keys, with the invite's limits, and drops your own keys. The runs you started stay yours.",
+        below: h("form", { class: "key-input-row", onsubmit: (e) => { e.preventDefault(); sendTrial("/trial/invite", { code: tset.code }, "Invite code accepted."); } },
+          h("input", { id: "ts-code", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "Paste an invite code", value: tset.code, oninput: (e) => { tset.code = e.target.value.trim(); } }),
+          h("button", { type: "submit", class: "btn", disabled: tset.busy }, "Redeem")),
+      }),
+      s.invite ? settingsRow({
+        label: "Your own keys",
+        hint: "Leave the invite and run on your own OpenRouter and sandbox keys.",
+        control: h("a", { class: "btn", href: "#/trial/keys", onclick: closeThen }, "Use my own keys"),
+      }) : null,
+    ]));
+    if (!s.has_keys) groups.push(h("p", { class: tset.err ? "bad" : "ok", role: "status" }, tset.err || tset.msg));
+  }
+  return groups;
+}
+
+function trialAboutTab() {
+  const link = (href, text) => h("a", { class: "btn", href, onclick: () => closeSettingsModal() }, text);
+  return [settingsGroup("The trial", [
+    settingsRow({ label: "About the trial", hint: "What Kavach does and how a trial run works.", control: link("#/trial/about", "Open") }),
+    settingsRow({ label: "Terms", hint: "How your keys are handled, what is stored, and that runs are public.", control: link("#/trial/terms", "Open") }),
+  ])];
+}
 
 function renderSettingsModal() {
   let backdrop = document.getElementById("settings-backdrop");
@@ -1571,7 +1693,7 @@ function renderSettingsModal() {
   }
 
   // Re-rendering replaces the DOM: keep the panel's scroll and the focused control.
-  const tab = SETTINGS_TABS.find((t) => t.id === state.settings.tab);
+  const tab = settingsTabs().find((t) => t.id === state.settings.tab);
   const prevPane = backdrop.querySelector(".settings-pane");
   const scroll = prevPane && backdrop.dataset.tab === tab.id ? prevPane.scrollTop : 0;
   const active = document.activeElement;
@@ -1596,9 +1718,9 @@ function renderSettingsModal() {
   const rail = h("nav", { class: "settings-rail", "aria-label": "Settings" },
     h("h2", { class: "settings-rail-title", id: "settings-title" }, "Settings"),
     h("div", { class: "settings-tabs", role: "tablist", "aria-orientation": window.matchMedia("(max-width: 680px)").matches ? "horizontal" : "vertical", onkeydown: onSettingsTabKey },
-      SETTINGS_TABS.filter((t) => !t.foot).map(tabBtn),
+      settingsTabs().filter((t) => !t.foot).map(tabBtn),
       h("div", { class: "settings-tabs-gap", role: "presentation" }),
-      SETTINGS_TABS.filter((t) => t.foot).map(tabBtn)));
+      settingsTabs().filter((t) => t.foot).map(tabBtn)));
 
   const pane = h("section", {
     class: "settings-pane",
@@ -3596,6 +3718,11 @@ document.addEventListener("keydown", (e) => {
       renderSide();
       return;
     }
+    if (e.key === ",") {
+      e.preventDefault();
+      if (!state.settings.open) openSettingsModal();
+      return;
+    }
     if (k === "j" || e.key === "\\") {
       if (current.view === "new" || current.view === "runs") {
         e.preventDefault();
@@ -3667,20 +3794,28 @@ function trialFoot() {
   const s = trial.session || {};
   const st = state.status;
   const left = s.invite_runs_left ?? 0;
-  const [who, badge] = s.has_keys ? ["Your keys", "Keys held"] : s.invite ? ["Invite", `${left} run${left === 1 ? "" : "s"} left`] : ["No keys yet", ""];
+  const badge = s.has_keys ? "Keys held" : s.invite ? `Invite · ${left} run${left === 1 ? "" : "s"} left` : "";
   return h("div", { class: "side-foot" },
     st ? h("div", { class: "side-env-row" },
       h("span", { class: "side-env-items" },
         h("span", { title: st.harbor.ok ? `Harbor ${st.harbor.version}` : st.harbor.error },
           h("span", { class: `dot ${st.harbor.ok ? "" : "bad"}` }), "harbor"),
         trialReady() ? h("span", { title: "Where this session's attempts execute" },
-          h("span", { class: `dot ${s.provider ? "" : "bad"}` }), s.provider || "no sandbox") : null),
+          h("span", { class: `dot ${s.provider ? "" : "bad"}` }), s.provider || "none") : null),
       h("span", { class: "m" }, location.host)) : null,
-    h("div", { class: "side-settings-btn side-session" },
-      h("span", { class: "side-settings-left" }, h("span", { class: "side-settings-ic", "aria-hidden": "true" }, "🔒"), h("span", {}, who)),
-      badge ? h("span", { class: "key-badge ok" }, badge) : null),
+    h("button", {
+      type: "button",
+      class: `side-settings-btn ${state.settings.open ? "active" : ""}`,
+      title: "Open settings (⌘,)",
+      "aria-haspopup": "dialog",
+      "aria-expanded": String(state.settings.open),
+      onclick: () => openSettingsModal(),
+    },
+      h("span", { class: "side-settings-left" },
+        h("span", { class: "side-settings-ic", "aria-hidden": "true" }, "⚙"),
+        h("span", {}, "Settings")),
+      h("span", { class: `key-badge ${badge ? "ok" : "warn"}` }, badge || "Set up")),
     h("div", { class: "side-static side-links" },
       trialReady() ? null : h("a", { href: "#/" }, "Set up a trial"),
-      s.has_keys ? h("button", { type: "button", class: "tl-link", onclick: forgetKeys }, "Forget my keys") : null,
       h("a", { href: "#/trial/about" }, "About the trial")));
 }
