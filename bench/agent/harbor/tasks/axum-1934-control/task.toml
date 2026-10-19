@@ -16,6 +16,9 @@ timeout_sec = 2700.0
 docker_image = "ghcr.io/kavachlabs/bench-axum-1934:control-ceb6e095bbfc"
 build_timeout_sec = 1800.0
 workdir = "/work"
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
 
 # The verifier runs in its own container (tests/docker-compose.yaml), so the
 # hidden test is never in the agent's. All it gets from the agent's container
@@ -32,6 +35,9 @@ env = { ARM = "control" }
 docker_image = "ghcr.io/kavachlabs/bench-axum-1934:grader-ceb6e095bbfc"
 build_timeout_sec = 1800.0
 workdir = "/work"
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
 
 [[verifier.collect]]
 user = "root"

@@ -220,6 +220,18 @@ Restart the console only through its own process (systemd `KillMode=process`):
 a visitor's Harbor is run by detached helper processes named `bench _logpipe`,
 and `pkill bench` or a signal to the whole control group stops those runs.
 
+#### Sandbox size
+
+Each task's `[environment]` and `[verifier.environment]` set `cpus`,
+`memory_mb` and `storage_mb`, which `sync-tasks.py` writes (2 vCPU, 4 GiB and
+10 GiB; the Rust task 4 vCPU and 8 GiB). Without them Harbor asks for nothing,
+and Daytona gives its default sandbox, 1 vCPU and 1 GiB: `make -j4` or a Rust
+test link is killed there for lack of memory (the agent's command exits 137),
+the sandbox goes with it, and the collect hooks that save the patch fail. In
+local Docker the same values cap the main container. A provider's account
+limits the total across sandboxes running at once, so a run with many
+attempts may queue or fail to start on a small Daytona tier.
+
 ### Backing runs up to R2
 
 Harbor can only write a run to a folder on the machine that started it, even
