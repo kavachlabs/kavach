@@ -733,6 +733,30 @@ One Trial, or 404.
 The trial's steps so far, as an array of Step. It is `[]` when there are
 none. Refetch it on that trial's `trial` event.
 
+### GET /api/trials/{job}/{trial}/events
+
+A piece of the attempt's OpenCode event log, the JSON lines OpenCode wrote,
+for the web UI's Events tab. It reads `agent/opencode.txt` once Harbor has
+it, else the live copy `agent/opencode-live.txt` the agent mirrors while it
+runs.
+
+```json
+{"source": "agent/opencode-live.txt", "from": 0, "next": 18342, "size": 18342,
+ "lines": ["{\"type\":\"step_start\",...}", "..."], "skipped": false}
+```
+
+- `?from=N` reads from byte `N` of `source`; without it, or past the end, the
+  response is the log's last 256 KiB, starting at a line, with `skipped`
+  true when that is not the whole log.
+- At most 256 KiB per call. A line still being written is left out until it
+  ends, so `next` is always at a line start; pass it as the next `from`.
+  `next < size` means there is more to read now.
+- `source` is `""` and `lines` `[]` when there is no log yet. When `source`
+  changes (the agent ended and Harbor's copy arrived), start again without
+  `from`.
+- In trial mode, as everywhere, the response is redacted of keys and the
+  server's paths.
+
 ### GET /api/trials/{job}/{trial}/patch
 
 The agent's change: `artifacts/logs/artifacts/patch.diff`, which the task's

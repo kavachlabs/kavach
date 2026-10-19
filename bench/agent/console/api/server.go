@@ -106,6 +106,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/trials/{job}/{trial}/retry", s.retryTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}", s.getTrial)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/steps", s.getSteps)
+	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/events", s.getTrialEvents)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/grade", s.getGrade)
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/invariants", s.getInvariants)
@@ -401,6 +402,26 @@ func (s *Server) getSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, steps)
+}
+
+// getTrialEvents serves a piece of the attempt's OpenCode event log, from
+// byte ?from= on, or its tail when from is absent.
+func (s *Server) getTrialEvents(w http.ResponseWriter, r *http.Request) {
+	from := int64(-1)
+	if q := r.URL.Query().Get("from"); q != "" {
+		n, err := strconv.ParseInt(q, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "from must be a byte offset")
+			return
+		}
+		from = n
+	}
+	ev, err := s.reader.Events(r.PathValue("job"), r.PathValue("trial"), from)
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ev)
 }
 
 func (s *Server) getPatch(w http.ResponseWriter, r *http.Request) {
