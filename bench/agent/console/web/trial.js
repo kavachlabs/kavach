@@ -367,6 +367,13 @@ export function turnstileBox(siteKey) {
       sitekey: siteKey,
       callback: (t) => { run.token = t; },
       "expired-callback": () => { run.token = ""; },
+      // Without these Turnstile fails silently, leaving an empty box.
+      "error-callback": (code) => {
+        run.token = "";
+        tsBox.textContent = `The check could not run (Turnstile error ${code}). Allow challenges.cloudflare.com, then reload the page.`;
+        return true;
+      },
+      "unsupported-callback": () => { tsBox.textContent = "This browser cannot run the check; try another browser."; },
     })).catch((e) => { tsBox.textContent = e.message; });
   }
   return tsBox;

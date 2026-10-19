@@ -51,7 +51,7 @@ type TrialConfig struct {
 	// RatePerMin is how many writes one address may make a minute.
 	RatePerMin int
 
-	TurnstileSecret  string // when set, starting a run needs a verified turnstile_token
+	TurnstileSecret  string // when set, starting a run on a visitor's own keys needs a verified turnstile_token
 	TurnstileSiteKey string
 	TurnstileURL     string       // default Cloudflare's siteverify
 	Client           *http.Client // for the Turnstile call
@@ -401,6 +401,11 @@ func (t *trial) view(s *session) sessionView {
 	}
 	if invite != "" {
 		v.Invite, v.Provider, v.InviteRunsLeft = true, t.inviteProvider(), &left
+		// An invite already says who runs, and caps their runs: its runs are
+		// not checked (postTrialJob), so the form shows no check.
+		if keys == nil {
+			v.TurnstileSiteKey = ""
+		}
 	}
 	return v
 }
@@ -634,12 +639,9 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "attempts must be 1-%d in the trial", conf.maxAttempts)
 		return
 	}
-	if t.cfg.TurnstileSecret != "" {
-		if re := t.verifyTurnstile(r.Context(), req.TurnstileToken, t.clientIP(r)); re != nil {
-			writeError(w, re.code, "%s", re.msg)
-			return
-		}
-	}
+	// An invited run needs no Turnstile check: the code already says who
+	// runs, and caps their runs. Runs on a visitor's own keys are checked
+	// (postOwnJob).
 	rr.Agent, rr.Concurrent, rr.Retries, rr.TimeoutSec, rr.Name = harbor.LiveAgent, maxConcurrent, 0, 0, ""
 
 	// A models list of mixed providers would need several keys.

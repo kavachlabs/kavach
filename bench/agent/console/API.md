@@ -109,7 +109,7 @@ Settings come from the environment (and the config file below):
 | `TRIAL_INVITE_RUNS` | 5 runs per code |
 | `TRIAL_SHOWCASE` | none; job ids anyone may list and read besides trial runs |
 | `TRIAL_CONFIG` | `/etc/kavach/trial.json`; the config file below |
-| `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` needs a `turnstile_token` that Cloudflare's siteverify accepts |
+| `TURNSTILE_SECRET`, `TURNSTILE_SITE_KEY` | off; when the secret is set, `POST /api/jobs` from a session with its own keys needs a `turnstile_token` that Cloudflare's siteverify accepts (an invite session's runs are not checked) |
 
 **Config file.** `-trial-config PATH` (or `TRIAL_CONFIG`; default
 `/etc/kavach/trial.json`) names a JSON file the operator edits while the
@@ -243,6 +243,8 @@ left alone when the home folder is `/root`.
 `limits.own` appears only for a session with its own keys, and then `tasks`
 lists every task. `invite_runs_left` appears only for an invite session. `provider` of an invite
 session is the first of `daytona`, `modal` the server has keys for.
+`turnstile_site_key` is empty for an invite session without keys, whose runs
+are not checked.
 
 `POST /api/trial/keys` `{"model_key", "provider": "daytona"|"modal",
 "daytona_api_key", "modal_token_id", "modal_token_secret"}` stores the keys
@@ -263,9 +265,10 @@ without runs left. A code's runs started are kept in
 form and controls as the local console, for its own runs; an **invite**
 session, whose runs bill the operator, keeps the limited form below. Unknown
 fields are rejected with 400, as everywhere (`env` is not a request field).
-`turnstile_token` is read in both.
+`turnstile_token` is read only from a session with its own keys: an invite
+already says who runs, and caps their runs.
 
-*Invite session.* Takes `{"tasks", "models", "attempts", "turnstile_token"}`;
+*Invite session.* Takes `{"tasks", "models", "attempts"}` (a `turnstile_token` is accepted and ignored);
 the other fields of the ordinary request (`agent`, `environment`, `name`,
 `concurrent`, `retries`, `timeout_sec`) are known and overridden.
 `models` defaults to the first allowed one. The server forces the rest:
@@ -289,7 +292,7 @@ would run on this server). `name` is ignored and generated. Harbor gets the
 session's sandbox keys, and its model key when the agent calls a model, as
 above and nothing of the server's.
 
-Both: 400/403 for a missing/failed Turnstile token; 429 when
+Own keys: 400/403 for a missing/failed Turnstile token. Both: 429 when
 the session, or another session from the same network address, already has a
 live run, or `TRIAL_MAX_RUNNING` is reached; 403 when the invite is spent or revoked. A
 bad key is an ordinary failed run: the job turns `stopped` or its trials
