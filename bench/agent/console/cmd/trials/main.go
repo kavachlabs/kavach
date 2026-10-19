@@ -131,6 +131,9 @@ func finished(root string, names []string, all bool) ([]attempt, error) {
 				if b, err := os.ReadFile(filepath.Join(d, "agent", "opencode-session.json")); err == nil {
 					a.Export = scrub(string(b))
 				}
+				if b, err := os.ReadFile(filepath.Join(d, "agent", "opencode-live.json")); err == nil {
+					a.LiveFile = compact(b)
+				}
 			}
 			if b, err := os.ReadFile(filepath.Join(d, "lock.json")); err == nil {
 				a.Lock = compact(b)

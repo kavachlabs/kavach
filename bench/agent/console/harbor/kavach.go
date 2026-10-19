@@ -32,6 +32,9 @@ type AttemptInput struct {
 	// copy of OpenCode's event log, and its session export, as text.
 	Live   string `json:"live,omitempty"`
 	Export string `json:"export,omitempty"`
+	// The agent's opencode-live.json, which gains a finished time when the
+	// agent ends.
+	LiveFile json.RawMessage `json:"live_file,omitempty"`
 }
 
 // files lays the input out as the trial directory it came from. A field that
@@ -54,6 +57,7 @@ func (a AttemptInput) files() fstest.MapFS {
 	put("agent/opencode.txt", log.Bytes())
 	put("agent/opencode-live.txt", []byte(a.Live))
 	put("agent/opencode-session.json", []byte(a.Export))
+	put("agent/opencode-live.json", a.LiveFile)
 	return fsys
 }
 
