@@ -26,6 +26,7 @@ See README.md.
 """
 
 import asyncio
+import base64
 import contextlib
 import copy
 import ipaddress
@@ -54,6 +55,10 @@ from harbor.models.environment_type import EnvironmentType
 
 LIVE_FILE = "opencode-live.json"
 EXPORT_FILE = "opencode-session.json"
+# The live copy of OpenCode's event log, for sandboxes that do not mount the
+# logs directory (Daytona, Modal): Harbor downloads opencode.txt only when the
+# agent ends.
+LIVE_LOG = "opencode-live.txt"
 INSTRUCTION_FILE = "instruction.md"
 MODELS_URL = "https://models.dev/api.json"
 PINNED_VERSION = "1.1.8"
@@ -62,6 +67,10 @@ MODEL_PORT = 8080
 PROXY_SERVICE = "proxy"
 # Pause between copies of the running session to the trial directory.
 MIRROR_SEC = 15
+# Pause between copies of the event log's new bytes, and the most one exec
+# returns: base64 of it stays well under the ~1 MB remote execs return.
+TAIL_SEC = 3
+TAIL_CHUNK = 256 << 10
 EXPORT_WARN_EVERY = 20
 # Outside every private range, then the Docker host's usual services: none may
 # accept a connection from a sealed task container.
@@ -419,6 +428,40 @@ class KavachOpenCode(OpenCode):
             await self._quietly(self._export(environment, env))
             await asyncio.sleep(MIRROR_SEC)
 
+    async def _tail_once(self, environment: BaseEnvironment) -> bool:
+        """Append the bytes the sandbox's event log gained since the last
+        call to the trial's live copy. Returns False once the log is in the
+        trial directory itself (a bind mount): there is nothing to copy."""
+        if (self.logs_dir / self._OUTPUT_FILENAME).exists():
+            return False
+        remote = shlex.quote((self.environment_logs_dir / self._OUTPUT_FILENAME).as_posix())
+        while True:
+            result = await environment.exec(
+                f"tail -c +{self._live_offset + 1} {remote} 2>/dev/null | head -c {TAIL_CHUNK} | base64 | tr -d '\\n'",
+                timeout_sec=60,
+            )
+            if result.return_code:
+                return True
+            data = base64.b64decode(result.stdout or "")
+            if not data:
+                return True
+            with (self.logs_dir / LIVE_LOG).open("ab") as f:
+                f.write(data)
+            self._live_offset += len(data)
+            if len(data) < TAIL_CHUNK:
+                return True
+
+    async def _tail(self, environment: BaseEnvironment) -> None:
+        """Keep the live copy of the event log current while the agent runs."""
+        self._live_offset = 0
+        while True:
+            try:
+                if not await self._tail_once(environment):
+                    return
+            except Exception:
+                self.logger.exception("copying the event log failed; retrying")
+            await asyncio.sleep(TAIL_SEC)
+
     @override
     @with_prompt_template
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
@@ -432,6 +475,7 @@ class KavachOpenCode(OpenCode):
         }
         serving = False
         mirror: asyncio.Task | None = None
+        tail: asyncio.Task | None = None
         try:
             check_modal_runtime(environment)
             if self.options.isolate:
@@ -464,6 +508,7 @@ class KavachOpenCode(OpenCode):
                 serving = True
                 attach = f"--attach http://127.0.0.1:{SERVER_PORT} "
                 mirror = asyncio.create_task(self._mirror(environment, env, directory, view_url))
+                tail = asyncio.create_task(self._tail(environment))
 
             # The instruction goes in on stdin, which `opencode run` appends to
             # the message. On the command line, the agent's own `pkill -f
@@ -486,10 +531,11 @@ class KavachOpenCode(OpenCode):
             )
         finally:
             # Each step runs even if an earlier one fails.
-            if mirror:
-                mirror.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await mirror
+            for task in (mirror, tail):
+                if task:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
             await self._quietly(self._mark_finished())
             if serving:
                 await self._quietly(environment.exec("kill $(cat /tmp/opencode-serve.pid) 2>/dev/null; true", user="root"))

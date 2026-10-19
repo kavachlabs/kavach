@@ -136,7 +136,9 @@ const maxText = 4000
 
 // readSteps reads a trial's steps from Harbor's ATIF trajectory, which the
 // agent writes when it finishes, or else from OpenCode's event log, which
-// fills while it runs. A trial with neither has no steps.
+// fills while it runs in a local sandbox, or else from what a remote
+// sandbox's run mirrors: the live copy of that log, or the session export.
+// A trial with none has no steps.
 func readSteps(dir string) ([]Step, error) { return stepsFrom(os.DirFS(dir)) }
 
 // stepsFrom reads steps from fsys, which holds a trial directory's files.
@@ -150,13 +152,103 @@ func stepsFrom(fsys fs.FS) ([]Step, error) {
 	}
 	f, err := fsys.Open("agent/opencode.txt")
 	if errors.Is(err, os.ErrNotExist) {
-		return []Step{}, nil
+		// A remote sandbox's run: the agent's live copy of the log, or else
+		// its session export.
+		f, err = fsys.Open("agent/opencode-live.txt")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return exportSteps(fsys)
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	return openCodeSteps(f)
+}
+
+// exportSteps reads steps from the session export the opencode-live agent
+// mirrors every few seconds. A sandbox without a bind mount (Daytona, Modal)
+// sends Harbor opencode.txt only when the agent ends, so while it runs the
+// export is all there is. Its assistant messages hold the same parts the
+// event log does; they are written out as the log's events and read as one.
+func exportSteps(fsys fs.FS) ([]Step, error) {
+	b, err := fs.ReadFile(fsys, "agent/opencode-session.json")
+	if errors.Is(err, fs.ErrNotExist) {
+		return []Step{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var export struct {
+		Messages []struct {
+			Info struct {
+				Role string `json:"role"`
+				Time struct {
+					Created int64 `json:"created"`
+				} `json:"time"`
+			} `json:"info"`
+			Parts []json.RawMessage `json:"parts"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(b, &export); err != nil {
+		// The export is replaced atomically, so this is not a partial write.
+		return nil, fmt.Errorf("opencode-session.json: %w", err)
+	}
+	var log bytes.Buffer
+	var last int64
+	for _, m := range export.Messages {
+		if m.Info.Role != "assistant" {
+			continue // the user's message is the instruction, not a step
+		}
+		for _, raw := range m.Parts {
+			var p struct {
+				Type string `json:"type"`
+				Time struct {
+					Start int64 `json:"start"`
+				} `json:"time"`
+				State struct {
+					Status string `json:"status"`
+					Time   struct {
+						Start int64 `json:"start"`
+					} `json:"time"`
+				} `json:"state"`
+			}
+			if json.Unmarshal(raw, &p) != nil {
+				continue
+			}
+			// Steps never go back in time: a part without a time of its own
+			// (step-finish) is at the part before it, and so is a tool call
+			// the model began while the part before it still streamed.
+			ts := max(p.Time.Start, p.State.Time.Start, m.Info.Time.Created, last)
+			last = ts
+			var typ string
+			switch p.Type {
+			case "text":
+				typ = "text"
+			case "tool":
+				// The log has a tool call once it ends; one still running
+				// shows when it does.
+				if p.State.Status != "completed" && p.State.Status != "error" {
+					continue
+				}
+				typ = "tool_use"
+			case "step-finish":
+				typ = "step_finish"
+			default:
+				continue
+			}
+			line, err := json.Marshal(struct {
+				Type      string          `json:"type"`
+				Timestamp int64           `json:"timestamp"`
+				Part      json.RawMessage `json:"part"`
+			}{typ, ts, raw})
+			if err != nil {
+				return nil, err
+			}
+			log.Write(append(line, '\n'))
+		}
+	}
+	return openCodeSteps(&log)
 }
 
 // atifSteps converts an ATIF trajectory (Harbor's agent-neutral format).

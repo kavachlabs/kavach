@@ -524,5 +524,83 @@ class ExportThroughFile(unittest.TestCase):
         self.assertEqual(self.agent._export_failures, 0)
 
 
+@unittest.skipUnless(HARBOR_INSTALLED, "needs harbor")
+class LiveLog(unittest.TestCase):
+    """The event log's new bytes reach the trial directory while the agent
+    runs, on a sandbox that does not mount it."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.logs = Path(self.tmp.name)
+        self.agent = object.__new__(opencode_live.KavachOpenCode)
+        self.agent.logs_dir = self.logs
+        self.agent._live_offset = 0
+        self.agent.logger = mock.Mock()
+        self.ns = SimpleNamespace
+        self.remote = b""
+        self.execs = []
+
+    def environment(self, return_code=0, missing=False):
+        test = self
+
+        class Env:
+            async def exec(self, command, **kwargs):
+                test.execs.append(command)
+                # Run the command's pipeline on the fake log, as the shell would.
+                import re
+                import base64
+
+                m = re.match(r"tail -c \+(\d+) (\S+) 2>/dev/null \| head -c (\d+) \| base64 \| tr -d '\\n'$", command)
+                test.assertIsNotNone(m, command)
+                test.assertEqual(m.group(2), "/logs/agent/opencode.txt")
+                start, n = int(m.group(1)) - 1, int(m.group(3))
+                out = b"" if missing else test.remote[start : start + n]
+                return test.ns(stdout=base64.b64encode(out).decode(), stderr="", return_code=return_code)
+
+        return Env()
+
+    def tail(self, env):
+        with mock.patch.object(type(self.agent), "environment_logs_dir", Path("/logs/agent"), create=True):
+            return asyncio.run(self.agent._tail_once(env))
+
+    def live(self):
+        return (self.logs / opencode_live.LIVE_LOG).read_bytes()
+
+    def test_copies_what_the_log_gains(self):
+        env = self.environment()
+        self.remote = b'{"type":"text"}\n{"type":"tool_'
+        self.assertTrue(self.tail(env))
+        self.remote += 'use","part":{"tool":"bash","state":{"output":"é"}}}\n'.encode()
+        self.assertTrue(self.tail(env))
+        self.assertTrue(self.tail(env))  # nothing new
+        self.assertEqual(self.live(), self.remote)
+        self.assertEqual(self.agent._live_offset, len(self.remote))
+
+    def test_a_burst_over_one_chunk_is_copied_whole(self):
+        self.remote = bytes(range(256)) * ((3 * opencode_live.TAIL_CHUNK) // 256 + 7)
+        self.assertTrue(self.tail(self.environment()))
+        self.assertEqual(self.live(), self.remote)
+        self.assertEqual(len(self.execs), 4)
+
+    def test_no_log_yet_writes_nothing(self):
+        self.assertTrue(self.tail(self.environment(missing=True)))
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+
+    def test_a_failed_exec_copies_nothing(self):
+        self.remote = b'{"type":"text"}\n'
+        self.assertTrue(self.tail(self.environment(return_code=1)))
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+        self.assertEqual(self.agent._live_offset, 0)
+
+    def test_a_mounted_log_is_not_copied(self):
+        (self.logs / "opencode.txt").write_text('{"type":"text"}\n')
+        self.assertFalse(self.tail(self.environment()))
+        self.assertEqual(self.execs, [])
+        self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 const passTrial = "testdata/jobs/opencode-glm/redis-10068-kavach__Pass001"
@@ -130,6 +131,49 @@ func TestStepsWhileRunning(t *testing.T) {
 	// A trial without agent logs (nop) has no steps.
 	if steps, err := r.Steps("nop-running", "hello-world-control__p3PHoHF"); err != nil || steps == nil || len(steps) != 0 {
 		t.Fatalf("%v %v", steps, err)
+	}
+}
+
+// A remote sandbox sends opencode.txt only when the agent ends; until then
+// the steps come from the session export the agent mirrors.
+func TestStepsFromSessionExport(t *testing.T) {
+	export := `{"info": {"id": "ses_1"}, "messages": [
+	  {"info": {"role": "user", "time": {"created": 1000}}, "parts": [{"type": "text", "text": "# Task: fix it"}]},
+	  {"info": {"role": "assistant", "time": {"created": 1100}}, "parts": [
+	    {"type": "step-start"},
+	    {"type": "reasoning", "text": "thinking", "time": {"start": 1200, "end": 1300}},
+	    {"type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": "cargo test"}, "output": "ok", "metadata": {"exit": 0}, "time": {"start": 1400, "end": 1500}}},
+	    {"type": "step-finish", "cost": 0.5, "tokens": {"input": 10, "output": 2, "reasoning": 0, "cache": {"read": 3}}}
+	  ]},
+	  {"info": {"role": "assistant", "time": {"created": 2000}}, "parts": [
+	    {"type": "text", "text": "Fixed.", "time": {"start": 2100}},
+	    {"type": "tool", "tool": "read", "state": {"status": "running", "input": {"filePath": "src/a.rs"}, "time": {"start": 2200}}}
+	  ]}
+	]}`
+	fsys := fstest.MapFS{"agent/opencode-session.json": {Data: []byte(export)}}
+	steps, err := stepsFrom(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range steps {
+		got = append(got, s.Kind+":"+s.Title)
+	}
+	want := []string{KindShell + ":cargo test", KindUsage + ":step 1", KindText + ":Fixed."}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps %q, want %q", got, want)
+	}
+	if steps[0].TMs != 0 || steps[1].TMs != 0 || steps[2].TMs != 700 || steps[1].Cost == nil || *steps[1].Cost != 0.5 || steps[1].Tokens.Cached != 3 {
+		t.Fatalf("times or usage: %+v", steps)
+	}
+	// The event log, once Harbor has it, wins.
+	fsys["agent/opencode.txt"] = &fstest.MapFile{Data: []byte(`{"type":"text","timestamp":1,"part":{"text":"from the log"}}` + "\n")}
+	if steps, err := stepsFrom(fsys); err != nil || len(steps) != 1 || steps[0].Title != "from the log" {
+		t.Fatalf("%+v %v", steps, err)
+	}
+	// An export that does not parse is an error, not an empty attempt.
+	if _, err := stepsFrom(fstest.MapFS{"agent/opencode-session.json": {Data: []byte("{")}}); err == nil {
+		t.Fatal("a broken export read as no steps")
 	}
 }
 

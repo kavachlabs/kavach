@@ -577,7 +577,7 @@ func number(trials []Trial, planned []lockTrial, job string, running bool) []Tri
 // invalidates the cached trial.
 var trialFiles = []string{
 	"lock.json", "result.json",
-	"agent/trajectory.json", "agent/opencode.txt", "agent/opencode-live.json", "agent/opencode-session.json",
+	"agent/trajectory.json", "agent/opencode.txt", "agent/opencode-live.txt", "agent/opencode-live.json", "agent/opencode-session.json",
 	"verifier/kavach.json",
 }
 

@@ -13,6 +13,10 @@
 //
 //	kavach replay harbor/testdata/kavach/provider-error.kavach --bin ./trials
 //	kavach replay harbor/testdata/kavach/steps/cli-steps.kavach --bin "./trials -steps"
+//
+// With -timeline it runs harbor.TimelineReader, which reads the steps the
+// Steps tab shows, on every attempt, running ones too, in the order of
+// their directories.
 package main
 
 import (
@@ -26,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
@@ -39,6 +44,7 @@ func main() {
 	jobs := flag.String("jobs", "../results/harbor", "Harbor's jobs directory")
 	dir := flag.String("fixtures", "", "directory for the journal; fixtures go in its fixtures/ subdirectory (default kavach)")
 	steps := flag.Bool("steps", false, "run the steps reader (harbor.StepsReader) instead of the trial reader")
+	timeline := flag.Bool("timeline", false, "run the Steps tab's reader (harbor.TimelineReader) on every attempt, running ones too")
 	flag.Parse()
 	reader := func() kavach.Handler { return &harbor.TrialReader{} }
 	service := "trials"
@@ -46,9 +52,13 @@ func main() {
 		reader = func() kavach.Handler { return &harbor.StepsReader{} }
 		service = "steps"
 	}
+	if *timeline {
+		reader = func() kavach.Handler { return &harbor.TimelineReader{} }
+		service = "timeline"
+	}
 	kavach.MaybeReplay(reader)
 
-	attempts, err := finished(*jobs, flag.Args())
+	attempts, err := finished(*jobs, flag.Args(), *timeline)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,8 +91,9 @@ type attempt struct {
 }
 
 // finished returns the finished attempts of the named jobs under root, in the
-// order they finished.
-func finished(root string, names []string) ([]attempt, error) {
+// order they finished; with all, every attempt, in the order of their
+// directories, with what a running one has.
+func finished(root string, names []string, all bool) ([]attempt, error) {
 	if len(names) == 0 {
 		entries, err := os.ReadDir(root)
 		if err != nil {
@@ -102,16 +113,25 @@ func finished(root string, names []string) ([]attempt, error) {
 		}
 		for _, d := range dirs {
 			result, err := os.ReadFile(filepath.Join(d, "result.json"))
-			if err != nil {
+			if err != nil && !all {
 				continue
 			}
 			var r struct {
 				FinishedAt string `json:"finished_at"`
 			}
-			if json.Unmarshal(result, &r) != nil || r.FinishedAt == "" {
+			if (json.Unmarshal(result, &r) != nil || r.FinishedAt == "") && !all {
 				continue
 			}
 			a := attempt{AttemptInput: harbor.AttemptInput{Job: job, ID: filepath.Base(d), Result: compact(result)}, finishedAt: r.FinishedAt}
+			if all {
+				a.finishedAt = ""
+				if b, err := os.ReadFile(filepath.Join(d, "agent", "opencode-live.txt")); err == nil {
+					a.Live = scrub(string(b))
+				}
+				if b, err := os.ReadFile(filepath.Join(d, "agent", "opencode-session.json")); err == nil {
+					a.Export = scrub(string(b))
+				}
+			}
 			if b, err := os.ReadFile(filepath.Join(d, "lock.json")); err == nil {
 				a.Lock = compact(b)
 			}
@@ -129,6 +149,14 @@ func finished(root string, names []string) ([]attempt, error) {
 // home is the user's home directory, which Harbor writes into paths and
 // stack traces. Fixtures are committed, and the reader never reads them.
 var home, _ = os.UserHomeDir()
+
+// scrub writes the home directory as ~ in a file kept as text.
+func scrub(s string) string {
+	if home == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, home, "~")
+}
 
 // compact returns a JSON file without its whitespace and with the home
 // directory written as ~, or nil if it is not JSON.

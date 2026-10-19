@@ -177,6 +177,14 @@ console reads, appears once the session exists:
 
 and gains `"finished": "<RFC3339>"` when the run ends.
 
+On a sandbox that does not mount the logs directory (Daytona, Modal),
+Harbor downloads `opencode.txt` only when the agent ends. Until then the
+agent copies the log's new bytes every 3 seconds, through `environment.exec`
+in base64 chunks of 256 KiB, into `<trial-dir>/agent/opencode-live.txt`, and
+the console reads its steps from there (else from the session export). On
+local Docker the log is in the trial directory already, and nothing is
+copied.
+
 ### A live view on local Docker
 
 For OpenCode's own TUI or web UI on a local Docker run, publish the proxy's
@@ -242,6 +250,8 @@ API (`exec`, `service_exec`, `upload_file`); it does not call `docker`:
    `opencode.txt` and Harbor's trajectory conversion are unchanged.
 5. Finds the session (`GET /session` from inside the container), writes
    `opencode-live.json`, and mirrors the session every 15 seconds (an export that is still running holds back the next).
+   Without a bind mount, also copies the event log's new bytes to
+   `opencode-live.txt` every 3 seconds.
 6. Afterwards, also on failure or timeout: marks the file finished, stops the
    server, exports the session once more and saves the proxy's log
    (`proxy.log`). Harbor's `compose down` removes the proxy.
