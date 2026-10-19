@@ -29,6 +29,7 @@ func (s *Server) trialRoutes() {
 	h("POST /api/trials/{job}/{trial}/retry", s.retryTrialJob)
 	h("GET /api/trials/{job}/{trial}", s.getTrialTrial)
 	h("GET /api/trials/{job}/{trial}/steps", s.getSteps)
+	h("GET /api/trials/{job}/{trial}/events", s.getTrialEvents)
 	h("GET /api/trials/{job}/{trial}/patch", s.getPatch)
 	h("GET /api/trials/{job}/{trial}/grade", s.getGrade)
 	h("GET /api/trials/{job}/{trial}/invariants", s.getInvariants)

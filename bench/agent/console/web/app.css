@@ -3868,3 +3868,19 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
   .vc-cols { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr); }
   .vc-k { border-top: 0; border-left: 1px solid var(--edge); }
 }
+
+/* Events tab: OpenCode's event log, a line per event. */
+.events { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.events-head { font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.events-head .run { color: var(--blue); margin-left: 6px; animation: run-pulse 1.6s ease-in-out infinite; }
+.events-list { flex: none; max-height: 60vh; overflow: auto; border: 1px solid var(--edge); border-radius: 6px; background: var(--sunken); }
+.event { border-bottom: 1px solid var(--edge); font-size: 12px; }
+.event:last-child { border-bottom: 0; }
+.event > summary { display: grid; grid-template-columns: 52px 92px minmax(0, 1fr); gap: 8px; padding: 4px 8px; cursor: pointer; list-style: none; }
+.event > summary::-webkit-details-marker { display: none; }
+.event > summary:hover { background: var(--hover); }
+.event-type { color: var(--peach); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.event-json { margin: 0; padding: 6px 8px 8px 68px; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; max-height: 40vh; overflow: auto; }
+.event.plain { padding: 4px 8px; white-space: pre-wrap; word-break: break-word; opacity: 0.75; }
+@media (prefers-reduced-motion: reduce) { .events-head .run { animation: none; } }

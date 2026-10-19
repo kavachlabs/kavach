@@ -3082,6 +3082,7 @@ function renderAttempt(t) {
     const tabs = [
       { id: "steps", label: "Steps", badge: shown.length },
       { id: "trail", label: "Kavach trail", badge: rounds ? `${rounds} round${rounds === 1 ? "" : "s"}` : null },
+      { id: "events", label: "Events", badge: evs.key === key && evs.lines.length ? evs.lines.length : null },
       hasInv ? { id: "invariants", label: "Invariants", badge: !last ? null : last.passed ? "pass" : trips ? `${trips} trip` : last.verdict.replace(/[(@].*$/, ""), tone: last && (last.passed ? "ok" : "bad") } : null,
     ].filter(Boolean);
     kids.push(h("div", { class: "aux-tabs insp-tabs", role: "tablist", "aria-label": "Attempt" },
@@ -3091,6 +3092,7 @@ function renderAttempt(t) {
       }, h("span", {}, x.label), x.badge != null ? h("span", { class: `aux-tab-badge ${x.tone || ""}` }, x.badge) : null))));
     const pick = (i) => { state.inspTab = "steps"; renderView(); requestAnimationFrame(() => showStep(i)); };
     if (tab === "invariants") kids.push(renderInvariants(t, checks));
+    else if (tab === "events") kids.push(renderEvents(t));
     else if (tab === "trail") kids.push(renderTrail(shown, pick, clock));
     else kids.push(renderScrubber(t, shown, clock), renderSteps(t, job));
   } else {
@@ -3102,6 +3104,123 @@ function renderAttempt(t) {
 }
 
 const KIND = { shell: "Shell", read: "Read", search: "Grep", edit: "Edit", mcp: "Tool", error: "Error" };
+
+// evs is the Events tab: the selected attempt's OpenCode event log, as
+// OpenCode wrote it, read from byte 0 of what the server tailed and then
+// followed every few seconds while the attempt runs.
+const evs = { key: "", source: "", next: -1, lines: [], skipped: false, err: "", busy: false, timer: 0, done: false };
+const EVENTS_EVERY = 3000;
+
+function renderEvents(t) {
+  const key = `${t.job}/${t.id}`;
+  if (evs.key !== key) {
+    clearTimeout(evs.timer);
+    Object.assign(evs, { key, source: "", next: -1, lines: [], skipped: false, err: "", busy: false, timer: 0, done: false });
+  }
+  const box = h("div", { class: "events", dataset: { key } });
+  if (!evs.busy && !evs.timer && !(evs.done && finished(t))) loadEvents(t);
+  fillEvents(box, t);
+  return box;
+}
+
+function fillEvents(box, t) {
+  box.replaceChildren();
+  const live = !finished(t);
+  if (evs.err) box.append(h("div", { class: "bad" }, `Couldn't load the events: ${evs.err}`));
+  if (!evs.source && !evs.err) {
+    box.append(h("div", { class: "dim" }, evs.next < 0 ? "Loading events…" : live ? "Waiting for OpenCode's first event…" : "This attempt has no OpenCode event log."));
+    return;
+  }
+  if (evs.source) {
+    box.append(h("div", { class: "events-head dim" },
+      h("span", { class: "m" }, evs.source), ` · ${evs.lines.length} event${evs.lines.length === 1 ? "" : "s"}`,
+      evs.skipped ? " · the log's last 256 KiB" : "",
+      live ? h("span", { class: "run" }, "following") : null));
+  }
+  const list = h("div", { class: "events-list" });
+  const t0 = firstEventTime();
+  evs.lines.forEach((line) => list.append(eventRow(line, t0)));
+  box.append(list);
+}
+
+function firstEventTime() {
+  for (const line of evs.lines) {
+    try { const e = JSON.parse(line); if (typeof e.timestamp === "number") return e.timestamp; } catch { /* not JSON */ }
+  }
+  return 0;
+}
+
+// eventRow is one line of the log: its time, type and a summary, opening
+// on the whole event.
+function eventRow(line, t0) {
+  let e = null;
+  try { e = JSON.parse(line); } catch { /* OpenCode also prints plain lines */ }
+  if (!e || typeof e !== "object") return h("div", { class: "event plain m" }, line);
+  const p = e.part || {};
+  const st = p.state || {};
+  let what = "";
+  if (p.tool) what = [p.tool, st.status, st.title || (st.input && (st.input.command || st.input.filePath || st.input.pattern))].filter(Boolean).join(" · ");
+  else if (typeof p.text === "string") what = p.text;
+  else if (e.error) what = typeof e.error === "string" ? e.error : (e.error.name || "") + (e.error.data && e.error.data.message ? `: ${e.error.data.message}` : "");
+  else if (p.tokens) what = `${p.tokens.input ?? 0} in · ${p.tokens.output ?? 0} out`;
+  const at = typeof e.timestamp === "number" && t0 ? clock((e.timestamp - t0) / 1000) : "";
+  const d = h("details", { class: "event" },
+    h("summary", {},
+      h("span", { class: "event-t m faint" }, at),
+      h("span", { class: "event-type m" }, e.type || "?"),
+      h("span", { class: "event-what" }, what.length > 160 ? what.slice(0, 160) + "…" : what)));
+  d.addEventListener("toggle", () => {
+    if (d.open && !d.querySelector("pre")) d.append(h("pre", { class: "event-json m" }, JSON.stringify(e, null, 2)));
+  });
+  return d;
+}
+
+async function loadEvents(t) {
+  const key = `${t.job}/${t.id}`;
+  evs.busy = true;
+  let ev = null;
+  try {
+    const from = evs.next >= 0 ? `?from=${evs.next}` : "";
+    ev = await api(`/trials/${encodeURIComponent(t.job)}/${encodeURIComponent(t.id)}/events${from}`);
+  } catch (e) {
+    if (evs.key === key) evs.err = e.message;
+  }
+  if (evs.key !== key) return;
+  evs.busy = false;
+  if (ev) {
+    evs.err = "";
+    // The live copy gives way to Harbor's log when the agent ends: start over on it.
+    if (evs.source && ev.source !== evs.source) {
+      Object.assign(evs, { source: "", next: -1, lines: [], skipped: false });
+      return loadEvents(t);
+    }
+    const grew = ev.lines.length > 0 || ev.source !== evs.source;
+    evs.source = ev.source;
+    evs.skipped = evs.skipped || !!ev.skipped;
+    evs.lines.push(...ev.lines);
+    evs.next = ev.next;
+    const box = document.querySelector(`.events[data-key="${CSS.escape(key)}"]`);
+    if (box && (grew || !evs.source)) {
+      const list = box.querySelector(".events-list");
+      const atEnd = !list || list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+      const open = new Set([...box.querySelectorAll("details.event")].map((d, i) => d.open ? i : -1).filter((i) => i >= 0));
+      fillEvents(box, t);
+      [...box.querySelectorAll("details.event")].forEach((d, i) => { if (open.has(i)) d.open = true; });
+      const nl = box.querySelector(".events-list");
+      if (nl && atEnd) nl.scrollTop = nl.scrollHeight;
+      const badge = document.querySelector(".insp-tabs .aux-tab.on .aux-tab-badge");
+      if (badge) badge.textContent = evs.lines.length;
+    }
+  }
+  const sel = selected();
+  const more = ev && ev.next < ev.size;
+  if (state.inspTab === "events" && sel && `${sel.job}/${sel.id}` === key && (more || !finished(sel))) {
+    evs.timer = setTimeout(() => { evs.timer = 0; const s = selected(); if (s && `${s.job}/${s.id}` === key && state.inspTab === "events") loadEvents(s); }, more ? 0 : EVENTS_EVERY);
+  } else {
+    evs.timer = 0;
+    evs.done = !!ev && !more && !!sel && finished(sel);
+  }
+}
 
 // renderSteps marks what it returns, list or placeholder, so patchSteps can
 // replace a placeholder alone.
