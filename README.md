@@ -105,9 +105,10 @@ only, not of the SDK.
 ## With an AI agent
 
 `kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server with five tools (`kavach_list_incidents`, `kavach_replay`,
-`kavach_diff`, `kavach_contract_show`, and `kavach_contract_check`) returning
-the same verdicts as the CLI as structured JSON:
+server with six tools (`kavach_list_incidents`, `kavach_replay`,
+`kavach_time_travel`, `kavach_diff`, `kavach_contract_show`, and
+`kavach_contract_check`) returning the same verdicts as the CLI as structured
+JSON:
 
 ```bash
 claude mcp add kavach -- kavach mcp

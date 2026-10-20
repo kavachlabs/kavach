@@ -27,6 +27,11 @@ the protocols directly.
    `kavach replay <fixture> --bin /tmp/old`. Expect `still_failing@N`, where `N`
    is the seq of the input that failed. If replay does not reproduce the
    failure, stop and report that; do not guess at a fix.
+   To inspect the service's live state right before or at the failing step, use
+   time-travel replay:
+   `kavach replay <fixture> --bin /tmp/old --until <seq> --probe <input>` (or
+   `--hold` to feed probe inputs line-by-line from stdin), or call
+   `kavach_time_travel` over MCP.
 3. **Fix the handler.** Change code, never the fixture.
 4. **Verify.**
    Make a host command for the changed code the same way (`/tmp/new`, or the
@@ -142,6 +147,7 @@ claude mcp add kavach -- kavach mcp
 | --- | --- | --- |
 | `kavach_list_incidents` | `dir` (default: working directory) | every `*.kavach` under it, with the recorded failure's kind, seq and message |
 | `kavach_replay` | `fixture`, `bin` (default `$KAVACH_BIN`), `include_steps` | `verdict`, `passed`, `detail`, `recorded_failure` |
+| `kavach_time_travel` | `fixture`, `bin` (default `$KAVACH_BIN`), `until`, `probes`, `include_steps` | `verdict`, `passed`, `until`, `held_at_seq`, and `probes` with each probe's outcome and outputs |
 | `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `regressions` (default 48, 0 skips), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants, and `regressions` with the same for regression variants |
 | `kavach_contract_show` | `dir` (default `./contract`) | the contract, every input with the feature steps marked, and the lock |
 | `kavach_contract_check` | `dir`, `new`, `old`, `no_variants` | `verdict`, `passed`, and `report`: changed and unreached steps, variant failures, `round` and `streak` |
