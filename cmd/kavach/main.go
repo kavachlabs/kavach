@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -35,17 +37,21 @@ Usage:
 
   kavach list    [dir] [--json]
   kavach inspect <fixture> [--json] [--full]
-  kavach replay  <fixture> --bin <host-command> [--json]
+  kavach replay  <fixture> --bin <host-command> [--until <seq>] [--probe <input>]... [--hold] [--json]
   kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--regressions N] [--keep DIR] [--json]
   kavach contract init|show|approve|check ...
   kavach mcp
   kavach version
 
 list finds fixtures (*.kavach) under dir (default: the current directory).
+replay re-runs a fixture; --until N stops after the last step with input seq <= N,
+--probe sends synthetic inputs to the held host at that point to inspect live
+state, and --hold reads further probe inputs line-by-line from stdin until EOF.
 contract checks a build against a behaviour contract when adding a feature;
 kavach contract help says more. mcp serves kavach_list_incidents,
-kavach_replay, kavach_diff, kavach_contract_show and kavach_contract_check to
-an AI agent as a Model Context Protocol server on stdin/stdout.
+kavach_replay, kavach_time_travel, kavach_diff, kavach_contract_show and
+kavach_contract_check to an AI agent as a Model Context Protocol server on
+stdin/stdout.
 
 A host command starts a service that runs its own handler under the host
 protocol (SPEC.md section 9), in any language: ./ledger, "python -m ledger",
@@ -98,7 +104,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "inspect":
 		return cmdInspect(u, args, stdout, stderr)
 	case "replay":
-		return cmdReplay(u, args, stdout, stderr)
+		return cmdReplay(u, args, os.Stdin, stdout, stderr)
 	case "diff":
 		return cmdDiff(u, args, stdout, stderr)
 	case "list":
@@ -316,8 +322,33 @@ func writeJSON(stdout, stderr io.Writer, v any) int {
 	return exitPass
 }
 
+type optionalUint64 struct {
+	set bool
+	val uint64
+}
+
+func (o *optionalUint64) String() string {
+	if !o.set {
+		return ""
+	}
+	return strconv.FormatUint(o.val, 10)
+}
+
+func (o *optionalUint64) Set(s string) error {
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return err
+	}
+	o.set, o.val = true, v
+	return nil
+}
+
 // replayWith replays the fixture at path through the host command bin.
 func replayWith(bin, fixture string) (*replay.Result, time.Duration, error) {
+	return replayWithOpts(bin, fixture, replay.Options{})
+}
+
+func replayWithOpts(bin, fixture string, opts replay.Options) (*replay.Result, time.Duration, error) {
 	if bin == "" {
 		return nil, 0, errors.New("no host command: pass --bin or set KAVACH_BIN")
 	}
@@ -326,13 +357,18 @@ func replayWith(bin, fixture string) (*replay.Result, time.Duration, error) {
 		return nil, 0, err
 	}
 	start := time.Now()
-	res, err := replay.RunHost(j, bin)
+	res, err := replay.RunHostWith(j, bin, opts)
 	return res, time.Since(start), err
 }
 
-func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
+func cmdReplay(u ui, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := newFlags("replay", stderr)
 	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "host command, e.g. ./ledger or \"python -m ledger\" (kavach-host is appended)")
+	var until optionalUint64
+	fs.Var(&until, "until", "stop replay after the last step with input seq <= N")
+	var probes stringList
+	fs.Var(&probes, "probe", "send a synthetic probe input to the held host after replay (may be repeated)")
+	hold := fs.Bool("hold", false, "hold the host open after replay and read probe inputs line-by-line from stdin until EOF")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -342,7 +378,35 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitUsage
 	}
-	res, wall, err := replayWith(*bin, path)
+	var opts replay.Options
+	if until.set {
+		uval := until.val
+		opts.Until = &uval
+	}
+	for _, p := range probes {
+		opts.Probes = append(opts.Probes, kavach.Input{Source: "probe", Data: []byte(p)})
+	}
+	if *hold {
+		opts.OnHold = func(probe func(kavach.Input) (replay.ProbeResult, error)) error {
+			sc := bufio.NewScanner(stdin)
+			sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for sc.Scan() {
+				line := sc.Text()
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				pr, err := probe(kavach.Input{Source: "probe", Data: []byte(line)})
+				if err != nil {
+					return err
+				}
+				if pr.Crash != "" || pr.Timeout != "" {
+					break
+				}
+			}
+			return sc.Err()
+		}
+	}
+	res, wall, err := replayWithOpts(*bin, path, opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "kavach replay: %v\n", err)
 		return exitError
@@ -358,6 +422,14 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		u.header(stdout, "KAVACH DETERMINISTIC REPLAY")
 		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
 		fmt.Fprintf(stdout, "%s%s · start %s · %d records · %d steps replayed\n", u.label("service", 10), res.Service, res.Start, res.Records, len(res.Steps))
+		if res.Until != nil {
+			if len(res.Steps) > 0 {
+				last := res.Steps[len(res.Steps)-1].Seq
+				fmt.Fprintf(stdout, "%sseq %d (stopped at step seq %d)\n", u.label("until", 10), *res.Until, last)
+			} else {
+				fmt.Fprintf(stdout, "%sseq %d (no steps <= %d)\n", u.label("until", 10), *res.Until, *res.Until)
+			}
+		}
 		if res.Variant != "" {
 			fmt.Fprintf(stdout, "%s%s\n", u.label("variant", 10), u.paint(res.Variant, ansiYellow))
 		} else if f := res.Recorded; f != nil {
@@ -372,6 +444,7 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		if n := synthesized(res); n > 0 {
 			fmt.Fprintf(stdout, "%s%d reads past the recorded failure were synthesized from no record\n", u.label("note", 10), n)
 		}
+		printProbes(u, stdout, res)
 		printEnvironment(u, stdout, res)
 		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms (including process start)", ms(wall)), ansiYellow))
 		if u.color && res.Status == replay.StatusStillFailing {
@@ -382,6 +455,20 @@ func cmdReplay(u ui, args []string, stdout, stderr io.Writer) int {
 		return exitPass
 	}
 	return exitFail
+}
+
+func printProbes(u ui, stdout io.Writer, res *replay.Result) {
+	for i, p := range res.Probes {
+		label := fmt.Sprintf("probe %d", i+1)
+		status := u.paint("ok", ansiBold, ansiGreen)
+		if p.Outcome() != "ok" {
+			status = u.paint(p.FailureDetail(), ansiBold, ansiRed)
+		}
+		fmt.Fprintf(stdout, "%s%s -> %s\n", u.label(label, 10), showData(p.Input, 80), status)
+		for _, o := range p.Outputs {
+			fmt.Fprintf(stdout, "          %s  %s\n", u.paint(o.Sink, ansiBold), showData(o.Data, 160))
+		}
+	}
 }
 
 // printEnvironment shows how the replay's environment differs from production's

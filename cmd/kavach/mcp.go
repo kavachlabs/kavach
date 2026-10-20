@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
+	"unicode/utf8"
 
 	"github.com/kavachlabs/kavach/contract"
 	"github.com/kavachlabs/kavach/replay"
@@ -23,7 +25,7 @@ const mcpLatestVersion = "2025-06-18"
 var mcpVersions = []string{mcpLatestVersion, "2025-03-26", "2024-11-05"}
 
 const mcpInstructions = `Kavach replays production crashes of journal-driven services from fixture files (*.kavach) and verifies fixes.
-Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.
+Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; kavach_time_travel to replay up to a step N and send probe inputs to inspect live state before or at the failure; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.
 Building a feature against a contract (a contract/ directory from kavach contract init): kavach_contract_show shows it; a person approves it, never you; kavach_contract_check checks a build. Only "pass" passes. regression@N: a step outside the feature changed. changed steps: read each against the spec. Stop and report after the same outcome three rounds in a row (streak 3). Never edit the contract to make a check pass.`
 
 type rpcRequest struct {
@@ -197,6 +199,26 @@ var mcpTools = []map[string]any{
 		"annotations": map[string]any{"readOnlyHint": true},
 	},
 	{
+		"name":  "kavach_time_travel",
+		"title": "Time-travel replay and inspect live state",
+		"description": "Replay a fixture through a host command up to a given input seq (inclusive), hold the host there, and execute synthetic probe inputs against its live state. " +
+			"Use this to inspect or query the service's in-memory state right before or at a crash (for example, sending read/status commands or diagnostic requests after step N). " +
+			"Each call replays from the start of the fixture to until and runs the given probes in order, so probes cannot corrupt state for later calls.",
+		"inputSchema": obj(map[string]any{
+			"fixture": str("path to the .kavach fixture"),
+			"bin":     str("host command, e.g. ./ledger or \"python -m ledger\"; defaults to $KAVACH_BIN"),
+			"until": map[string]any{"type": "integer", "minimum": 0,
+				"description": "stop replay after the last step whose input seq is <= until; omit to replay the full fixture before running probes"},
+			"probes": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "synthetic inputs to send to the held host after replay stops, in order",
+			},
+			"include_steps": map[string]any{"type": "boolean", "description": "also return every replayed step's outputs"},
+		}, "fixture"),
+		"annotations": map[string]any{"readOnlyHint": true},
+	},
+	{
 		"name":  "kavach_diff",
 		"title": "Verify a fix",
 		"description": "Verify a candidate fix: replay the fixture with the old (failing) and new binaries, then check the new binary against variants of the incident on which the old one fails the same way. " +
@@ -240,6 +262,7 @@ var mcpTools = []map[string]any{
 var mcpHandlers = map[string]func(json.RawMessage) (map[string]any, error){
 	"kavach_list_incidents": mcpListIncidents,
 	"kavach_replay":         mcpReplay,
+	"kavach_time_travel":    mcpTimeTravel,
 	"kavach_diff":           mcpDiff,
 	"kavach_contract_show":  mcpContractShow,
 	"kavach_contract_check": mcpContractCheck,
@@ -290,8 +313,87 @@ func mcpReplay(raw json.RawMessage) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return replayReport(a.Fixture, res, wall, a.IncludeSteps), nil
+}
+
+func mcpTimeTravel(raw json.RawMessage) (map[string]any, error) {
+	var a struct {
+		Fixture      string   `json:"fixture"`
+		Bin          string   `json:"bin"`
+		Until        *uint64  `json:"until"`
+		Probes       []string `json:"probes"`
+		IncludeSteps bool     `json:"include_steps"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	if a.Fixture == "" {
+		return nil, errors.New("fixture is required")
+	}
+	if a.Bin == "" {
+		a.Bin = os.Getenv("KAVACH_BIN")
+	}
+	opts := replay.Options{Until: a.Until}
+	for _, p := range a.Probes {
+		opts.Probes = append(opts.Probes, kavach.Input{Source: "probe", Data: []byte(p)})
+	}
+	res, wall, err := replayWithOpts(a.Bin, a.Fixture, opts)
+	if err != nil {
+		return nil, err
+	}
+	out := replayReport(a.Fixture, res, wall, a.IncludeSteps)
+	if res.Until != nil {
+		out["until"] = *res.Until
+	}
+	if len(res.Steps) > 0 {
+		out["held_at_seq"] = res.Steps[len(res.Steps)-1].Seq
+	}
+	probes := make([]map[string]any, len(res.Probes))
+	for i, p := range res.Probes {
+		outs := make([]map[string]any, len(p.Outputs))
+		for j, o := range p.Outputs {
+			om := map[string]any{"sink": o.Sink, "data": o.Data}
+			if utf8.Valid(o.Data) {
+				om["text"] = string(o.Data)
+			}
+			outs[j] = om
+		}
+		pm := map[string]any{
+			"seq":     p.Seq,
+			"input":   string(p.Input),
+			"outcome": p.Outcome(),
+			"outputs": outs,
+		}
+		if p.Panic != "" {
+			pm["panic"] = p.Panic
+		}
+		if p.Error != "" {
+			pm["error"] = p.Error
+		}
+		if p.Invariant != "" {
+			pm["invariant"] = p.Invariant
+		}
+		if p.Detail != "" {
+			pm["detail"] = p.Detail
+		}
+		if p.Crash != "" {
+			pm["crash"] = p.Crash
+		}
+		if p.Timeout != "" {
+			pm["timeout"] = p.Timeout
+		}
+		if p.Synthesized > 0 {
+			pm["synthesized_reads"] = p.Synthesized
+		}
+		probes[i] = pm
+	}
+	out["probes"] = probes
+	return out, nil
+}
+
+func replayReport(fixture string, res *replay.Result, wall time.Duration, includeSteps bool) map[string]any {
 	out := map[string]any{
-		"fixture": a.Fixture, "verdict": res.String(), "passed": res.Passed(), "status": res.Status,
+		"fixture": fixture, "verdict": res.String(), "passed": res.Passed(), "status": res.Status,
 		"detail": res.Detail, "service": res.Service, "start": res.Start, "records": res.Records,
 		"steps_replayed": len(res.Steps), "synthesized_reads": synthesized(res), "wall_ms": ms(wall),
 	}
@@ -310,10 +412,10 @@ func mcpReplay(raw json.RawMessage) (map[string]any, error) {
 	if len(res.EnvChanges) > 0 {
 		out["environment_changes"] = res.EnvChanges
 	}
-	if a.IncludeSteps {
+	if includeSteps {
 		out["steps"] = res.Steps
 	}
-	return out, nil
+	return out
 }
 
 func mcpDiff(raw json.RawMessage) (map[string]any, error) {

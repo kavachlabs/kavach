@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/kavachlabs/kavach/journal"
@@ -61,12 +62,71 @@ type StepResult struct {
 	Synthesized int `json:"synthesized_reads,omitempty"`
 }
 
+// ProbeResult is what one synthetic probe input produced when run against a
+// held handler after replay.
+type ProbeResult struct {
+	Seq         uint64          `json:"seq"`
+	Source      string          `json:"source,omitempty"`
+	Position    string          `json:"position,omitempty"`
+	Input       []byte          `json:"input"`
+	Outputs     []kavach.Output `json:"outputs"`
+	Panic       string          `json:"panic,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Invariant   string          `json:"invariant,omitempty"`
+	Detail      string          `json:"detail,omitempty"`
+	Crash       string          `json:"crash,omitempty"`
+	Timeout     string          `json:"timeout,omitempty"`
+	Synthesized int             `json:"synthesized_reads,omitempty"`
+}
+
+// Outcome returns a short name for what happened in the probe step: "ok",
+// "panic", "error", "invariant", "crash", or "timeout".
+func (p ProbeResult) Outcome() string {
+	switch {
+	case p.Crash != "":
+		return "crash"
+	case p.Timeout != "":
+		return "timeout"
+	case p.Panic != "":
+		return "panic"
+	case p.Error != "":
+		return "error"
+	case p.Invariant != "":
+		return "invariant"
+	default:
+		return "ok"
+	}
+}
+
+// FailureDetail formats the failure message for a non-ok probe outcome, or
+// returns "" when Outcome() is "ok".
+func (p ProbeResult) FailureDetail() string {
+	switch {
+	case p.Crash != "":
+		return "crash: " + p.Crash
+	case p.Timeout != "":
+		return "timeout: " + p.Timeout
+	case p.Panic != "":
+		return "panic: " + p.Panic
+	case p.Error != "":
+		return "error: " + p.Error
+	case p.Invariant != "":
+		if p.Detail != "" {
+			return fmt.Sprintf("invariant %s: %s", p.Invariant, p.Detail)
+		}
+		return "invariant " + p.Invariant
+	default:
+		return ""
+	}
+}
+
 // Result is the outcome of replaying a journal. It contains no timings or other
 // run-dependent values: replaying the same journal against the same handler
 // produces an identical Result.
 type Result struct {
 	Status    Status       `json:"status"`
-	Seq       *uint64      `json:"seq,omitempty"` // where Status applies, if anywhere
+	Seq       *uint64      `json:"seq,omitempty"`   // where Status applies, if anywhere
+	Until     *uint64      `json:"until,omitempty"` // step seq limit when replayed with Options.Until
 	Invariant string       `json:"invariant,omitempty"`
 	Detail    string       `json:"detail,omitempty"`
 	Service   string       `json:"service"`
@@ -75,6 +135,9 @@ type Result struct {
 	Recorded  *Failure     `json:"recorded_failure,omitempty"`
 	Variant   string       `json:"variant,omitempty"` // the mutation, when replaying a variant journal
 	Steps     []StepResult `json:"steps"`
+	// Probes holds the outcomes of synthetic probe steps run after replay
+	// stopped (Options.Probes and Options.OnHold).
+	Probes []ProbeResult `json:"probes,omitempty"`
 	// Drift and EnvChanges explain a status; they never change it (SPEC.md §6.2).
 	// Drift is set only when the replay ran in a host process that reported its
 	// environment.
@@ -104,6 +167,18 @@ type Options struct {
 	// steps read leniently, and outputs that differ from the recorded ones are
 	// reported in Result.Changed instead of stopping the replay.
 	Features map[uint64]bool
+	// Until stops replay after the last step whose input seq is <= *Until.
+	// When nil, every step in the journal is replayed.
+	Until *uint64
+	// Probes are synthetic inputs executed leniently against the held handler
+	// after replay stops (at *Until or at the end of the journal). Their
+	// outcomes are recorded in Result.Probes without altering Result.Status.
+	Probes []kavach.Input
+	// OnHold, if non-nil, is called while the handler/host is held open after
+	// replay and any Probes have run. Calling probe executes another synthetic
+	// input leniently against the held handler and appends its outcome to
+	// Result.Probes. The host is closed when OnHold returns.
+	OnHold func(probe func(kavach.Input) (ProbeResult, error)) error
 }
 
 // String formats the status as an agent-facing verdict, e.g. "diverged@12",
@@ -137,6 +212,7 @@ type step struct {
 	outputs  []kavach.Output
 	marker   *journal.Record  // failure marker, if any
 	envAfter []journal.Record // environment records written after the step
+	lastSeq  uint64           // highest record seq in the step
 }
 
 // Replay re-runs every step of j against a fresh handler from newHandler,
@@ -167,7 +243,13 @@ func RunWith(j *journal.Journal, newHandler func() kavach.Handler, opts Options)
 // replayJournal is the replay engine. open creates the handler the journal
 // starts from; snapshot is nil unless the journal starts from one.
 func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) (kavach.Handler, error)) (*Result, error) {
-	res := &Result{Service: j.Header.Meta.Service, Start: j.Header.Meta.Start, Records: len(j.Records), Steps: []StepResult{}}
+	res := &Result{
+		Service: j.Header.Meta.Service,
+		Start:   j.Header.Meta.Start,
+		Records: len(j.Records),
+		Until:   opts.Until,
+		Steps:   []StepResult{},
+	}
 	// A variant never happened, so it has no recorded outputs to match and its
 	// recorded reads are only a source of plausible values: every step is lenient.
 	variant := j.Header.Meta.Variant != nil
@@ -199,10 +281,17 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		}
 	}
 	hist := newHistory()
+	var lastSeq uint64
 	if g := genesisEnv(recs); g != nil {
 		hist.addFacts(*g)
+		if g.Seq > lastSeq {
+			lastSeq = g.Seq
+		}
 	}
 	for _, st := range steps {
+		if opts.Until != nil && st.input.Seq > *opts.Until {
+			break
+		}
 		for _, e := range st.envAfter {
 			res.EnvChanges = append(res.EnvChanges, newEnvChange(st.input.Seq, e))
 		}
@@ -218,14 +307,112 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		}
 	}
 	env := &replayEnv{hist: hist}
+
+	runProbes := func() error {
+		if len(opts.Probes) == 0 && opts.OnHold == nil {
+			return nil
+		}
+		nextSeq := lastSeq
+		probeIdx := 0
+		dead := false
+		runOne := func(in kavach.Input) (ProbeResult, error) {
+			if dead {
+				return ProbeResult{}, errors.New("kavach: host is no longer running")
+			}
+			nextSeq++
+			probeIdx++
+			source := in.Source
+			if source == "" {
+				source = "probe"
+			}
+			pos := in.Position
+			if pos == "" {
+				pos = strconv.Itoa(probeIdx)
+			}
+			pst := &step{input: journal.Record{Seq: nextSeq, Source: source, Position: pos, Data: in.Data}}
+			env.reset(pst, true)
+			pv, panicked, herr := runReplayStep(h, env, kavach.Input{Source: source, Position: pos, Data: in.Data})
+			pr := ProbeResult{
+				Seq:         nextSeq,
+				Source:      source,
+				Position:    pos,
+				Input:       clone(in.Data),
+				Outputs:     orNone(append([]kavach.Output{}, env.outs...)),
+				Synthesized: env.synthesized,
+			}
+			if hf, ok := pv.(hostFailure); ok && panicked {
+				dead = true
+				return ProbeResult{}, hf.err
+			}
+			if hc, ok := pv.(hostCrash); ok && panicked {
+				dead = true
+				pr.Crash = string(hc)
+				res.Probes = append(res.Probes, pr)
+				return pr, nil
+			}
+			if ht, ok := pv.(hostTimeout); ok && panicked {
+				dead = true
+				pr.Timeout = string(ht)
+				res.Probes = append(res.Probes, pr)
+				return pr, nil
+			}
+			if panicked {
+				pr.Panic = fmt.Sprint(pv)
+				res.Probes = append(res.Probes, pr)
+				return pr, nil
+			}
+			if herr != nil {
+				pr.Error = herr.Error()
+				res.Probes = append(res.Probes, pr)
+				return pr, nil
+			}
+			if name, ierr := kavach.CheckInvariants(h); ierr != nil {
+				pr.Invariant = name
+				pr.Detail = ierr.Error()
+			}
+			res.Probes = append(res.Probes, pr)
+			return pr, nil
+		}
+		for _, in := range opts.Probes {
+			pr, err := runOne(in)
+			if err != nil {
+				return err
+			}
+			if pr.Crash != "" || pr.Timeout != "" {
+				return nil
+			}
+		}
+		if opts.OnHold != nil && !dead {
+			if err := opts.OnHold(runOne); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	reachedFailure := false
 	for _, st := range steps {
 		seq := st.input.Seq
+		if opts.Until != nil && seq > *opts.Until {
+			break
+		}
+		if st.marker != nil {
+			reachedFailure = true
+		}
+		if st.lastSeq > lastSeq {
+			lastSeq = st.lastSeq
+		}
 		feature := opts.Features[seq]
 		env.reset(st, variant || st.marker != nil || feature)
 		sr := StepResult{Seq: seq}
 		pv, panicked, herr := runReplayStep(h, env, kavach.Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
 		sr.Outputs = append([]kavach.Output{}, env.outs...)
 		sr.Synthesized = env.synthesized
+		for _, r := range st.reads {
+			if r.Type == journal.TypeClock {
+				env.lastClock = r.UnixNanos
+			}
+		}
 
 		if nd, ok := pv.(nondeterminism); ok && panicked {
 			res.Steps = append(res.Steps, sr)
@@ -247,12 +434,20 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		if panicked {
 			sr.Panic = fmt.Sprint(pv)
 			res.Steps = append(res.Steps, sr)
-			return res.set(StatusStillFailing, seq, "panic: "+sr.Panic), nil
+			res.set(StatusStillFailing, seq, "panic: "+sr.Panic)
+			if err := runProbes(); err != nil {
+				return nil, err
+			}
+			return res, nil
 		}
 		if herr != nil {
 			sr.Error = herr.Error()
 			res.Steps = append(res.Steps, sr)
-			return res.set(StatusStillFailing, seq, "error: "+sr.Error), nil
+			res.set(StatusStillFailing, seq, "error: "+sr.Error)
+			if err := runProbes(); err != nil {
+				return nil, err
+			}
+			return res, nil
 		}
 		res.Steps = append(res.Steps, sr)
 		if !env.lenient && env.pos < len(env.reads) {
@@ -261,7 +456,11 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		}
 		if name, ierr := kavach.CheckInvariants(h); ierr != nil {
 			res.Invariant = name
-			return res.set(StatusInvariantViolated, seq, ierr.Error()), nil
+			res.set(StatusInvariantViolated, seq, ierr.Error())
+			if err := runProbes(); err != nil {
+				return nil, err
+			}
+			return res, nil
 		}
 		if st.marker == nil && !variant {
 			d := diffOutputs(st.outputs, sr.Outputs)
@@ -271,15 +470,22 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 			case feature:
 				res.Unreached = append(res.Unreached, seq)
 			case d != "":
-				return res.set(StatusDiverged, seq, d), nil
+				res.set(StatusDiverged, seq, d)
+				if err := runProbes(); err != nil {
+					return nil, err
+				}
+				return res, nil
 			}
 		}
 		hist.addStep(st)
 	}
-	if res.Recorded != nil {
+	if res.Recorded != nil && reachedFailure {
 		res.Status = StatusFixed
 	} else {
 		res.Status = StatusOK
+	}
+	if err := runProbes(); err != nil {
+		return nil, err
 	}
 	return res, nil
 }
@@ -303,25 +509,31 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 		rec := recs[i]
 		switch rec.Type {
 		case journal.TypeInput:
-			cur = &step{input: rec}
+			cur = &step{input: rec, lastSeq: rec.Seq}
 			steps = append(steps, cur)
 		case journal.TypeClock, journal.TypeRand, journal.TypeGateway, journal.TypeConfig:
 			if cur == nil {
 				return nil, fmt.Errorf("kavach: %s record at seq %d precedes the first input", rec.Type, rec.Seq)
 			}
 			cur.reads = append(cur.reads, rec)
+			cur.lastSeq = rec.Seq
 		case journal.TypeOutput:
 			if cur == nil {
 				return nil, fmt.Errorf("kavach: output record at seq %d precedes the first input", rec.Seq)
 			}
 			cur.outputs = append(cur.outputs, kavach.Output{Sink: rec.Sink, Data: rec.Data})
+			cur.lastSeq = rec.Seq
 		case journal.TypeEnvironment:
 			if cur != nil {
 				cur.envAfter = append(cur.envAfter, rec)
+				cur.lastSeq = rec.Seq
 			}
 		case journal.TypeMarker:
-			if cur != nil && cur.marker == nil && isFailure(rec.Kind) {
-				cur.marker = &recs[i]
+			if cur != nil {
+				cur.lastSeq = rec.Seq
+				if cur.marker == nil && isFailure(rec.Kind) {
+					cur.marker = &recs[i]
+				}
 			}
 		}
 	}

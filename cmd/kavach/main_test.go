@@ -80,3 +80,35 @@ func TestUsageErrors(t *testing.T) {
 		t.Fatalf("missing bin: %d %s", code, errs)
 	}
 }
+
+func TestReplayUntilAndProbesCLI(t *testing.T) {
+	host, work := storeContract(t)
+	traffic := work + "/traffic.kavach"
+
+	// Replay up to seq 3 (after SET greeting=hello at seq 1 and SET n=41 at seq 3),
+	// probe GET greeting via --probe and GET n via --hold stdin.
+	var out, errb bytes.Buffer
+	u := newUI(&out, true)
+	stdin := strings.NewReader("{\"argv\":[\"GET\",\"n\"]}\n")
+	code := cmdReplay(u, []string{
+		traffic, "--bin", host + " base", "--until", "3",
+		"--probe", `{"argv":["GET","greeting"]}`, "--hold",
+	}, stdin, &out, &errb)
+	if code != exitPass {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{
+		"2 steps replayed",
+		"until     seq 3 (stopped at step seq 3)",
+		"result    ok",
+		`probe 1   {"argv":["GET","greeting"]} -> ok`,
+		"reply  hello",
+		`probe 2   {"argv":["GET","n"]} -> ok`,
+		"reply  41",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}

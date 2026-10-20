@@ -61,7 +61,7 @@ func TestMCPProtocol(t *testing.T) {
 			t.Fatalf("tool %v", tm)
 		}
 	}
-	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_diff,kavach_contract_show,kavach_contract_check" {
+	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_time_travel,kavach_diff,kavach_contract_show,kavach_contract_check" {
 		t.Fatalf("tools: %v", names)
 	}
 	for i, code := range map[int]float64{3: rpcMethodNotFound, 4: rpcParseError, 6: rpcInvalidParams} {
@@ -88,6 +88,8 @@ func toolOutput(t *testing.T, resp map[string]any) (map[string]any, string, bool
 
 func TestMCPTools(t *testing.T) {
 	t.Setenv("KAVACH_BIN", "")
+	host, work := storeContract(t)
+	traffic := work + "/traffic.kavach"
 	resps := mcpSession(t,
 		call(1, "kavach_list_incidents", `{"dir":"../../examples"}`),
 		call(2, "kavach_replay", `{"fixture":"`+fixture+`"}`),
@@ -96,6 +98,7 @@ func TestMCPTools(t *testing.T) {
 		call(5, "kavach_diff", `{"fixture":"`+fixture+`","old":"x","new":"y","variants":-1}`),
 		call(6, "kavach_list_incidents", `{"dir":"/does/not/exist"}`),
 		call(7, "kavach_diff", `{"fixture":"`+fixture+`","old":"x","new":"y","regressions":-1}`),
+		call(8, "kavach_time_travel", `{"fixture":"`+traffic+`","bin":"`+host+` base","until":3,"probes":["{\"argv\":[\"GET\",\"greeting\"]}"],"include_steps":true}`),
 	)
 	sc, text, isErr := toolOutput(t, resps[0])
 	incs := sc["incidents"].([]any)
@@ -113,6 +116,19 @@ func TestMCPTools(t *testing.T) {
 		if !isErr || !strings.Contains(text, want) {
 			t.Fatalf("call %d: isError=%v %q, want %q", i+1, isErr, text, want)
 		}
+	}
+	ttSC, ttText, ttErr := toolOutput(t, resps[7])
+	if ttErr || ttSC["verdict"] != "ok" || ttSC["steps_replayed"] != 2.0 || ttSC["held_at_seq"] != 3.0 {
+		t.Fatalf("time_travel: err=%v %s", ttErr, ttText)
+	}
+	probes := ttSC["probes"].([]any)
+	if len(probes) != 1 {
+		t.Fatalf("probes: %v", probes)
+	}
+	p0 := probes[0].(map[string]any)
+	outs := p0["outputs"].([]any)
+	if p0["outcome"] != "ok" || len(outs) != 1 || outs[0].(map[string]any)["text"] != "hello" {
+		t.Fatalf("probe 0: %v", p0)
 	}
 }
 

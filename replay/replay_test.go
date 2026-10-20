@@ -445,6 +445,68 @@ func TestKavachtest(t *testing.T) {
 	kavachtest.Run(t, filepath.Join(filepath.Dir(path), "*.kavach"), fixedWallet)
 }
 
+func TestTimeTravelUntilAndProbes(t *testing.T) {
+	path := recordCrash(t)
+	j, err := journal.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inputs are at seq 1 ("alice:10"), 5 ("bob:5"), 9 ("alice:7"), 13 ("bob:null").
+	until := uint64(9)
+	var heldProbes []replay.ProbeResult
+	res, err := replay.RunWith(j, newWallet, replay.Options{
+		Until: &until,
+		Probes: []kavach.Input{
+			{Data: []byte("alice:0")},
+			{Data: []byte("bob:0")},
+		},
+		OnHold: func(probe func(kavach.Input) (replay.ProbeResult, error)) error {
+			p1, err := probe(kavach.Input{Data: []byte("alice:-20")})
+			if err != nil {
+				return err
+			}
+			p2, err := probe(kavach.Input{Data: []byte("bob:null")})
+			if err != nil {
+				return err
+			}
+			heldProbes = []replay.ProbeResult{p1, p2}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stopping before the recorded failure at seq 13 means the failure was not
+	// reached, so Status is ok rather than fixed.
+	if res.Status != replay.StatusOK || res.Until == nil || *res.Until != 9 || len(res.Steps) != 3 {
+		t.Fatalf("status=%s until=%v steps=%d", res.Status, res.Until, len(res.Steps))
+	}
+	if len(res.Probes) != 4 || len(heldProbes) != 2 {
+		t.Fatalf("probes = %+v", res.Probes)
+	}
+	// Probe 1 queries alice's live balance after seq 9 (10 + 7 = 17) at the
+	// last recorded timestamp of step 9.
+	if res.Probes[0].Outcome() != "ok" || len(res.Probes[0].Outputs) != 1 ||
+		!strings.HasPrefix(string(res.Probes[0].Outputs[0].Data), "alice=17 at 1700000000003000000 id ") ||
+		res.Probes[0].Synthesized != 2 {
+		t.Fatalf("probe 0 = %+v", res.Probes[0])
+	}
+	// Probe 2 queries bob's live balance (5).
+	if res.Probes[1].Outcome() != "ok" || len(res.Probes[1].Outputs) != 1 ||
+		!strings.HasPrefix(string(res.Probes[1].Outputs[0].Data), "bob=5 at 1700000000003000000 id ") {
+		t.Fatalf("probe 1 = %+v", res.Probes[1])
+	}
+	// Probe 3 from OnHold violates balance_non_negative.
+	if res.Probes[2].Outcome() != "invariant" || res.Probes[2].Invariant != "balance_non_negative" ||
+		!strings.Contains(res.Probes[2].FailureDetail(), "alice has balance -3") {
+		t.Fatalf("probe 2 = %+v", res.Probes[2])
+	}
+	// Probe 4 from OnHold panics, captured on the probe without changing res.Status.
+	if res.Probes[3].Outcome() != "panic" || !strings.Contains(res.Probes[3].FailureDetail(), "panic:") || res.Status != replay.StatusOK {
+		t.Fatalf("probe 3 = %+v, status=%s", res.Probes[3], res.Status)
+	}
+}
+
 func BenchmarkRecorderStep(b *testing.B) {
 	opts := kavach.Options{Service: "bench", Dir: b.TempDir(), Rand: rand.New(rand.NewSource(1))}
 	r := kavach.NewRecorder(benchHandler{}, opts)

@@ -15,6 +15,7 @@ import (
 	"github.com/kavachlabs/kavach/internal/testrecorder"
 	"github.com/kavachlabs/kavach/journal"
 	"github.com/kavachlabs/kavach/replay"
+	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 func TestSplitCommand(t *testing.T) {
@@ -211,5 +212,46 @@ func TestReplayHostFailures(t *testing.T) {
 		if res, err := replay.RunHost(j, c.cmd); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, %v; want an error with %q", name, res, err, c.want)
 		}
+	}
+}
+
+func TestReplayHostTimeTravelAndProbes(t *testing.T) {
+	bin := conformanceHost(t)
+	j := hostJournal(nil,
+		opsInput(`[{"op":"clock"},{"op":"config","key":"mode"},{"op":"count","n":10}]`),
+		journal.Record{Type: journal.TypeClock, UnixNanos: 1234},
+		journal.Record{Type: journal.TypeConfig, Key: "mode", Present: true, Value: []byte("live")},
+		trace(`{"clock":"1234"}`), trace("live"),
+		opsInput(`[{"op":"count","n":20}]`),
+		opsInput(`[{"op":"panic","message":"crash at step 3"}]`),
+		marker(journal.MarkerPanic, "crash at step 3"),
+	)
+	// Step 1 is at seq 1, step 2 is at seq 6, step 3 (panic) is at seq 7.
+	until := uint64(6)
+	res, err := replay.RunHostWith(j, bin, replay.Options{
+		Until: &until,
+		Probes: []kavach.Input{
+			{Data: []byte(`[{"op":"clock"},{"op":"config","key":"mode"}]`)},
+		},
+		OnHold: func(probe func(kavach.Input) (replay.ProbeResult, error)) error {
+			// After step 1 (count += 10 + 1 = 11), step 2 (count += 20 + 1 = 32),
+			// and probe 1 (count += 1 = 33), adding 966 + 1 = 1000 triggers below_limit.
+			_, err := probe(kavach.Input{Data: []byte(`[{"op":"count","n":966}]`)})
+			return err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != replay.StatusOK || len(res.Steps) != 2 || len(res.Probes) != 2 {
+		t.Fatalf("res = %s, steps=%d, probes=%+v", res, len(res.Steps), res.Probes)
+	}
+	if res.Probes[0].Outcome() != "ok" || len(res.Probes[0].Outputs) != 2 ||
+		string(res.Probes[0].Outputs[0].Data) != `{"clock":"1234"}` ||
+		string(res.Probes[0].Outputs[1].Data) != "live" {
+		t.Fatalf("probe 0 = %+v", res.Probes[0])
+	}
+	if res.Probes[1].Outcome() != "invariant" || res.Probes[1].Invariant != "below_limit" {
+		t.Fatalf("probe 1 = %+v", res.Probes[1])
 	}
 }
