@@ -1,0 +1,22 @@
+{
+  "spec": "../SPEC.md",
+  "feature_steps": [
+    23,
+    25,
+    35,
+    39,
+    47,
+    65,
+    67,
+    69,
+    71
+  ],
+  "invariants": [
+    "keys-never-on-disk",
+    "runs-stay-with-their-starter",
+    "keys-forgotten-on-restart"
+  ],
+  "invariant_sources": [
+    "../../../../sessions_kavach.go"
+  ]
+}

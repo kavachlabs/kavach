@@ -55,5 +55,5 @@ copy the new bench binary beside the old one and rename it into place
 (`scp /tmp/bench-linux root@VM:/opt/kavach/bin/bench.new`, then on the VM
 `mv /opt/kavach/bin/bench.new /opt/kavach/bin/bench`: each run's log helper
 is that executable, so it must not be overwritten in place), then
-`systemctl restart bench-trial`. Runs in progress keep going; sessions are
-in memory, so visitors enter their keys again.
+`systemctl restart bench-trial`. Runs in progress keep going and sessions
+survive, but keys are in memory only, so visitors enter theirs again.
