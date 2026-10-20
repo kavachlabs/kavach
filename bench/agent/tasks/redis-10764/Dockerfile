@@ -13,16 +13,12 @@ ARG BASE=843a4cdc075a5b251e1b154f8013a9e0abe1038b
 FROM golang:1.23-bookworm AS tools
 RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY go.mod go.sum ./
-COPY cmd cmd
-COPY contract contract
-COPY internal internal
-COPY journal journal
-COPY replay replay
-COPY sdk/go sdk/go
 COPY sdk/c sdk/c
-ENV GOWORK=off CGO_ENABLED=0
-RUN go build -o /out/bin/kavach ./cmd/kavach && go build -o /out/bin/kavach-recorder ./cmd/kavach-recorder
+# kavach and kavach-recorder from the v0.1.3 release, installed as a user
+# installs them (scripts/install.sh, served at
+# https://www.thekavachlabs.com/install.sh).
+COPY scripts/install.sh /tmp/install.sh
+RUN KAVACH_VERSION=v0.1.3 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
 RUN cmake -S sdk/c -B /tmp/c -DCMAKE_BUILD_TYPE=Release -DKAVACH_BUILD_TESTS=OFF -DKAVACH_BUILD_EXAMPLES=OFF >/dev/null \
  && cmake --build /tmp/c --target kavach_static -j4 >/dev/null \
  && mkdir -p /out/sdk/c /out/lib && cp -r sdk/c/include /out/sdk/c/ && cp /tmp/c/libkavach.a /out/lib/

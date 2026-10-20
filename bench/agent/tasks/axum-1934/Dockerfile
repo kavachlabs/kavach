@@ -14,15 +14,11 @@ ARG BASE=e97462d45251c21ffd1ba4fb5db30f3cf6f6cb6c
 
 FROM golang:1.23-bookworm AS tools
 WORKDIR /src
-COPY go.mod go.sum ./
-COPY cmd cmd
-COPY contract contract
-COPY internal internal
-COPY journal journal
-COPY replay replay
-COPY sdk/go sdk/go
-ENV GOWORK=off CGO_ENABLED=0
-RUN go build -o /out/bin/kavach ./cmd/kavach && go build -o /out/bin/kavach-recorder ./cmd/kavach-recorder
+# kavach and kavach-recorder from the v0.1.3 release, installed as a user
+# installs them (scripts/install.sh, served at
+# https://www.thekavachlabs.com/install.sh).
+COPY scripts/install.sh /tmp/install.sh
+RUN KAVACH_VERSION=v0.1.3 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
 COPY sdk/rust/Cargo.toml sdk/rust/build.rs sdk/rust/README.md /out/sdk/rust/
 COPY sdk/rust/src /out/sdk/rust/src
 

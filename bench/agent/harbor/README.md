@@ -49,8 +49,13 @@ check-candidates.sh             grades every candidate fix of redis-10068
 
 The images are targets of each task's `../tasks/<task>/Dockerfile` (`control`,
 `workflow`, `kavach` or `kavach-implement` for the agent; `grader` for the
-verifier), built from the repository root because the image builds Kavach from
-source. The compose files do not build them: a remote provider (Daytona,
+verifier), built from the repository root because the images copy Kavach's
+SDKs and installer from it. The `kavach` and `kavach-recorder` binaries (and
+so `kavach mcp`) come from a release, installed as a user installs them:
+the `tools` stage runs `scripts/install.sh` (the script
+https://www.thekavachlabs.com/install.sh serves) with the release pinned in
+`KAVACH_VERSION`. To give the agents a newer Kavach, tag a release and bump
+that version in every Dockerfile. The compose files do not build them: a remote provider (Daytona,
 Modal, Vercel) uploads only `environment/` and `tests/`, so there is no
 repository to build from. Each `task.toml` names a prebuilt image,
 `[environment] docker_image` for the agent and
@@ -81,8 +86,8 @@ lines name (path, executable bit and content, through `git hash-object`) and
 of the build context's `.dockerignore` files (`image-tag.py`; it needs no
 build and no network). `sync-tasks.py` writes the references
 into the `task.toml` files and `sync-tasks.py --check` fails when one is stale,
-which is what happens after any change to a Dockerfile or to the Go, SDK or
-task files it copies. The workflow `.github/workflows/bench-images.yml`
+which is what happens after any change to a Dockerfile (a new Kavach release
+included) or to the SDK, installer or task files it copies. The workflow `.github/workflows/bench-images.yml`
 builds and pushes the missing ones (linux/amd64 and linux/arm64, merged into
 one manifest list; kombu-virtual-queue-dead-lettering is amd64 only because
 its base image is). It builds only when run by hand on main

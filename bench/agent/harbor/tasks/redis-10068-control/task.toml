@@ -13,7 +13,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-redis-10068:control-20757961eb46"
+docker_image = "ghcr.io/kavachlabs/bench-redis-10068:control-b3000862f175"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
@@ -32,7 +32,7 @@ env = { ARM = "control" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-redis-10068:grader-20757961eb46"
+docker_image = "ghcr.io/kavachlabs/bench-redis-10068:grader-b3000862f175"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
