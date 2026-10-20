@@ -122,10 +122,12 @@ var modelKeyVars = map[string]string{
 	"zai":        "ZAI_API_KEY",
 }
 
-// session is one visitor. It lives in memory only.
+// session is one visitor. Its keys live in memory only; the rest is saved
+// in sessions.json, so a restart keeps it (trial_sessions.go).
 type session struct {
 	ip     string
 	last   time.Time
+	saved  time.Time // when sessions.json last had it
 	keys   *visitorKeys
 	invite string // the invite code redeemed; "" if none
 	runs   []string
@@ -149,7 +151,7 @@ type trial struct {
 	confStamp fileStamp
 
 	mu       sync.Mutex
-	sessions map[string]*session
+	sessions map[string]*session // SHA-256 of a session's id -> the session
 	swept    time.Time
 	owners   map[string]string     // job id -> SHA-256 of its session's id
 	runIP    map[string]string     // job id -> the address that started it; lost on restart
@@ -204,6 +206,7 @@ func newTrial(cfg TrialConfig, runner *harbor.Runner, jobs, tasks string) *trial
 	}
 	t.conf = t.build(nil)
 	t.settings()
+	t.loadSessions()
 	paths, _ := filepath.Glob(filepath.Join(jobs, ".bench", "*.owner"))
 	for _, p := range paths {
 		if b, err := os.ReadFile(p); err == nil {
@@ -272,12 +275,16 @@ func (t *trial) lookupLocked(id string) (string, *session) {
 		}
 		t.swept = now
 	}
-	s := t.sessions[id]
+	key := digest(id)
+	s := t.sessions[key]
 	if s == nil || now.Sub(s.last) > sessionIdle {
-		delete(t.sessions, id)
+		delete(t.sessions, key)
 		return "", nil
 	}
 	s.last = now
+	if now.Sub(s.saved) > saveEvery {
+		t.saveSessionsLocked()
+	}
 	return id, s
 }
 
@@ -309,10 +316,10 @@ func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
 	var carried []string
 	for _, name := range []string{secureCookie, sessionCookie} {
 		if c, err := r.Cookie(name); err == nil {
-			if old := t.sessions[c.Value]; old != nil && carried == nil {
+			if old := t.sessions[digest(c.Value)]; old != nil && carried == nil {
 				carried = old.runs
 			}
-			delete(t.sessions, c.Value)
+			delete(t.sessions, digest(c.Value))
 		}
 	}
 	evict := func(match func(*session) bool) {
@@ -340,8 +347,8 @@ func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
 	rand.Read(b)
 	id := hex.EncodeToString(b)
 	s := &session{ip: ip, last: time.Now()}
-	t.sessions[id] = s
 	owner := digest(id)
+	t.sessions[owner] = s
 	for _, run := range carried {
 		// A run whose record cannot be rewritten stays with the old id, which
 		// nobody holds any more.
@@ -350,6 +357,7 @@ func (t *trial) mint(w http.ResponseWriter, r *http.Request) *session {
 			s.runs = append(s.runs, run)
 		}
 	}
+	t.saveSessionsLocked()
 	w.Header().Del("Set-Cookie")
 	http.SetCookie(w, sessionCookieFor(r, id))
 	return s
@@ -469,6 +477,7 @@ func (s *Server) deleteTrialKeys(w http.ResponseWriter, r *http.Request) {
 	if _, sess := s.trial.lookup(r); sess != nil {
 		s.trial.mu.Lock()
 		sess.keys, sess.invite = nil, ""
+		s.trial.saveSessionsLocked()
 		s.trial.mu.Unlock()
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -501,6 +510,7 @@ func (s *Server) postTrialInvite(w http.ResponseWriter, r *http.Request) {
 	sess := s.trial.mint(w, r)
 	s.trial.mu.Lock()
 	sess.invite = match
+	s.trial.saveSessionsLocked()
 	s.trial.mu.Unlock()
 	writeJSON(w, http.StatusOK, s.trial.view(sess))
 }
@@ -737,6 +747,7 @@ func (t *trial) startRun(sess *session, id, ip, invite string, rr harbor.RunRequ
 		t.jobSecrets[name] = append(t.jobSecrets[name], v)
 	}
 	sess.runs = append(sess.runs, name)
+	t.saveSessionsLocked()
 	var saveErr error
 	if err := os.WriteFile(filepath.Join(t.jobs, ".bench", name+".owner"), []byte(owner), 0o644); err != nil {
 		saveErr = err

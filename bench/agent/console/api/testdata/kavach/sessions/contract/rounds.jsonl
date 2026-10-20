@@ -1,0 +1,3 @@
+{"round":1,"at":"2026-10-20T04:53:46Z","build":"/private/tmp/claude-501/-Users-koustav-code-kavach-labs-kavach/8e4a78d6-f4b0-42b4-b42d-44dae48535ef/scratchpad/sessions-old","verdict":"unreached@23","changed":0,"signature":"39811cddc942343b"}
+{"round":2,"at":"2026-10-20T04:55:58Z","build":"/private/tmp/claude-501/-Users-koustav-code-kavach-labs-kavach/8e4a78d6-f4b0-42b4-b42d-44dae48535ef/scratchpad/sessions-new","verdict":"pass","changed":9,"signature":"97d5b2ef6ad00c25"}
+{"round":3,"at":"2026-10-20T04:58:07Z","build":"/private/tmp/claude-501/-Users-koustav-code-kavach-labs-kavach/8e4a78d6-f4b0-42b4-b42d-44dae48535ef/scratchpad/sessions-new","verdict":"pass","changed":9,"signature":"97d5b2ef6ad00c25"}

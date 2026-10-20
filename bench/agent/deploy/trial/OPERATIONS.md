@@ -64,7 +64,7 @@ A run's Harbor output is `/var/lib/kavach/jobs/.bench/<id>.log`.
 - **The console**: `kavach-trial deploy [ref]` (ONBOARDING.md, "Ship a
   console change"). It refuses while runs are live, checks the new binary
   against `trial.json` first and rolls back on a failed restart. A restart
-  leaves runs going but forgets visitor sessions.
+  leaves runs and sessions going but forgets visitors' keys.
 - **Disk**: `df -h /` and `du -sh /var/lib/kavach/jobs`. The journal is
   capped at 200M (`journalctl --disk-usage`).
 - **Memory**: `free -h`. Each live run is a Harbor process on 2 GB;
@@ -327,7 +327,7 @@ runs keep going; stop them with `kill -INT <pid>` from [Live runs](#live-runs)).
    `cloudflared`.
 3. `curl -s http://127.0.0.1:8480/api/trial/session | jq .limits`: if this
    works, the console is fine and the tunnel or Cloudflare is not.
-4. `systemctl restart bench-trial` (live runs survive it; sessions do not).
+4. `systemctl restart bench-trial` (live runs and sessions survive it; keys do not).
 
 **Abuse or a cost spike**: take it offline, then look at what is running
 ([Live runs](#live-runs)) and which runs one visitor started: `.bench/<id>.owner`

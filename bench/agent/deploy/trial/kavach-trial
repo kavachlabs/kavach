@@ -91,7 +91,7 @@ cmd_deploy() {
 
 	live=$(live_runs)
 	if [ "$live" != 0 ] && [ "$force" = 0 ]; then
-		die "$live trial run(s) are live; a restart forgets every visitor session. Wait, or pass --force"
+		die "$live trial run(s) are live; a restart forgets every visitor's keys. Wait, or pass --force"
 	fi
 
 	# The binary goes up under a new name first, so nothing on the VM changes

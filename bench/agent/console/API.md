@@ -172,12 +172,16 @@ a session expires after 24 hours idle. One network address holds at most 10
 sessions (a new one replaces its oldest), and a full table (10000) drops the
 one idle longest.
 
-Sessions live in memory: **a restart forgets every session and its keys**.
-Visitors enter their keys again, and can no longer stop runs that began
-before the restart (the runs themselves continue, and stay readable).
+Sessions outlive a restart: each is written to `<jobs>/.bench/sessions.json`
+(mode 0600) by the SHA-256 of its id, with its address, last use, runs and
+the SHA-256 of its invite code, and a cookie issued before the restart
+resolves to the same session, so its owner may still stop and retry its runs.
+**Keys are not written**: after a restart a session has none, and its visitor
+enters them again. An invite whose code the operator has since removed is
+dropped, and a session idle for 24 hours is not read back.
 
 **Keys** are held in the session's memory only. They are never written to
-disk (not in a job folder, `.bench/<id>.json`, the log or the owner file),
+disk (not in a job folder, `.bench/<id>.json`, `.bench/sessions.json`, the log or the owner file),
 never logged and never returned; each is 20-512 visible ASCII characters. A
 run's Harbor gets them in its process environment: the minimal base (`PATH`,
 `USER`, `LANG`, `LC_ALL`, `TMPDIR`, `PYTHONPATH`) plus the visitor's

@@ -126,7 +126,7 @@ It restarts
 `bench-trial`, waits for
 `/api/trial/session` on the VM, and checks the public URL.
 
-It refuses while trial runs are live, because a restart forgets every visitor
-session (the runs themselves keep going, but their owners can no longer stop
-them); `--force` overrides. `kavach-trial status` shows the service, the
+It refuses while trial runs are live, because a restart forgets every
+visitor's keys (sessions, their invites and their runs survive it, but a
+visitor on their own keys enters them again); `--force` overrides. `kavach-trial status` shows the service, the
 checkout, live runs and invite usage.

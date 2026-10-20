@@ -1,0 +1,10 @@
+{
+  "approved_at": "2026-10-20T04:54:47Z",
+  "interactive": true,
+  "files": {
+    "../../../../sessions_kavach.go": "50f1755ab1b0bebdf67ae9350cf43e14211db552e4b16947dc39a3fdd3e3808e",
+    "../SPEC.md": "483183b6620868ebe42caf04a547b64215bd4f02e6ccd81c8129ed9b6f3b27d3",
+    "contract.json": "d89819be0254b93b8e811f13faa086f0c9dcaeb59024288fc32ad7d226c2762b",
+    "traffic.kavach": "cc2b1aa858597fa8aa31dc8ebb2306a04e3de48f4bce6f63caadad8a498fa16e"
+  }
+}

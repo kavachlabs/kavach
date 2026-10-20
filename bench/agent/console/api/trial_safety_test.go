@@ -234,7 +234,7 @@ func TestTrialSessionRules(t *testing.T) {
 	if len(e.s.trial.sessions) != sessionsPerIP {
 		t.Errorf("%d sessions from one address, want %d", len(e.s.trial.sessions), sessionsPerIP)
 	}
-	if e.s.trial.sessions[ids[0]] != nil || e.s.trial.sessions[ids[len(ids)-1]] == nil {
+	if e.s.trial.sessions[digest(ids[0])] != nil || e.s.trial.sessions[digest(ids[len(ids)-1])] == nil {
 		t.Errorf("not the oldest evicted")
 	}
 }
