@@ -8,6 +8,8 @@
 #   kavach-trial model add|remove|list <model>...
 #   kavach-trial status
 #   kavach-trial deploy [--force] [--build-only] [ref]
+#   kavach-trial showcase add|remove|list <run>...
+#   kavach-trial publish [--dry-run] [--landing ID] <run>...  (the benchmark site)
 #
 # KAVACH_TRIAL_HOST is the VM (default 178.105.177.23), KAVACH_TRIAL_URL the
 # public address (default https://try.kavachlabs.dev).
@@ -126,10 +128,115 @@ cmd_deploy() {
 	echo "$SITE/api/trial/session: $(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/trial/session")"
 }
 
-[ $# -gt 0 ] || { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+# content_type is the Content-Type the site serves a file with.
+content_type() {
+	case $1 in
+	*.html) echo "text/html; charset=utf-8" ;;
+	*.js) echo "text/javascript; charset=utf-8" ;;
+	*.css) echo "text/css; charset=utf-8" ;;
+	*.json) echo "application/json" ;;
+	*.txt) echo "text/plain; charset=utf-8" ;;
+	*.png) echo "image/png" ;;
+	*.svg) echo "image/svg+xml" ;;
+	*.woff2) echo "font/woff2" ;;
+	*) echo "application/octet-stream" ;;
+	esac
+}
+
+# cmd_publish rebuilds the read-only benchmark site (bench export) from the
+# runs named, which are every run it should hold, and uploads it to the R2
+# bucket behind benchmark.kavachlabs.dev. A run comes from the local results
+# (KAVACH_BENCH_JOBS) if it is there, else from the VM, where it is also put
+# on the showcase so retention never deletes a run the site shows.
+cmd_publish() {
+	dry=0 landing=""
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--dry-run) dry=1 ;; # export and check, upload nothing
+		--landing) shift; landing=${1:?--landing needs a run id} ;;
+		-*) die "unknown flag $1" ;;
+		*) break ;;
+		esac
+		shift
+	done
+	[ $# -gt 0 ] || die "name every run the site should hold"
+	top=$(git rev-parse --show-toplevel) || die "run publish from inside the kavach checkout"
+	local_jobs=${KAVACH_BENCH_JOBS:-$top/bench/agent/results/harbor}
+	cache=${KAVACH_TRIAL_CACHE:-$HOME/.cache/kavach-trial}
+	bucket=${KAVACH_BENCH_BUCKET:-kavach-bench-site}
+	wrangler=${WRANGLER:-npx -y wrangler}
+
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	mkdir -p "$tmp/jobs/.bench" "$cache/jobs/.bench"
+	trial_runs="" ids=""
+	for id in "$@"; do
+		case $id in */* | .* | "") die "not a run id: $id" ;; esac
+		ids="${ids:+$ids,}$id"
+		if [ -d "$local_jobs/$id" ]; then
+			src=$local_jobs
+		else
+			echo "copying $id from $HOST"
+			# Keys never reach a run's folder; the run's session (.owner) and
+			# its private HOME stay on the VM.
+			rsync -a --delete "root@$HOST:/var/lib/kavach/jobs/$id" "$cache/jobs/" || die "no run $id here or on $HOST"
+			rsync -a "root@$HOST:/var/lib/kavach/jobs/.bench/$id.json" "root@$HOST:/var/lib/kavach/jobs/.bench/$id.log" "$cache/jobs/.bench/" ||
+				die "could not copy $id's config from $HOST"
+			src=$cache/jobs trial_runs="$trial_runs $id"
+		fi
+		cp -R "$src/$id" "$tmp/jobs/"
+		for f in "$src/.bench/$id.json" "$src/.bench/$id.log"; do
+			[ ! -f "$f" ] || cp "$f" "$tmp/jobs/.bench/"
+		done
+	done
+
+	echo "exporting $ids"
+	(cd "$top/bench/agent/console" && go run ./cmd/bench export --out "$tmp/site" --jobs "$tmp/jobs" --job "$ids" ${landing:+--landing "$landing"}) ||
+		die "the export failed"
+	# Export publishes transcripts as they are: refuse anything shaped like a
+	# key the trial handles.
+	if grep -rlE 'sk-or-v1-[0-9a-f]{20}|sk-ant-[A-Za-z0-9_-]{20}|dtn_[0-9a-f]{20}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY' "$tmp/site" >"$tmp/leaks"; then
+		cat "$tmp/leaks" >&2
+		die "these exported files hold something shaped like a key; nothing was uploaded"
+	fi
+	n=$(find "$tmp/site" -type f | wc -l | tr -d ' ')
+	echo "site: $n files, $(du -sh "$tmp/site" | cut -f1)"
+	if [ "$dry" = 1 ]; then
+		rm -rf "$cache/site" && cp -R "$tmp/site" "$cache/site"
+		echo "dry run: the site is in $cache/site; nothing was uploaded"
+		return
+	fi
+
+	# Eight at a time, and index.html after all of them, so it never loads a
+	# file that is not up yet. Each failure is listed in $tmp/failed.
+	put() {
+		$wrangler r2 object put "$bucket/$1" --file "$tmp/site/$1" --content-type "$(content_type "$1")" \
+			--cache-control "public, max-age=300" --remote >/dev/null 2>&1 || echo "$1" >>"$tmp/failed"
+	}
+	: >"$tmp/failed"
+	i=0
+	for rel in $(cd "$tmp/site" && find . -type f ! -path ./index.html | sed 's#^\./##'); do
+		put "$rel" &
+		i=$((i + 1))
+		[ $((i % 8)) != 0 ] || wait
+	done
+	wait
+	[ -s "$tmp/failed" ] || put index.html
+	if [ -s "$tmp/failed" ]; then
+		sed 's/^/FAILED /' "$tmp/failed" >&2
+		die "$(wc -l <"$tmp/failed" | tr -d ' ') of $n files failed to upload; run publish again"
+	fi
+	echo "uploaded $n files to $bucket"
+	[ -n "$trial_runs" ] || return 0
+	remote "$BENCH trial showcase add$trial_runs" ||
+		die "uploaded, but these runs are not on the showcase, so retention may delete them: kavach-trial showcase add$trial_runs"
+}
+
+[ $# -gt 0 ] || { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 case $1 in
 status) cmd_status ;;
 deploy) shift; cmd_deploy "$@" ;;
-invite | task | model) remote "$BENCH trial $(quote "$@")" ;;
-*) die "unknown command $1 (invite, task, model, status, deploy)" ;;
+publish) shift; cmd_publish "$@" ;;
+invite | task | model | showcase) remote "$BENCH trial $(quote "$@")" ;;
+*) die "unknown command $1 (invite, task, model, showcase, status, deploy, publish)" ;;
 esac

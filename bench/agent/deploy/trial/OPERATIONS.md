@@ -127,6 +127,28 @@ or `--days N` by hand. To keep a run for good, add its id to `showcase` in
 `trial.json` (by hand; `kavach-trial` does not edit that list) before it
 turns 30 days old.
 
+## The benchmark site
+
+benchmark.kavachlabs.dev is a read-only copy of chosen runs (`bench export`,
+console API.md "A read-only copy"), served from the R2 bucket
+`kavach-bench-site`. From the kavach checkout, with wrangler logged in to the
+account:
+
+```sh
+sh bench/agent/deploy/trial/kavach-trial publish --dry-run <run>...   # export and check only
+sh bench/agent/deploy/trial/kavach-trial publish [--landing ID] <run>...
+```
+
+Name every run the site should hold, not only new ones: the site is exported
+again from all of them. A run comes from your local results
+(`KAVACH_BENCH_JOBS`, default `bench/agent/results/harbor`) if it is there,
+else it is copied from the VM into `~/.cache/kavach-trial/jobs`. Publish
+refuses to upload anything shaped like a key, but transcripts and patches go
+out as they are, so read the dry run's copy in `~/.cache/kavach-trial/site`
+first. Each run copied from the VM is then added to the showcase
+(`kavach-trial showcase add|remove|list`), so retention keeps it. Files the
+new copy no longer has stay in the bucket, unreachable from its pages.
+
 ## Monitoring
 
 `.github/workflows/trial-uptime.yml` fetches `/api/trial/session` every 15
