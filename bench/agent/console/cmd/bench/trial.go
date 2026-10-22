@@ -29,6 +29,7 @@ const trialUsage = `usage: bench trial <group> <verb> [flags] [args]
   invite revoke <code|label>
   task   add|remove <task>...      list
   model  add|remove <model>...     list
+  showcase add|remove <run>...     list
 
 Edits the trial's config file (-config, default $TRIAL_CONFIG or
 /etc/kavach/trial.json); a running "bench api -trial" picks the change up
@@ -102,6 +103,11 @@ func cmdTrial(args []string, stdout, stderr io.Writer) int {
 		"model add":     func(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error { return modelEdit(o, fs, true) },
 		"model remove":  func(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error { return modelEdit(o, fs, false) },
 		"model list":    modelList,
+		"showcase add":  func(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error { return showcaseEdit(o, fs, true) },
+		"showcase remove": func(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
+			return showcaseEdit(o, fs, false)
+		},
+		"showcase list": showcaseList,
 	}
 	h := handlers[name]
 	if h == nil {
@@ -549,6 +555,58 @@ func modelList(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 		fmt.Fprintf(stdout, "from %s:\n", src)
 		for _, m := range list {
 			fmt.Fprintf(stdout, "  %s\n", m)
+		}
+		return nil
+	}
+}
+
+// runName is a run id retention.sh and the console accept: a plain name.
+var runName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*$`)
+
+// showcaseEdit adds runs to the showcase, which anyone may read and
+// retention.sh never deletes, or takes them off it. A run added must be in the
+// jobs directory.
+func showcaseEdit(o *trialOpts, fs *flag.FlagSet, add bool) func(io.Writer) error {
+	return func(stdout io.Writer) error {
+		for _, id := range fs.Args() {
+			if !runName.MatchString(id) {
+				return fmt.Errorf("%q is not a run id", id)
+			}
+			if st, err := os.Stat(filepath.Join(o.jobs, id)); add && (err != nil || !st.IsDir()) {
+				return fmt.Errorf("no run %s in %s", id, o.jobs)
+			}
+		}
+		var final []string
+		err := api.UpdateTrialFile(o.config, func(f *api.TrialFile) error {
+			list, err := editList(f.Showcase, o.envList("TRIAL_SHOWCASE"), fs.Args(), add)
+			f.Showcase, final = list, list
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "showcase: %s\n", strings.Join(final, ", "))
+		return nil
+	}
+}
+
+func showcaseList(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
+	return func(stdout io.Writer) error {
+		f, err := loadTrialFile(o.config)
+		if err != nil {
+			return err
+		}
+		list, src := f.Showcase, "the config file"
+		if len(list) == 0 {
+			list, src = o.envList("TRIAL_SHOWCASE"), "TRIAL_SHOWCASE"
+		}
+		if len(list) == 0 {
+			fmt.Fprintln(stdout, "no showcase runs")
+			return nil
+		}
+		fmt.Fprintf(stdout, "from %s:\n", src)
+		for _, id := range list {
+			fmt.Fprintf(stdout, "  %s\n", id)
 		}
 		return nil
 	}

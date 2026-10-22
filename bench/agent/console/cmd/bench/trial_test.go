@@ -166,3 +166,27 @@ func TestTrialCLIMatchesLabelPart(t *testing.T) {
 		t.Errorf("an ambiguous part: %d %q", code, errs)
 	}
 }
+
+func TestTrialCLIShowcase(t *testing.T) {
+	run, config, jobs := trialCLI(t)
+	os.MkdirAll(filepath.Join(jobs, "run-a"), 0o755)
+	os.MkdirAll(filepath.Join(jobs, "run-b"), 0o755)
+	if code, _, errs := run("showcase", "add", "run-x"); code != 1 || !strings.Contains(errs, "no run run-x") {
+		t.Fatalf("a run that is not there: %d %q", code, errs)
+	}
+	if code, _, errs := run("showcase", "add", "../etc"); code != 1 || !strings.Contains(errs, "not a run id") {
+		t.Fatalf("a path: %d %q", code, errs)
+	}
+	if code, out, _ := run("showcase", "add", "run-a", "run-b", "run-a"); code != 0 || !strings.Contains(out, "showcase: run-a, run-b\n") {
+		t.Fatalf("add: %d %s", code, out)
+	}
+	if code, out, _ := run("showcase", "remove", "run-a"); code != 0 || !strings.Contains(out, "showcase: run-b\n") {
+		t.Fatalf("remove: %d %s", code, out)
+	}
+	if _, out, _ := run("showcase", "list"); !strings.Contains(out, "  run-b") {
+		t.Errorf("list:\n%s", out)
+	}
+	if f, _ := api.LoadTrialFile(config); len(f.Showcase) != 1 || f.Showcase[0] != "run-b" {
+		t.Errorf("file: %+v", f)
+	}
+}
