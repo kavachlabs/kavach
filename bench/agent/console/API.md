@@ -120,7 +120,7 @@ keys themselves stay in the environment:
 
 ```json
 {
-  "invites": [{"code": "yc-ab12-cd34-ef56-gh78", "label": "Garry (YC)", "runs": 5,
+  "invites": [{"code": "kv-ab12-cd34-ef56-gh78", "label": "Garry (YC)", "runs": 5,
                "created": "2026-10-18T09:00:00Z", "revoked": false, "note": ""}],
   "tasks": ["redis-10068-control", "redis-10068-kavach"],
   "models": ["openrouter/z-ai/glm-5.3"],

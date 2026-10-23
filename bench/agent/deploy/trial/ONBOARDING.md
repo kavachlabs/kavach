@@ -24,7 +24,7 @@ bills the keys in `trial.env`.
 kavach-trial invite add --label "Garry (YC)" --runs 5
 ```
 
-It prints the code (`yc-xxxx-xxxx-xxxx-xxxx`, or your own with `--code`) and
+It prints the code (`kv-xxxx-xxxx-xxxx-xxxx`, or your own with `--code`) and
 the link to send, `https://try.kavachlabs.dev/#/trial/invite?code=...`, which
 opens the invite form with the code filled in. The partner still presses the
 button. `--note "intro from X"` keeps a reminder with the code.
