@@ -108,16 +108,16 @@ func handleMCP(line []byte) *rpcResponse {
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		json.Unmarshal(req.Params, &p)
-		version := mcpLatestVersion
+		protocol := mcpLatestVersion
 		for _, v := range mcpVersions {
 			if v == p.ProtocolVersion {
-				version = v
+				protocol = v
 			}
 		}
 		resp.Result = map[string]any{
-			"protocolVersion": version,
+			"protocolVersion": protocol,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "kavach", "version": kavach.Version},
+			"serverInfo":      map[string]any{"name": "kavach", "version": version},
 			"instructions":    mcpInstructions,
 		}
 	case "ping":

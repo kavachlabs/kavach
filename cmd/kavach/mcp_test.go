@@ -47,7 +47,9 @@ func TestMCPProtocol(t *testing.T) {
 		t.Fatalf("got %d responses, want 7 (the notification gets none): %v", len(resps), resps)
 	}
 	init := resps[0]["result"].(map[string]any)
-	if init["protocolVersion"] != "2025-03-26" || init["serverInfo"].(map[string]any)["name"] != "kavach" {
+	info := init["serverInfo"].(map[string]any)
+	// The server's version is the CLI's, which a release sets, not the protocol's.
+	if init["protocolVersion"] != "2025-03-26" || info["name"] != "kavach" || info["version"] != version {
 		t.Fatalf("initialize: %v", init)
 	}
 	if resps[1]["id"] != "two" || resps[1]["result"] == nil {
