@@ -464,8 +464,19 @@ echo resumed >> "$JOBS/resumes"
 		}
 	}
 	reader := &Reader{Dir: jobs, Runs: runner}
-	if j, _ := reader.Job("demo"); !j.Retryable || !slices.Equal(j.RetryQueued, []string{"demo__1", "demo__3"}) {
+	j, _ := reader.Job("demo")
+	if !j.Retryable || !slices.Equal(j.RetryQueued, []string{"demo__1", "demo__3"}) {
 		t.Fatalf("queued %+v", j)
+	}
+	// A queued attempt shows as queued, not as the outcome it is to replace.
+	for _, tr := range j.Trials {
+		want := Queued
+		if tr.ID == "demo__2" {
+			want = Fail
+		}
+		if tr.ID != "" && tr.Status != want {
+			t.Errorf("%s is %s, want %s", tr.ID, tr.Status, want)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(jobs, "release"), nil, 0o644); err != nil {
 		t.Fatal(err)

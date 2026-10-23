@@ -3614,11 +3614,11 @@ function runControl(job) {
 // retryControl offers to run a failed attempt again: at once, or, while its
 // run goes on, as soon as the run ends.
 function retryControl(t, job) {
-  if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
-  const live = job.status === "running" || job.status === "pausing";
   if ((job.retry_queued || []).includes(t.id)) {
     return h("span", { class: "dim" }, "Runs again when this run ends");
   }
+  if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
+  const live = job.status === "running" || job.status === "pausing";
   if (state.confirm !== `retry:${t.id}`) {
     return h("button", { type: "button", class: "btn", onclick: () => {
       state.confirm = `retry:${t.id}`;

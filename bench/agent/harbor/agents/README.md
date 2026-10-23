@@ -59,7 +59,9 @@ installing is skipped when the image already has it), `base_url`,
 `api_key_env`, `isolate` (default true), `require_isolation` (default true),
 `live` (default true), `stall_sec` (default 600: with `live`, an attempt
 whose event log gains nothing for that long ends with `AgentStalledError`,
-which Harbor's `retries` run again; 0 never), plus
+which Harbor's `retries` run again; 0 never. Where the log is copied out of
+the sandbox, the sandbox's own log is measured first, so a copy that stopped
+never ends an attempt that is still working), plus
 Harbor's OpenCode options (`opencode_config`, `disable_web_search`, ...).
 MCP servers declared by the task (the kavach arm's `kavach mcp`) are
 configured as Harbor's agent does.
@@ -188,7 +190,9 @@ the console reads its steps from there (else from the session export):
   sandbox's own machine, which holds the log at the same path (Harbor's DinD
   strategies bind `/logs` to itself there), streamed back through the
   provider's SDK (a Daytona session command's log websocket; Modal's
-  `sandbox.exec` stdout). A follow ends after 10 minutes and starts again.
+  `sandbox.exec` stdout). A follow ends after 2 minutes and starts again, and
+  one whose stream goes quiet without ending (Daytona's does, some minutes
+  in) is given up 30 seconds after that.
 - Before each follow, and on any other provider, or when the log is not on
   the sandbox's machine, it polls: the log's new bytes every 3 seconds,
   through `environment.exec` in base64 chunks of 256 KiB.

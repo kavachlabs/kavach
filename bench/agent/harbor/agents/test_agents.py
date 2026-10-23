@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -614,13 +615,35 @@ class Stall(unittest.TestCase):
         self.log = Path(self.tmp.name) / "opencode.txt"
         self.agent = object.__new__(opencode_live.KavachOpenCode)
         self.agent.logs_dir = Path(self.tmp.name)
+        self.agent.environment_logs_dir = Path("/logs/agent")
         self.agent._live_offset = 0
         patch = mock.patch.object(opencode_live, "STALL_CHECK_SEC", 0.01)
         patch.start()
         self.addCleanup(patch.stop)
+        # The sandbox's own log, as stat reports it; None fails the exec.
+        self.remote = [0]
+        self.stats = 0
+
+    def sandbox(self):
+        test = self
+
+        class Env:
+            async def exec(self, command, timeout_sec=None):
+                assert command.startswith("stat -c %s ") and "/logs/agent/opencode.txt" in command
+                test.stats += 1
+                size = test.remote[min(test.stats, len(test.remote)) - 1]
+                if size is None:
+                    return types.SimpleNamespace(return_code=1, stdout="")
+                return types.SimpleNamespace(return_code=0, stdout=f"{size}\n")
+
+        return Env()
 
     def run_for(self, awaitable, limit):
-        return asyncio.run(self.agent._unless_stalled(awaitable, limit))
+        return asyncio.run(self.agent._unless_stalled(awaitable, limit, self.sandbox()))
+
+    @staticmethod
+    async def hung():
+        await asyncio.Event().wait()
 
     def test_a_silent_run_is_ended(self):
         cancelled = []
@@ -654,6 +677,45 @@ class Stall(unittest.TestCase):
             return "done"
 
         self.assertEqual(self.run_for(busy(), 0.1), "done")
+
+    def test_a_stopped_copy_of_a_growing_log_keeps_it_going(self):
+        # The copy froze at 100 bytes; the sandbox's log goes on growing.
+        self.agent._live_offset = 100
+        self.remote = list(range(500, 100_000, 400))
+
+        async def busy():
+            await asyncio.sleep(0.5)
+            return "done"
+
+        self.assertEqual(self.run_for(busy(), 0.05), "done")
+        self.assertGreater(self.stats, 2)
+
+    def test_a_stopped_copy_of_a_stopped_log_is_ended(self):
+        self.agent._live_offset = 100
+        self.remote = [500, 500]
+        with self.assertRaises(opencode_live.AgentStalledError):
+            self.run_for(self.hung(), 0.05)
+        self.assertEqual(self.stats, 2)
+
+    def test_a_log_that_cannot_be_measured_is_not_ended(self):
+        self.remote = [None]
+
+        async def slow():
+            await asyncio.sleep(0.3)
+            return "done"
+
+        self.assertEqual(self.run_for(slow(), 0.05), "done")
+        self.assertGreater(self.stats, 1)
+
+    def test_a_mounted_log_needs_no_look_in_the_sandbox(self):
+        self.log.write_text("x")
+        with self.assertRaises(opencode_live.AgentStalledError):
+            self.run_for(self.hung(), 0.05)
+        self.assertEqual(self.stats, 0)
+
+    def test_a_follow_whose_stream_never_ends_is_given_up(self):
+        with mock.patch.object(opencode_live, "FOLLOW_SEC", 0.01), mock.patch.object(opencode_live, "FOLLOW_GRACE_SEC", 0.01):
+            self.assertIsNone(asyncio.run(self.agent._follow_for(self.hung)))
 
     def test_the_run_s_own_error_is_raised(self):
         async def fails():
