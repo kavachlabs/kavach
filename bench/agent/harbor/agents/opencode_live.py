@@ -76,13 +76,19 @@ TAIL_CHUNK = 256 << 10
 # holds it at the same path (Harbor's DinD strategies self-bind the logs
 # directory). A follow ends after this long and starts again, so one whose
 # reader went away (Modal cannot stop a command) does not outlive it long.
-FOLLOW_SEC = 600
+# A provider's stream can also go quiet without ending (Daytona's does, a few
+# minutes in), so a follow is given up FOLLOW_GRACE_SEC after that; the poll
+# before the next one copies what it missed.
+FOLLOW_SEC = 120
+FOLLOW_GRACE_SEC = 30
 NO_LOG_HERE = 3
 # An attempt whose event log gains nothing for STALL_SEC is ended as stalled:
 # OpenCode is waiting on a model call that is not coming back. A long tool
 # call (a full build, a test suite) also writes nothing until it ends, so
 # the limit is well above the longest of those. Checked every
-# STALL_CHECK_SEC.
+# STALL_CHECK_SEC. Where the log is copied rather than mounted, a copy that
+# stopped is not taken for a log that did: the sandbox's own log is measured
+# before an attempt is ended.
 STALL_SEC = 600
 STALL_CHECK_SEC = 15
 EXPORT_WARN_EVERY = 20
@@ -510,6 +516,13 @@ class KavachOpenCode(OpenCode):
             self._append_live(chunk)
         return await process.wait.aio()
 
+    async def _follow_for(self, follow) -> int | None:
+        """Run one follow, giving up on a stream that outlives its command."""
+        try:
+            return await asyncio.wait_for(follow(), FOLLOW_SEC + FOLLOW_GRACE_SEC)
+        except TimeoutError:
+            return None
+
     async def _tail_once(self, environment: BaseEnvironment) -> bool:
         """Append the bytes the sandbox's event log gained since the last
         call to the trial's live copy. Returns False once the log is in the
@@ -544,7 +557,7 @@ class KavachOpenCode(OpenCode):
                 if not await self._tail_once(environment):
                     return
                 # Once the log exists: until then there is nothing to follow.
-                if follow and self._live_offset and await follow() == NO_LOG_HERE:
+                if follow and self._live_offset and await self._follow_for(follow) == NO_LOG_HERE:
                     self.logger.warning("the event log is not on the sandbox's machine; polling it instead")
                     follow = None
                 failures = 0
@@ -623,6 +636,7 @@ class KavachOpenCode(OpenCode):
                     ),
                 ),
                 self.options.stall_sec if self.options.live else 0,
+                environment,
             )
         finally:
             # Each step runs even if an earlier one fails.
@@ -648,19 +662,44 @@ class KavachOpenCode(OpenCode):
             return local.stat().st_size
         return self._live_offset
 
-    async def _stalled(self, limit: float) -> None:
-        """Return once the event log has gained nothing for limit seconds."""
+    async def _remote_size(self, environment: BaseEnvironment | None) -> int | None:
+        """The size of the event log in the sandbox, or None if it can't be had."""
+        if environment is None:
+            return None
+        remote = shlex.quote((self.environment_logs_dir / self._OUTPUT_FILENAME).as_posix())
+        try:
+            result = await environment.exec(f"stat -c %s {remote}", timeout_sec=60)
+            return int(result.stdout.strip()) if not result.return_code else None
+        except Exception:
+            return None
+
+    async def _stalled(self, limit: float, environment: BaseEnvironment | None = None) -> None:
+        """Return once the event log has gained nothing for limit seconds.
+        Where it is copied, not mounted, the sandbox's own log must also have
+        gained nothing since the last look: a copy can stop while the log
+        grows. One that can't be measured is not taken to have stalled."""
         loop = asyncio.get_running_loop()
-        last, since = self._progress(), loop.time()
+        last, since, remote = self._progress(), loop.time(), None
         while True:
             await asyncio.sleep(min(STALL_CHECK_SEC, limit))
             now, got = loop.time(), self._progress()
             if got != last:
                 last, since = got, now
-            elif now - since >= limit:
+                continue
+            if now - since < limit:
+                continue
+            if (self.logs_dir / self._OUTPUT_FILENAME).exists():
                 return
+            size = await self._remote_size(environment)
+            # No bigger than the copy: the copy is current, so the log too
+            # gained nothing. The same as last look: the log stopped there.
+            if size is not None and (size <= got or size == remote):
+                return
+            if size is not None:
+                remote = size
+            since = loop.time()
 
-    async def _unless_stalled(self, awaitable, limit: float):
+    async def _unless_stalled(self, awaitable, limit: float, environment: BaseEnvironment | None = None):
         """Await awaitable, or raise AgentStalledError once the event log has
         gained nothing for limit seconds (none when limit is 0). The caller's
         cleanup kills the OpenCode server, which ends the run inside the
@@ -668,7 +707,7 @@ class KavachOpenCode(OpenCode):
         if limit <= 0:
             return await awaitable
         run = asyncio.ensure_future(awaitable)
-        watch = asyncio.create_task(self._stalled(limit))
+        watch = asyncio.create_task(self._stalled(limit, environment))
         try:
             await asyncio.wait({run, watch}, return_when=asyncio.FIRST_COMPLETED)
         except BaseException:

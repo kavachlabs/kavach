@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -406,6 +407,11 @@ func (r *Reader) readJob(id string) Job {
 			}
 			if t.Status == Running && j.Status != JobRunning && j.Status != JobPausing {
 				t.Status, t.Error = Error, "interrupted"
+			}
+			// An attempt whose retry waits for the run to end is queued: its
+			// old outcome is about to be replaced, and grades nothing.
+			if slices.Contains(queued, t.ID) {
+				t.Status = Queued
 			}
 			j.Trials = append(j.Trials, t)
 		}

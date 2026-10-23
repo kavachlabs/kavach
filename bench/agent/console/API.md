@@ -443,7 +443,8 @@ forge the header.
   trials can be run again with `POST /api/trials/{job}/{trial}/retry`, at
   once, or while the job runs, when its Harbor exits.
 - `retry_queued`: the trials whose retry waits for the job's Harbor to exit;
-  absent when there are none.
+  absent when there are none. Their `status` is `queued` until the retry
+  replaces them, and they count toward no pass rate.
 - `error`: set on a `stopped` job when there is something to say:
   - for a job bench started whose Harbor exited without writing
     `result.json`, the end of Harbor's output, such as a bad model name;
