@@ -51,6 +51,21 @@ curl -s http://127.0.0.1:8480/api/jobs | jq -r '.[] | select(.status == "running
 
 A run's Harbor output is `/var/lib/kavach/jobs/.bench/<id>.log`.
 
+To retry attempts of a run started on an invite (a provider error, a hung
+model call) without the visitor's browser, from your laptop:
+
+```sh
+kavach-trial retry calm-bronze-toucan-jldl3zs 8aEvUJy 2aHR4Na
+```
+
+An attempt is its folder name or the part after `__`. Each prints `started`,
+or `queued` when the run is still going: it starts when the run ends. It
+runs on the server's keys, as the run did, and skips the visitor's limits
+and retry cap. A run on a visitor's own keys can't be retried this way; the
+server keeps no keys for it. This talks to the service over
+`/var/lib/kavach/admin.sock` (`-admin-socket` in `bench-trial.service`,
+which `kavach-trial deploy` installs from the checkout it deploys).
+
 ## Upkeep
 
 - **Security updates** install by themselves (Ubuntu's `-security` pocket
