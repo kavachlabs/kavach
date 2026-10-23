@@ -46,7 +46,7 @@ func TestTrialCLIInvites(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("add: %d %s", code, errs)
 	}
-	m := regexp.MustCompile(`code  (yc(-[a-z2-9]{4}){4})\n`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`code  (kv(-[a-z2-9]{4}){4})\n`).FindStringSubmatch(out)
 	if m == nil || !strings.Contains(out, "url   https://try.example/#/trial/invite?code="+m[1]) {
 		t.Fatalf("add output:\n%s", out)
 	}

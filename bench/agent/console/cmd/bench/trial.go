@@ -131,7 +131,7 @@ func cmdTrial(args []string, stdout, stderr io.Writer) int {
 
 const codeAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
 
-// newInviteCode is yc-xxxx-xxxx-xxxx-xxxx: 16 characters without the ones
+// newInviteCode is kv-xxxx-xxxx-xxxx-xxxx: 16 characters without the ones
 // that read alike, about 78 bits.
 func newInviteCode(prefix string) (string, error) {
 	b := make([]byte, 16)
@@ -158,7 +158,7 @@ func inviteAdd(o *trialOpts, fs *flag.FlagSet) func(io.Writer) error {
 	runs := fs.Int("runs", 5, "runs the code may start")
 	code := fs.String("code", "", "the code (default: generated)")
 	note := fs.String("note", "", "a note kept with the code")
-	prefix := fs.String("prefix", "yc", "prefix of a generated code")
+	prefix := fs.String("prefix", "kv", "prefix of a generated code")
 	return func(stdout io.Writer) error {
 		if *label == "" {
 			return errors.New("-label is required: one code per partner")
