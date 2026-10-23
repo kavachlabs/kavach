@@ -57,7 +57,9 @@ Options (`harbor agent schema` does not list import-path agents; see
 `KavachOpenCodeOptions` in `opencode_live.py`): `version` (default 1.1.8;
 installing is skipped when the image already has it), `base_url`,
 `api_key_env`, `isolate` (default true), `require_isolation` (default true),
-`live` (default true), plus
+`live` (default true), `stall_sec` (default 600: with `live`, an attempt
+whose event log gains nothing for that long ends with `AgentStalledError`,
+which Harbor's `retries` run again; 0 never), plus
 Harbor's OpenCode options (`opencode_config`, `disable_web_search`, ...).
 MCP servers declared by the task (the kavach arm's `kavach mcp`) are
 configured as Harbor's agent does.

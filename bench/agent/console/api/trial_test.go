@@ -347,7 +347,7 @@ func TestTrialInviteLimits(t *testing.T) {
 		t.Fatalf("forced settings: %d %v", code, v)
 	}
 	b, _ := os.ReadFile(filepath.Join(e.jobs, ".bench", id+".json"))
-	if !strings.Contains(string(b), `"max_retries": 0`) || strings.Contains(string(b), "override_timeout_sec") || strings.Contains(string(b), `"n_concurrent_trials": 9`) {
+	if !strings.Contains(string(b), `"max_retries": 2`) || strings.Contains(string(b), "override_timeout_sec") || strings.Contains(string(b), `"n_concurrent_trials": 9`) {
 		t.Errorf("config %s", b)
 	}
 

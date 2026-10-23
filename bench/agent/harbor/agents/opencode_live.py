@@ -78,6 +78,13 @@ TAIL_CHUNK = 256 << 10
 # reader went away (Modal cannot stop a command) does not outlive it long.
 FOLLOW_SEC = 600
 NO_LOG_HERE = 3
+# An attempt whose event log gains nothing for STALL_SEC is ended as stalled:
+# OpenCode is waiting on a model call that is not coming back. A long tool
+# call (a full build, a test suite) also writes nothing until it ends, so
+# the limit is well above the longest of those. Checked every
+# STALL_CHECK_SEC.
+STALL_SEC = 600
+STALL_CHECK_SEC = 15
 EXPORT_WARN_EVERY = 20
 # Outside every private range, then the Docker host's usual services: none may
 # accept a connection from a sealed task container.
@@ -118,6 +125,18 @@ class KavachOpenCodeOptions(OpenCodeOptions):
         "reach the internet, instead of running with open egress.",
     )
     live: bool = Field(default=True, description="Run opencode serve and mirror the session while it runs.")
+    stall_sec: float = Field(
+        default=STALL_SEC,
+        description="With live, end the attempt with AgentStalledError, which "
+        "Harbor's retries run again, when OpenCode's event log gains nothing "
+        "for this many seconds; 0 never.",
+    )
+
+
+class AgentStalledError(RuntimeError):
+    """OpenCode's event log stopped growing while it ran. Harbor's retry
+    config does not exclude it, so a run with retries runs the attempt
+    again."""
 
 
 def check_modal_runtime(environment: BaseEnvironment) -> None:
@@ -592,15 +611,18 @@ class KavachOpenCode(OpenCode):
             await environment.upload_file(prompt, remote_prompt)
             await environment.exec(f"chmod 644 {remote_prompt}", user="root")
             flags = self.build_cli_flags()
-            await self.exec_as_agent(
-                environment,
-                env=env,
-                command=(
-                    f"{NVM}opencode run {attach}--format json --model {shlex.quote(model)} "
-                    f"{flags if flags else ''} "
-                    f"2>&1 <{remote_prompt} | stdbuf -oL tee "
-                    f"{shlex.quote((logs / self._OUTPUT_FILENAME).as_posix())}"
+            await self._unless_stalled(
+                self.exec_as_agent(
+                    environment,
+                    env=env,
+                    command=(
+                        f"{NVM}opencode run {attach}--format json --model {shlex.quote(model)} "
+                        f"{flags if flags else ''} "
+                        f"2>&1 <{remote_prompt} | stdbuf -oL tee "
+                        f"{shlex.quote((logs / self._OUTPUT_FILENAME).as_posix())}"
+                    ),
                 ),
+                self.options.stall_sec if self.options.live else 0,
             )
         finally:
             # Each step runs even if an earlier one fails.
@@ -617,6 +639,52 @@ class KavachOpenCode(OpenCode):
 
         if messages := self._error_messages():
             raise NonZeroAgentExitCodeError("OpenCode emitted error event(s): " + "; ".join(messages[:3]))
+
+    def _progress(self) -> int:
+        """How far the event log has got: its size where the trial directory
+        holds it (a bind mount), else what _tail has copied of it."""
+        local = self.logs_dir / self._OUTPUT_FILENAME
+        if local.exists():
+            return local.stat().st_size
+        return self._live_offset
+
+    async def _stalled(self, limit: float) -> None:
+        """Return once the event log has gained nothing for limit seconds."""
+        loop = asyncio.get_running_loop()
+        last, since = self._progress(), loop.time()
+        while True:
+            await asyncio.sleep(min(STALL_CHECK_SEC, limit))
+            now, got = loop.time(), self._progress()
+            if got != last:
+                last, since = got, now
+            elif now - since >= limit:
+                return
+
+    async def _unless_stalled(self, awaitable, limit: float):
+        """Await awaitable, or raise AgentStalledError once the event log has
+        gained nothing for limit seconds (none when limit is 0). The caller's
+        cleanup kills the OpenCode server, which ends the run inside the
+        sandbox too."""
+        if limit <= 0:
+            return await awaitable
+        run = asyncio.ensure_future(awaitable)
+        watch = asyncio.create_task(self._stalled(limit))
+        try:
+            await asyncio.wait({run, watch}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            # Cancelled from outside, as by Harbor's agent timeout.
+            run.cancel()
+            watch.cancel()
+            raise
+        if run.done():
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+            return run.result()
+        run.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await run
+        raise AgentStalledError(f"OpenCode's event log gained nothing for {limit:g} s: its model call is taken to have hung")
 
     async def _quietly(self, awaitable) -> None:
         try:

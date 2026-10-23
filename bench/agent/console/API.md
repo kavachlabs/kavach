@@ -277,7 +277,9 @@ the other fields of the ordinary request (`agent`, `environment`, `name`,
 `concurrent`, `retries`, `timeout_sec`) are known and overridden.
 `models` defaults to the first allowed one. The server forces the rest:
 `environment` is the session's provider, `agent` the repository's OpenCode
-agent, `concurrent` 2, `retries` 0, no timeout override, a generated `name`;
+agent, `concurrent` 2, `retries` 2 (an attempt that errors, as on a provider's
+rate limit or a stalled agent, runs again on the operator's keys), no timeout
+override, a generated `name`;
 400 for a model, task or attempts count outside `TRIAL_MODELS`,
 `TRIAL_TASKS` and `TRIAL_MAX_ATTEMPTS`.
 
@@ -335,7 +337,11 @@ restarts. Each relaunch removes the run's old home folder and starts in a fresh 
 `POST /api/trials/{job}/{trial}/retry` while its session is an invite's (pause
 and resume stay 404). The attempt runs again on the server's keys, as the run
 did, and uses none of the invite's runs; the per-run
-`TRIAL_OWN_MAX_RETRY_REQUESTS` cap and the live-run limits apply as above. It
+`TRIAL_OWN_MAX_RETRY_REQUESTS` cap and the live-run limits apply as above.
+While the run goes on, a retry, of either kind of session, is queued for when
+it ends (see `POST /api/trials/{job}/{trial}/retry`): the live-run limits,
+which the run met when it started, are not asked again, and the request
+counts against the cap when it is made. It
 is 403 when the session's invite code has been revoked, and 409 when the
 server's keys for invites are missing or are now for another sandbox than
 the run used.
@@ -419,9 +425,12 @@ forge the header.
   paused.
 - `resumable`: true when bench started the job and it is `paused` or
   `stopped`, not finished.
-- `retryable`: true when bench started the job, its Harbor is not running,
-  and Harbor wrote its folder: any of its trials can be run again with
-  `POST /api/trials/{job}/{trial}/retry`.
+- `retryable`: true when bench started the job, Harbor wrote its folder,
+  and its Harbor is not running or is one this server started: any of its
+  trials can be run again with `POST /api/trials/{job}/{trial}/retry`, at
+  once, or while the job runs, when its Harbor exits.
+- `retry_queued`: the trials whose retry waits for the job's Harbor to exit;
+  absent when there are none.
 - `error`: set on a `stopped` job when there is something to say:
   - for a job bench started whose Harbor exited without writing
     `result.json`, the end of Harbor's output, such as a bad model name;
@@ -1044,7 +1053,7 @@ rejected.
 | `agent` | a Harbor agent name, or a custom agent's import path (`module.path:ClassName`). Default `opencode`, which runs the repository's OpenCode agent (`bench.agent.harbor.agents:KavachOpenCode`) rather than Harbor's: the model key stays out of the task container, and each attempt can be watched in OpenCode. Jobs list it as `opencode` |
 | `timeout_sec` | overrides the tasks' agent timeout when it is above 0 |
 | `concurrent` | trials at once, 1–32. Default 1 |
-| `retries` | how many times an attempt that ends with an error (a provider or container failure) runs again, 0–5. Harbor deletes the failed attempt's folder first. It does not retry timeouts, usage limits or refusals, nor an attempt whose tests ran and failed. Default 0 |
+| `retries` | how many times an attempt that ends with an error (a provider or container failure, a rate limit, an agent that stalled) runs again, 0–5, after a wait of 30 s, then 60 s, at most 120 s. Harbor deletes the failed attempt's folder first. It does not retry timeouts, usage limits or refusals, nor an attempt whose tests ran and failed. Default 0 |
 | `environment` | where the attempts run: `docker` (local, the default), `daytona`, `modal` or `vercel`. A cloud provider is written to the job config as `environment.type` and is refused with 400, naming the missing variable, unless its keys are present (see `environments` in `/api/status`). `modal` also sets `environment.kwargs.modal_vm_runtime: true`: Harbor's default Modal runtime puts every Compose service on the host network, which breaks tasks with networks of their own, so the VM runtime (an alpha Modal feature) is used. `docker` adds nothing to the config |
 | `name` | the job's folder name: letters, digits, `.`, `_`, `-`. Default adjective-colour-animal and seven random letters and digits (`brisk-cobalt-heron-x7k2p9q`) |
 
@@ -1126,8 +1135,17 @@ and `harbor jobs resume` runs the trial it no longer finds under a new id,
 together with any others the job had not finished. A finished job is
 finished again once it does.
 
-Reply: 202 and the Job, now `running`. 404 when bench did not start the job
-or it has no such trial; 409 while its Harbor is running.
+While the job's Harbor runs, and this server started it, the retry is
+queued instead: the trial is listed in `retry_queued`, and when Harbor exits,
+every queued trial is moved aside as above and one `harbor jobs resume` runs
+them, before the job's backup to R2. Stopping or pausing the job drops the
+queue, and so does a restart of the server, which also ends the run. A queued
+trial whose folder is gone by then (Harbor's own `retries` replaced it) is
+skipped.
+
+Reply: 202 and the Job, `running`, with `retry_queued` while it waits. 404
+when bench did not start the job or it has no such trial; 409 while a Harbor
+that another bench process started runs it.
 
 ### GET /api/events
 

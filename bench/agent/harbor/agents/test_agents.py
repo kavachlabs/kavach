@@ -603,6 +603,78 @@ class LiveLog(unittest.TestCase):
         self.assertFalse((self.logs / opencode_live.LIVE_LOG).exists())
 
 
+@unittest.skipUnless(HARBOR_INSTALLED, "needs harbor")
+class Stall(unittest.TestCase):
+    """An attempt whose event log stops growing ends as stalled, which
+    Harbor's retries run again; one whose log grows runs to its end."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = Path(self.tmp.name) / "opencode.txt"
+        self.agent = object.__new__(opencode_live.KavachOpenCode)
+        self.agent.logs_dir = Path(self.tmp.name)
+        self.agent._live_offset = 0
+        patch = mock.patch.object(opencode_live, "STALL_CHECK_SEC", 0.01)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def run_for(self, awaitable, limit):
+        return asyncio.run(self.agent._unless_stalled(awaitable, limit))
+
+    def test_a_silent_run_is_ended(self):
+        cancelled = []
+
+        async def hung():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+
+        with self.assertRaises(opencode_live.AgentStalledError):
+            self.run_for(hung(), 0.1)
+        self.assertEqual(cancelled, [True])
+
+    def test_a_growing_log_keeps_it_going(self):
+        async def busy():
+            for _ in range(15):
+                with self.log.open("a") as f:
+                    f.write('{"type":"text"}\n')
+                await asyncio.sleep(0.02)
+            return "done"
+
+        self.assertEqual(self.run_for(busy(), 0.1), "done")
+
+    def test_the_copied_log_counts_where_none_is_mounted(self):
+        async def busy():
+            for _ in range(15):
+                self.agent._live_offset += 10
+                await asyncio.sleep(0.02)
+            return "done"
+
+        self.assertEqual(self.run_for(busy(), 0.1), "done")
+
+    def test_the_run_s_own_error_is_raised(self):
+        async def fails():
+            raise RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            self.run_for(fails(), 0.1)
+
+    def test_zero_never_ends_it(self):
+        async def slow():
+            await asyncio.sleep(0.15)
+            return "done"
+
+        self.assertEqual(self.run_for(slow(), 0), "done")
+
+    def test_harbor_retries_it(self):
+        from harbor.models.job.config import RetryConfig
+
+        self.assertNotIn("AgentStalledError", RetryConfig().exclude_exceptions)
+
+
 @unittest.skipUnless(HARBOR_INSTALLED, "harbor is not installed")
 class FollowLog(LiveLog):
     """Where the provider streams (Daytona, Modal), the log is followed with

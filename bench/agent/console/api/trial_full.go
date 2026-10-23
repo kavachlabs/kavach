@@ -194,7 +194,11 @@ func (s *Server) resumeTrialJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) retryTrialJob(w http.ResponseWriter, r *http.Request) {
 	id, trial := r.PathValue("job"), r.PathValue("trial")
-	retry := func(env map[string]string) error { return s.runner.RetryWithEnv(id, trial, env) }
+	// A retry asked for while the run goes on waits for it to end.
+	retry := func(env map[string]string) error {
+		_, err := s.runner.QueueRetry(id, trial, env)
+		return err
+	}
 	if sess, ok := s.inviteRetrier(r, id); ok {
 		s.relaunchInvite(w, r, sess, id, retry)
 		return
@@ -363,12 +367,16 @@ func (t *trial) relaunchEnv(keys *visitorKeys, id string) (map[string]string, *t
 }
 
 // relaunchRun runs start, which starts Harbor again for job id, under the
-// limits starting a run has.
+// limits starting a run has. A retry of a run that is still going is queued
+// (QueueRetry) and starts nothing now, so the limits on live runs, which
+// the run met when it started, are not asked again.
 func (t *trial) relaunchRun(sess *session, ip, id string, isRetry bool, env map[string]string, start func() error) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if re := t.admit(sess, ip); re != nil {
-		return re
+	if _, live := t.runner.QueuedRetries(id); !isRetry || !live {
+		if re := t.admit(sess, ip); re != nil {
+			return re
+		}
 	}
 	var asked int
 	if isRetry {
