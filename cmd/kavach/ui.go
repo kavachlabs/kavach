@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/kavachlabs/kavach/replay"
-	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
 // 256-color palette carried over from the original kavach CLI.
@@ -95,7 +94,7 @@ func (u ui) printBanner(w io.Writer) {
 	for i := range bannerMark {
 		fmt.Fprintf(w, "  %s   %s\n", u.paint(bannerMark[i], ansiBold, ansiCyan), u.paint(bannerText[i], ansiBold, ansiOrange))
 	}
-	fmt.Fprintf(w, "  %s\n\n", u.paint("deterministic replay and fix verification for journal-driven services · "+kavach.Version, ansiDim))
+	fmt.Fprintf(w, "  %s\n\n", u.paint("deterministic replay and fix verification for journal-driven services · "+version, ansiDim))
 }
 
 // header prints a section title such as "=== [KAVACH REPLAY] ===".
