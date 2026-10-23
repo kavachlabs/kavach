@@ -6,6 +6,7 @@
 #   kavach-trial invite list | show <code|label> | revoke <code|label>
 #   kavach-trial task add|remove|list <task>...
 #   kavach-trial model add|remove|list <model>...
+#   kavach-trial retry <run> <attempt>...   (an invite run, on the server's keys)
 #   kavach-trial status
 #   kavach-trial deploy [--force] [--build-only] [ref]
 #   kavach-trial showcase add|remove|list <run>...
@@ -54,11 +55,15 @@ cmd_status() {
 	remote "$BENCH trial invite list"
 }
 
+# UNIT installs bench-trial.service from the checkout, so the unit always
+# matches the binary deployed with it (a new flag in ExecStart, say).
+UNIT="install -m 0644 /opt/kavach/bench/agent/deploy/trial/bench-trial.service /etc/systemd/system/bench-trial.service && systemctl daemon-reload"
+
 # rollback puts the previous binary and checkout back and says what state the
 # VM is left in.
 rollback() {
 	echo "kavach-trial: $2; rolling back to $1" >&2
-	if remote "rm -f $BENCH.new; [ -f $BENCH.prev ] && mv -f $BENCH.prev $BENCH; git -C /opt/kavach checkout --detach $1 && systemctl restart bench-trial"; then
+	if remote "rm -f $BENCH.new; [ -f $BENCH.prev ] && mv -f $BENCH.prev $BENCH; git -C /opt/kavach checkout --detach $1 && $UNIT && systemctl restart bench-trial"; then
 		die "rolled back: the previous binary and checkout $1 are in place and bench-trial was restarted. See: ssh root@$HOST journalctl -u bench-trial -n 50"
 	fi
 	die "ROLLBACK FAILED: fix the VM by hand (binary $BENCH vs $BENCH.prev, checkout $1, systemctl restart bench-trial)"
@@ -113,7 +118,7 @@ cmd_deploy() {
 		die "the VM could not fetch $sha; push it first. Nothing was changed"
 	}
 	# Rename, never write: the running binary stays as it is until replaced.
-	if ! remote "cp -p $BENCH $BENCH.prev && chmod 755 $BENCH.new && mv -f $BENCH.new $BENCH && systemctl restart bench-trial"; then
+	if ! remote "cp -p $BENCH $BENCH.prev && chmod 755 $BENCH.new && mv -f $BENCH.new $BENCH && $UNIT && systemctl restart bench-trial"; then
 		rollback "$prev" "installing or restarting failed"
 	fi
 
@@ -232,11 +237,11 @@ cmd_publish() {
 		die "uploaded, but these runs are not on the showcase, so retention may delete them: kavach-trial showcase add$trial_runs"
 }
 
-[ $# -gt 0 ] || { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -gt 0 ] || { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 case $1 in
 status) cmd_status ;;
 deploy) shift; cmd_deploy "$@" ;;
 publish) shift; cmd_publish "$@" ;;
-invite | task | model | showcase) remote "$BENCH trial $(quote "$@")" ;;
+invite | task | model | showcase | retry) remote "$BENCH trial $(quote "$@")" ;;
 *) die "unknown command $1 (invite, task, model, showcase, status, deploy, publish)" ;;
 esac

@@ -30,11 +30,19 @@ const trialUsage = `usage: bench trial <group> <verb> [flags] [args]
   task   add|remove <task>...      list
   model  add|remove <model>...     list
   showcase add|remove <run>...     list
+  retry [-socket PATH] <run> <attempt>...
 
 Edits the trial's config file (-config, default $TRIAL_CONFIG or
 /etc/kavach/trial.json); a running "bench api -trial" picks the change up
 without a restart. Flags go before the arguments.
+
+retry asks the running server, over its -admin-socket (default
+` + defaultAdminSocket + `), to retry attempts of a run started on an invite,
+on the server's keys. An attempt is its folder name or the part after "__".
+One asked for while the run goes on starts when the run ends.
 `
+
+const defaultAdminSocket = "/var/lib/kavach/admin.sock"
 
 // trialOpts are the flags every bench trial verb shares.
 type trialOpts struct {
@@ -87,9 +95,12 @@ func (o *trialOpts) envList(key string) []string {
 }
 
 func cmdTrial(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 2 {
+	if len(args) < 2 || (args[0] == "retry" && len(args) < 3) {
 		fmt.Fprint(stderr, trialUsage)
 		return 2
+	}
+	if args[0] == "retry" {
+		return trialRetry(args[1:], stdout, stderr)
 	}
 	name := args[0] + " " + args[1]
 	handlers := map[string]func(*trialOpts, *flag.FlagSet) func(io.Writer) error{

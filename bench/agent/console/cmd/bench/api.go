@@ -145,6 +145,29 @@ func serve(h http.Handler, addr string, stderr io.Writer, ready func(url string)
 	return nil
 }
 
+// listenAdmin listens on the unix socket at path, replacing a stale one,
+// with mode 0600: the operator's routes have no authentication of their
+// own, so only this user (and root) may connect.
+func listenAdmin(path string) (net.Listener, error) {
+	if st, err := os.Lstat(path); err == nil {
+		if st.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("%s exists and is not a socket", path)
+		}
+		os.Remove(path)
+	}
+	old := syscall.Umask(0o177)
+	ln, err := net.Listen("unix", path)
+	syscall.Umask(old)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
+}
+
 // syncingServer is a server that also backs finished runs up to R2.
 func syncingServer(cfg api.Config) *api.Server {
 	s := api.New(cfg)
@@ -163,6 +186,7 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 	trustCF := fs.Bool("trust-cf", false, "with -trial: take a client's address from CF-Connecting-IP")
 	check := fs.Bool("check", false, "with -trial: check that the config file and invite usage load, print ok and exit")
 	trialConfig := fs.String("trial-config", "", "with -trial: the config file (default $TRIAL_CONFIG or "+api.DefaultTrialConfig+"); read again when it changes")
+	adminSocket := fs.String("admin-socket", "", "with -trial: also serve the operator's routes (bench trial retry) on this unix socket, which only this user can open")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -203,6 +227,10 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
+	if *adminSocket != "" && cfg.Trial == nil {
+		fmt.Fprintln(stderr, "bench api: -admin-socket needs -trial")
+		return 2
+	}
 	if *check {
 		if cfg.Trial == nil {
 			fmt.Fprintln(stderr, "bench api: -check needs -trial")
@@ -212,7 +240,19 @@ func cmdAPI(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	fmt.Fprintf(stderr, "bench: jobs %s, tasks %s\n", cfg.JobsDir, cfg.TasksDir)
-	if err := serve(syncingServer(cfg), listen, stderr, nil); err != nil {
+	s := syncingServer(cfg)
+	if *adminSocket != "" {
+		ln, err := listenAdmin(*adminSocket)
+		if err != nil {
+			fmt.Fprintf(stderr, "bench api: -admin-socket: %v\n", err)
+			return 1
+		}
+		defer os.Remove(*adminSocket)
+		defer ln.Close()
+		fmt.Fprintf(stderr, "bench: operator routes on %s\n", *adminSocket)
+		go http.Serve(ln, s.AdminHandler())
+	}
+	if err := serve(s, listen, stderr, nil); err != nil {
 		fmt.Fprintf(stderr, "bench api: %v\n", err)
 		return 1
 	}

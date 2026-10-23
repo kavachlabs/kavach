@@ -346,6 +346,19 @@ is 403 when the session's invite code has been revoked, and 409 when the
 server's keys for invites are missing or are now for another sandbox than
 the run used.
 
+**The operator's retry.** With `-admin-socket PATH`, a trial server also
+serves `POST /retry` on a unix socket at PATH, mode 0600, so only the
+server's user and root can connect; it has no other authentication and is
+never on the public listener (behind a tunnel every request comes from
+loopback). The body is `{"job": RUN, "trials": [ATTEMPT, ...]}`, each
+attempt its folder name or the part after `__` when only one attempt ends
+so. It retries attempts of a run started on an invite, on the server's keys,
+with no visitor's limits and without counting against the cap; a run on a
+visitor's own keys is 409, since the server keeps no keys for it. It answers
+200 with `[{"trial", "queued", "error"}]`: started now, queued until the run
+ends, or why not. `bench trial retry [-socket PATH] <run> <attempt>...` is
+its client, and `kavach-trial retry` runs that on the VM.
+
 **Locked for everyone**, own keys included, and 404 whoever asks:
 `/api/settings` (it reads and writes the server's env file and keys),
 `POST /api/jobs/{id}/sync` (the server's R2 backup), and

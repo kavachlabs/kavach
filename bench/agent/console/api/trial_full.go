@@ -249,6 +249,17 @@ func (s *Server) relaunchInvite(w http.ResponseWriter, r *http.Request, sess *se
 		writeError(w, http.StatusForbidden, "this invite code has been revoked")
 		return
 	}
+	env, err := t.inviteRunEnv(id)
+	if err != nil {
+		writeError(w, http.StatusConflict, "%v", err)
+		return
+	}
+	s.relaunchWith(w, r, sess, id, env, do)
+}
+
+// inviteRunEnv is the environment for running invited run id again: the
+// server's keys for its model, as starting it had, on the same provider.
+func (t *trial) inviteRunEnv(id string) (map[string]string, error) {
 	var cfg struct {
 		Environment struct {
 			Type string `json:"type"`
@@ -262,18 +273,13 @@ func (s *Server) relaunchInvite(w http.ResponseWriter, r *http.Request, sess *se
 		err = json.Unmarshal(b, &cfg)
 	}
 	if err != nil || len(cfg.Agents) == 0 {
-		writeError(w, http.StatusConflict, "the run's record could not be read")
-		return
+		return nil, errors.New("the run's record could not be read")
 	}
 	env, provider, err := t.runEnv(cfg.Agents[0].Model)
 	if err == nil && provider != cfg.Environment.Type {
 		err = errors.New("this run used " + cfg.Environment.Type + ", and invite runs now use " + provider)
 	}
-	if err != nil {
-		writeError(w, http.StatusConflict, "%v", err)
-		return
-	}
-	s.relaunchWith(w, r, sess, id, env, do)
+	return env, err
 }
 
 // relaunch starts Harbor again for run id with the session's own keys, which

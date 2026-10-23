@@ -14,7 +14,7 @@ Environment=PATH=/home/kavach/.local/bin:/usr/local/bin:/usr/bin:/bin
 # its next temporary file. Runs keep theirs here instead.
 Environment=TMPDIR=/var/lib/kavach/tmp
 ExecStartPre=/bin/mkdir -p -m 0700 /var/lib/kavach/tmp
-ExecStart=/opt/kavach/bin/bench api -trial -port 8480 -root /opt/kavach -jobs /var/lib/kavach/jobs -origin https://try.kavachlabs.dev -trust-cf
+ExecStart=/opt/kavach/bin/bench api -trial -port 8480 -root /opt/kavach -jobs /var/lib/kavach/jobs -origin https://try.kavachlabs.dev -trust-cf -admin-socket /var/lib/kavach/admin.sock
 # Runs are detached from the console: a restart leaves them running.
 KillMode=process
 Restart=on-failure
