@@ -91,8 +91,13 @@ type Job struct {
 	Cost        float64 `json:"cost"`
 	Stoppable   bool    `json:"stoppable"` // started by this process and still running
 	Resumable   bool    `json:"resumable"` // started by bench, stopped or paused, not finished
-	Retryable   bool    `json:"retryable"` // started by bench, not running, with a job folder: its attempts can be run again
-	Error       string  `json:"error,omitempty"`
+	// Retryable: started by bench, with a job folder, and not running, or
+	// running in a Harbor this process started: its failed attempts can be
+	// run again, at once or, while it runs, when it exits.
+	Retryable bool `json:"retryable"`
+	// RetryQueued are the attempts that run again when the job's Harbor exits.
+	RetryQueued []string `json:"retry_queued,omitempty"`
+	Error       string   `json:"error,omitempty"`
 	// Sync is the job's backup to R2; absent when the reader has no Syncer.
 	Sync   *SyncState `json:"sync,omitempty"`
 	Trials []Trial    `json:"trials,omitempty"`
@@ -359,7 +364,9 @@ func (r *Reader) readJob(id string) Job {
 	j.Environment = cfg.Environment.Type
 
 	launched, alive, out := r.Runs.state(id)
-	j.Retryable = launched && !alive && exists(filepath.Join(dir, "config.json"))
+	queued, own := r.Runs.QueuedRetries(id)
+	j.Retryable = launched && (!alive || own) && exists(filepath.Join(dir, "config.json"))
+	j.RetryQueued = queued
 	switch {
 	case launched && alive:
 		// Before a retry's Harbor rewrites result.json, it still says

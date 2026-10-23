@@ -612,13 +612,13 @@ func (s *Server) resumeJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) retryTrial(w http.ResponseWriter, r *http.Request) {
 	id, trial := r.PathValue("job"), r.PathValue("trial")
-	err := s.runner.Retry(id, trial)
+	_, err := s.runner.QueueRetry(id, trial, nil)
 	switch {
 	case errors.Is(err, harbor.ErrNotFound):
 		writeError(w, http.StatusNotFound, "%s/%s: no such attempt in a run bench started", id, trial)
 		return
 	case errors.Is(err, harbor.ErrNotStopped):
-		writeError(w, http.StatusConflict, "%s is still running; retry the attempt once it ends", id)
+		writeError(w, http.StatusConflict, "%s is running in another bench process; retry the attempt once it ends", id)
 		return
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "retrying %s: %v", trial, err)

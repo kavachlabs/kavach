@@ -49,10 +49,10 @@ type RunRequest struct {
 	// Concurrent is how many trials run at once. Default 1.
 	Concurrent int `json:"concurrent"`
 	// Retries is how many times Harbor runs an attempt again when it ends
-	// with an error (a provider or container failure), 0-5. Harbor deletes
-	// the failed attempt's folder first, and does not retry timeouts, usage
-	// limits or refusals, nor an attempt whose tests ran and failed.
-	// Default 0.
+	// with an error (a provider or container failure, a stalled agent),
+	// 0-5, after a wait (retryConfig). Harbor deletes the failed attempt's
+	// folder first, and does not retry timeouts, usage limits or refusals,
+	// nor an attempt whose tests ran and failed. Default 0.
 	Retries int `json:"retries"`
 	// Name is the job's name and folder; default three random words
 	// (brisk-cobalt-heron).
@@ -181,6 +181,10 @@ type run struct {
 	cmd    *exec.Cmd
 	done   chan struct{}
 	killed bool // set before done closes: the process died of a signal
+	// retries are the attempts QueueRetry queued while this process ran,
+	// to run again with retryEnv when it exits. r.mu guards both.
+	retries  []string
+	retryEnv map[string]string
 }
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -305,6 +309,10 @@ func (r *Runner) spawn(id string, cmd *exec.Cmd) error {
 			}
 		}
 		close(rn.done)
+		// A retry's Harbor calls OnExit when it exits in turn.
+		if r.retryQueued(id, rn) {
+			return
+		}
 		if r.OnExit != nil {
 			r.OnExit(id)
 		}
@@ -404,7 +412,7 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 		"n_attempts":          req.Attempts,
 		"n_concurrent_trials": req.Concurrent,
 		"quiet":               true,
-		"retry":               map[string]any{"max_retries": req.Retries},
+		"retry":               retryConfig(req.Retries),
 		"agents":              agents,
 		"tasks":               tasks,
 	}
@@ -422,6 +430,15 @@ func (r *Runner) jobConfig(req *RunRequest) (map[string]any, error) {
 	return cfg, nil
 }
 
+// retryConfig is Harbor's retry config for n retries of an attempt that
+// errors. Harbor waits min_wait_sec × wait_multiplier^k before the k-th
+// retry: 30 s, then 60 s, at most 120 s, which outlasts a provider's rate
+// limit (429), the usual reason a model call fails. Harbor's own exclusions
+// still hold: timeouts, usage limits, refusals and bad keys are not retried.
+func retryConfig(n int) map[string]any {
+	return map[string]any{"max_retries": n, "min_wait_sec": 30, "wait_multiplier": 2, "max_wait_sec": 120}
+}
+
 // Stop interrupts a run bench started, by this console or an earlier one.
 // Harbor treats SIGINT like Ctrl-C: it cancels the trials, removes their
 // containers and exits; the cancelled trials end with a CancelledError and
@@ -432,6 +449,12 @@ func (r *Runner) Stop(id string) error {
 		return ErrNotRunning
 	}
 	rn := r.get(id)
+	if rn != nil {
+		// A stopped run stays stopped: its queued retries are dropped.
+		r.mu.Lock()
+		rn.retries, rn.retryEnv = nil, nil
+		r.mu.Unlock()
+	}
 	if rn != nil {
 		select {
 		case <-rn.done:
@@ -517,21 +540,120 @@ func (r *Runner) RetryWithEnv(id, trial string, env map[string]string) error {
 	if _, alive, _ := r.stateLocked(id); alive {
 		return ErrNotStopped
 	}
-	dir := filepath.Join(r.JobsDir, id)
-	src := filepath.Join(dir, trial)
-	if !exists(filepath.Join(dir, "config.json")) || !isTrialDir(src) {
+	if !exists(filepath.Join(r.JobsDir, id, "config.json")) || !isTrialDir(filepath.Join(r.JobsDir, id, trial)) {
 		return ErrNotFound
 	}
-	// Harbor deletes any folder in the job's that has no result.json, so
-	// the old attempt is kept outside it.
+	if err := r.setAside(id, trial); err != nil {
+		return err
+	}
+	return r.resumeLocked(id, env)
+}
+
+// setAside moves an attempt's folder out of its job's. Harbor deletes any
+// folder in the job's that has no result.json, so the old attempt is kept
+// outside it.
+func (r *Runner) setAside(id, trial string) error {
 	dst := filepath.Join(r.JobsDir, ".bench", "retried", id, trial+"."+time.Now().Format("20060102-150405"))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(src, dst); err != nil {
-		return err
+	return os.Rename(filepath.Join(r.JobsDir, id, trial), dst)
+}
+
+// QueueRetry is RetryWithEnv for a run that may still be running. While a
+// Harbor this Runner started runs the job, the attempt is queued instead,
+// and it reports true: when that Harbor exits, every queued attempt is set
+// aside and Harbor resumes the job once for all of them, with the env of
+// the latest request, before OnExit. Stop drops the queue. The queue is in
+// memory only, as env holds a visitor's keys; a restart, which also ends
+// the run, forgets it.
+func (r *Runner) QueueRetry(id, trial string, env map[string]string) (queued bool, err error) {
+	if !r.launched(id) || !validName(trial) {
+		return false, ErrNotFound
 	}
-	return r.resumeLocked(id, env)
+	r.mu.Lock()
+	rn := r.runs[id]
+	if rn == nil || isDone(rn) {
+		r.mu.Unlock()
+		return false, r.RetryWithEnv(id, trial, env)
+	}
+	defer r.mu.Unlock()
+	if !isTrialDir(filepath.Join(r.JobsDir, id, trial)) {
+		return false, ErrNotFound
+	}
+	if !slices.Contains(rn.retries, trial) {
+		rn.retries = append(rn.retries, trial)
+	}
+	rn.retryEnv = env
+	return true, nil
+}
+
+// retryQueued starts Harbor again for the attempts queued while rn ran, and
+// reports whether it did. An attempt whose folder is gone (Harbor's own
+// retry replaced it) is skipped.
+func (r *Runner) retryQueued(id string, rn *run) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	trials, env := rn.retries, rn.retryEnv
+	rn.retries, rn.retryEnv = nil, nil
+	if len(trials) == 0 || r.runs[id] != rn {
+		return false
+	}
+	if _, alive, _ := r.stateLocked(id); alive {
+		return false
+	}
+	moved := 0
+	for _, trial := range trials {
+		if !isTrialDir(filepath.Join(r.JobsDir, id, trial)) {
+			continue
+		}
+		if err := r.setAside(id, trial); err != nil {
+			r.note(id, "retrying %s: %v", trial, err)
+			continue
+		}
+		moved++
+	}
+	if moved == 0 {
+		return false
+	}
+	if err := r.resumeLocked(id, env); err != nil {
+		r.note(id, "retrying the queued attempts: %v", err)
+		return false
+	}
+	return true
+}
+
+// QueuedRetries are the attempts queued to run again when the job's Harbor
+// exits, and whether that Harbor is one this Runner started and still runs,
+// which is when QueueRetry queues.
+func (r *Runner) QueuedRetries(id string) (trials []string, own bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rn := r.runs[id]
+	if rn == nil || isDone(rn) {
+		return nil, false
+	}
+	return slices.Clone(rn.retries), true
+}
+
+func isDone(rn *run) bool {
+	select {
+	case <-rn.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// note appends a line to the job's Harbor log.
+func (r *Runner) note(id, format string, args ...any) {
+	if f, err := os.OpenFile(r.file(id, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		fmt.Fprintf(f, "\nbench: "+format+"\n", args...)
+		f.Close()
+	}
 }
 
 func (r *Runner) resumeLocked(id string, env map[string]string) error {
@@ -630,9 +752,9 @@ func (r *Runner) alive(id string) bool {
 	defer r.mu.Unlock()
 	rn := r.runs[id]
 	if rn != nil {
-		select {
-		case <-rn.done:
-		default:
+		// Queued retries count from the moment the Harbor exits until the
+		// retry's starts, so no one takes the run for finished in between.
+		if !isDone(rn) || len(rn.retries) > 0 {
 			return true
 		}
 	} else if _, ok := r.pid(id); ok {
@@ -698,11 +820,7 @@ func (r *Runner) state(id string) (launched, alive bool, out string) {
 func (r *Runner) stateLocked(id string) (launched, alive bool, out string) {
 	rn := r.runs[id]
 	if rn != nil {
-		select {
-		case <-rn.done:
-		default:
-			alive = true
-		}
+		alive = !isDone(rn) || len(rn.retries) > 0
 	} else {
 		_, alive = r.pid(id)
 	}

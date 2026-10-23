@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -399,19 +401,94 @@ while :; do sleep 0.05; done
 		t.Errorf("args %q", got)
 	}
 	j, _ := reader.Job("demo")
-	if j.Retryable || !j.Stoppable {
+	if !j.Retryable || !j.Stoppable || len(j.RetryQueued) != 0 {
 		t.Fatalf("retrying %+v", j)
 	}
 	if err := runner.Retry("demo", "demo__2"); !errors.Is(err, ErrNotStopped) {
 		t.Errorf("retry while running: %v", err)
 	}
+	// Stop drops what QueueRetry queued: a stopped run stays stopped.
+	if queued, err := runner.QueueRetry("demo", "demo__2", nil); !queued || err != nil {
+		t.Fatalf("queue while running: %v %v", queued, err)
+	}
 	if err := runner.Stop("demo"); err != nil {
 		t.Fatal(err)
 	}
 	runner.Wait("demo")
+	if runner.Alive("demo") || !exists(filepath.Join(jobs, "demo", "demo__2")) {
+		t.Error("a queued retry ran after Stop")
+	}
 	// The retried run has no other jobs listed for it.
 	if js, _ := reader.Jobs(); len(js) != 1 {
 		t.Errorf("jobs %+v", js)
+	}
+}
+
+// A retry asked for while the run goes on waits for its Harbor to exit,
+// then runs, with every other queued attempt, in one Harbor; OnExit is for
+// the last Harbor only.
+func TestQueueRetry(t *testing.T) {
+	runner, dir := fakeHarbor(t, `
+if [ "$1" = run ]; then
+	for n in 1 2 3; do
+		mkdir -p "$JOBS/demo/demo__$n"
+		echo '{}' > "$JOBS/demo/demo__$n/config.json"
+		echo '{"task_name":"hello-world-control","verifier_result":{"rewards":{"reward":0}}}' > "$JOBS/demo/demo__$n/result.json"
+	done
+	echo '{}' > "$JOBS/demo/config.json"
+	while [ ! -f "$JOBS/release" ]; do sleep 0.05; done
+	echo '{"started_at":"2026-10-12T10:00:00Z","finished_at":"2026-10-12T10:05:00Z"}' > "$JOBS/demo/result.json"
+	exit 0
+fi
+echo resumed >> "$JOBS/resumes"
+`)
+	jobs := filepath.Join(dir, "jobs")
+	t.Setenv("JOBS", jobs)
+	var mu sync.Mutex
+	var exits []string
+	runner.OnExit = func(id string) {
+		mu.Lock()
+		exits = append(exits, id)
+		mu.Unlock()
+	}
+	if _, err := runner.Start(RunRequest{Tasks: []string{"hello-world-control"}, Agent: "oracle", Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return exists(filepath.Join(jobs, "demo", "config.json")) })
+	if _, err := runner.QueueRetry("demo", "demo__9", nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("queue a missing attempt: %v", err)
+	}
+	for _, trial := range []string{"demo__1", "demo__3", "demo__1"} {
+		if queued, err := runner.QueueRetry("demo", trial, nil); !queued || err != nil {
+			t.Fatalf("queue %s: %v %v", trial, queued, err)
+		}
+	}
+	reader := &Reader{Dir: jobs, Runs: runner}
+	if j, _ := reader.Job("demo"); !j.Retryable || !slices.Equal(j.RetryQueued, []string{"demo__1", "demo__3"}) {
+		t.Fatalf("queued %+v", j)
+	}
+	if err := os.WriteFile(filepath.Join(jobs, "release"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return exists(filepath.Join(jobs, "resumes")) })
+	runner.Wait("demo")
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(exits) > 0 })
+	if b, _ := os.ReadFile(filepath.Join(jobs, "resumes")); string(b) != "resumed\n" {
+		t.Errorf("resumes %q", b)
+	}
+	for trial, want := range map[string]bool{"demo__1": false, "demo__2": true, "demo__3": false} {
+		if exists(filepath.Join(jobs, "demo", trial)) != want {
+			t.Errorf("%s in the job's folder: %v", trial, !want)
+		}
+	}
+	kept, _ := filepath.Glob(filepath.Join(jobs, ".bench", "retried", "demo", "*", "result.json"))
+	if len(kept) != 2 {
+		t.Errorf("kept %v", kept)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(exits, []string{"demo"}) {
+		t.Errorf("OnExit for %v", exits)
 	}
 }
 

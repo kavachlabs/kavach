@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -250,8 +251,15 @@ func TestTrialOwnKeysPauseResumeRetry(t *testing.T) {
 	if !strings.Contains(third, "CALL jobs resume -p "+dir) || !strings.Contains(third, "OPENROUTER_API_KEY="+modelKey) || strings.Contains(third, "server-secret") {
 		t.Errorf("retry call:\n%s", third)
 	}
-	if code, _ := e.do(c, "POST", "/api/trials/"+id+"/nope/retry", ""); code != 429 {
-		t.Errorf("retry while running: %d", code)
+	// While the run goes on, a retry is queued for when it ends; the
+	// limits on live runs do not refuse it.
+	if code, _ := e.do(c, "POST", "/api/trials/"+id+"/nope/retry", ""); code != 404 {
+		t.Errorf("retry of a missing attempt while running: %d", code)
+	}
+	os.MkdirAll(filepath.Join(dir, id+"__B"), 0o755)
+	os.WriteFile(filepath.Join(dir, id+"__B", "config.json"), []byte("{}"), 0o644)
+	if code, v := e.do(c, "POST", "/api/trials/"+id+"/"+id+"__B/retry", ""); code != 202 || fmt.Sprint(v["retry_queued"]) != "["+id+"__B]" {
+		t.Errorf("retry while running: %d %v", code, v)
 	}
 	if e.s.trial.jobSecrets[id] == nil {
 		t.Errorf("no secrets kept for the resumed run")

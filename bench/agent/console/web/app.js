@@ -3611,21 +3611,27 @@ function runControl(job) {
       h("button", { type: "button", class: "btn", onclick: () => { state.confirm = ""; renderView(); } }, "Cancel")));
 }
 
-// retryControl offers to run a failed attempt again once its run has ended.
+// retryControl offers to run a failed attempt again: at once, or, while its
+// run goes on, as soon as the run ends.
 function retryControl(t, job) {
   if (!job.retryable || (t.status !== "fail" && t.status !== "error")) return null;
+  const live = job.status === "running" || job.status === "pausing";
+  if ((job.retry_queued || []).includes(t.id)) {
+    return h("span", { class: "dim" }, "Runs again when this run ends");
+  }
   if (state.confirm !== `retry:${t.id}`) {
     return h("button", { type: "button", class: "btn", onclick: () => {
       state.confirm = `retry:${t.id}`;
       state.actionErr = "";
       renderView();
       document.getElementById("confirm-yes").focus();
-    } }, "Retry attempt…");
+    } }, live ? "Retry when the run ends…" : "Retry attempt…");
   }
   const others = job.resumable ? " Attempts the run didn't finish run too." : "";
+  const when = live ? " Your other attempts carry on; this one starts once they have all ended, unless you stop the run." : "";
   return h("div", { class: "confirm", role: "alertdialog", "aria-label": "Retry attempt", onkeydown: (e) => { if (e.key === "Escape") { state.confirm = ""; renderView(); } } },
     h("span", {}, h("b", {}, "Run this attempt again? "),
-      `Harbor runs a new attempt of ${t.task}${t.model ? ` with ${shortModel(t.model)}` : ""}, ${TRIAL && trial.session && trial.session.invite ? "on the invite's keys; it uses none of the invite's runs" : "which costs as much as the first"}. This one leaves the run${TRIAL ? "" : `; its folder is kept in .bench/retried/${job.id}/`}.${others}`),
+      `Harbor runs a new attempt of ${t.task}${t.model ? ` with ${shortModel(t.model)}` : ""}, ${TRIAL && trial.session && trial.session.invite ? "on the invite's keys; it uses none of the invite's runs" : "which costs as much as the first"}. This one leaves the run${TRIAL ? "" : `; its folder is kept in .bench/retried/${job.id}/`}.${others}${when}`),
     state.actionErr ? h("span", { class: "bad" }, state.actionErr) : null,
     h("div", { class: "row" },
       h("button", { type: "button", id: "confirm-yes", class: "btn blue", onclick: () => retryTrial(t) }, "Retry attempt"),

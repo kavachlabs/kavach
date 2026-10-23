@@ -110,6 +110,9 @@ const (
 	maxKeyLen     = 512
 	minKeyLen     = 20
 	maxConcurrent = 2
+	// inviteRetries is how many times Harbor runs an invited attempt again
+	// when it errors (a rate limit, a stalled agent), on the operator's keys.
+	inviteRetries = 2
 )
 
 // modelKeyVars is the variable the agent reads for a model's provider, the
@@ -652,7 +655,7 @@ func (s *Server) postTrialJob(w http.ResponseWriter, r *http.Request) {
 	// An invited run needs no Turnstile check: the code already says who
 	// runs, and caps their runs. Runs on a visitor's own keys are checked
 	// (postOwnJob).
-	rr.Agent, rr.Concurrent, rr.Retries, rr.TimeoutSec, rr.Name = harbor.LiveAgent, maxConcurrent, 0, 0, ""
+	rr.Agent, rr.Concurrent, rr.Retries, rr.TimeoutSec, rr.Name = harbor.LiveAgent, maxConcurrent, inviteRetries, 0, ""
 
 	// A models list of mixed providers would need several keys.
 	env, provider, err := t.runEnv(rr.Models[0])
@@ -908,6 +911,9 @@ func (t *trial) shape(j *harbor.Job, v viewer, owner bool) {
 	j.Stoppable = j.Stoppable && owner
 	j.Resumable = j.Resumable && owner && v.control
 	j.Retryable = j.Retryable && owner && (v.control || t.inviteRun(j.ID))
+	if !j.Retryable {
+		j.RetryQueued = nil
+	}
 	j.Sync = nil
 	j.Error = classifyJobError(j.Error)
 }
