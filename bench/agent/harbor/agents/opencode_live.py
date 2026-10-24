@@ -500,8 +500,9 @@ class KavachOpenCode(OpenCode):
             )
             # The SDK decodes the stream incrementally as UTF-8, so a character
             # split across messages arrives whole.
+            append = self._appender()
             await sandbox.process.get_session_command_logs_async(
-                session, cmd.cmd_id, lambda text: self._append_live(text.encode()), lambda _: None
+                session, cmd.cmd_id, lambda text: append(text.encode()), lambda _: None
             )
             done = await sandbox.process.get_session_command(session, cmd.cmd_id)
             return done.exit_code
@@ -511,17 +512,36 @@ class KavachOpenCode(OpenCode):
                 await asyncio.shield(sandbox.process.delete_session(session))
 
     async def _follow_modal(self, sandbox) -> int | None:
+        append = self._appender()
         process = await sandbox.exec.aio("sh", "-c", self._follow_command(), text=False)
         async for chunk in process.stdout:
-            self._append_live(chunk)
+            append(chunk)
         return await process.wait.aio()
 
     async def _follow_for(self, follow) -> int | None:
-        """Run one follow, giving up on a stream that outlives its command."""
-        try:
-            return await asyncio.wait_for(follow(), FOLLOW_SEC + FOLLOW_GRACE_SEC)
-        except TimeoutError:
-            return None
+        """Run one follow, giving up on a stream that outlives its command.
+        A follow given up is cancelled but not waited for: its cleanup (the
+        SDK closing a dead websocket, deleting the provider's session) can
+        hang too, and the log is polled meanwhile. Whatever it still
+        delivers is dropped, so nothing is copied twice."""
+        self._follows = getattr(self, "_follows", 0) + 1
+        task = asyncio.ensure_future(follow())
+        done, _ = await asyncio.wait({task}, timeout=FOLLOW_SEC + FOLLOW_GRACE_SEC)
+        if task in done:
+            return task.result()
+        self._follows += 1
+        task.cancel()
+        # Kept until it ends, so it is not collected mid-cleanup; its outcome
+        # is retrieved so asyncio does not warn about it.
+        self._abandoned = getattr(self, "_abandoned", set())
+        self._abandoned.add(task)
+        task.add_done_callback(lambda t: (self._abandoned.discard(t), t.cancelled() or t.exception()))
+        return None
+
+    def _appender(self):
+        """_append_live for the current follow only."""
+        mine = getattr(self, "_follows", 0)
+        return lambda data: self._append_live(data) if getattr(self, "_follows", 0) == mine else None
 
     async def _tail_once(self, environment: BaseEnvironment) -> bool:
         """Append the bytes the sandbox's event log gained since the last

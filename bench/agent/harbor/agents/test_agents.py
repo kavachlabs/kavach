@@ -717,6 +717,40 @@ class Stall(unittest.TestCase):
         with mock.patch.object(opencode_live, "FOLLOW_SEC", 0.01), mock.patch.object(opencode_live, "FOLLOW_GRACE_SEC", 0.01):
             self.assertIsNone(asyncio.run(self.agent._follow_for(self.hung)))
 
+    def test_a_follow_whose_cleanup_hangs_is_not_waited_for(self):
+        agent = self.agent
+
+        async def stubborn():
+            append = agent._appender()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                # The SDK closing a dead websocket, or deleting the session.
+                await asyncio.shield(asyncio.sleep(0.3))
+                append(b"late\n")
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            start = loop.time()
+            got = await agent._follow_for(stubborn)
+            took = loop.time() - start
+            await asyncio.sleep(0.5)
+            return got, took
+
+        with mock.patch.object(opencode_live, "FOLLOW_SEC", 0.01), mock.patch.object(opencode_live, "FOLLOW_GRACE_SEC", 0.01):
+            got, took = asyncio.run(run())
+        self.assertIsNone(got)
+        self.assertLess(took, 0.2)
+        self.assertFalse((self.agent.logs_dir / opencode_live.LIVE_LOG).exists(), "a given-up follow's output was copied")
+
+    def test_a_follow_that_ends_returns_its_status(self):
+        async def ends():
+            self.agent._appender()(b"x\n")
+            return 0
+
+        self.assertEqual(asyncio.run(self.agent._follow_for(ends)), 0)
+        self.assertEqual((self.agent.logs_dir / opencode_live.LIVE_LOG).read_bytes(), b"x\n")
+
     def test_the_run_s_own_error_is_raised(self):
         async def fails():
             raise RuntimeError("boom")
