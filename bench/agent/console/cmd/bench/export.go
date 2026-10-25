@@ -220,6 +220,18 @@ func (e *exporter) trial(job, id, arm string) error {
 	if err := e.copy(base + "/steps"); err != nil {
 		return err
 	}
+	// The Events tab reads the log's tail, as the server first answers it.
+	// The copy holds only that page: it says nothing follows, or app.js would
+	// ask ?from=, get the same page again and repeat its lines.
+	var ev harbor.Events
+	if err := e.getJSON(base+"/events", &ev); err != nil && !errors.Is(err, errNotFound) {
+		return err
+	} else if err == nil && ev.Source != "" {
+		ev.Size = ev.Next
+		if err := e.putJSON(base+"/events", ev); err != nil {
+			return err
+		}
+	}
 	var variants harbor.VariantList
 	err := e.getJSON(base+"/variants", &variants)
 	if err != nil && !errors.Is(err, errNotFound) {
