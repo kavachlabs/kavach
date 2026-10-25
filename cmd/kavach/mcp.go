@@ -489,7 +489,7 @@ func mcpContractCheck(raw json.RawMessage) (map[string]any, error) {
 	if a.Dir == "" {
 		a.Dir = contract.DefaultDir
 	}
-	r, wall, err := checkContract(a.Dir, a.Old, a.New, a.NoVariants)
+	r, wall, err := checkContract(a.Dir, a.Old, a.New, a.NoVariants, "")
 	if err != nil {
 		return nil, err
 	}

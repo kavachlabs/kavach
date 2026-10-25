@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ Usage:
   kavach contract show    [--dir DIR] [--json]
   kavach contract approve [--dir DIR] [--yes]
   kavach contract check   --new <host-command> [--old <host-command>] [--dir DIR] [--no-variants] [--json]
+                          [--save-replays DIR]
 
 DIR defaults to ./contract. A match expression selects inputs by a value in
 their JSON data: '$.argv[0]=="HSETEX"'. A step whose output depends on the
@@ -42,7 +45,9 @@ baseline_mismatch(V), unapproved, stale_lock. Exit status 0 only for pass.
 Each check is a round in DIR/rounds.jsonl; "streak" counts rounds in a row
 with the same outcome. The round's failing variants are saved to DIR/variants/
 (replaced by each check) and kept in DIR/rounds/N/: variant-K.kavach and
-variant-K.json, the new build's replay of it.
+variant-K.json, the new build's replay of it. --save-replays writes each
+build's replay of the traffic, as kavach replay --json prints it, to
+replay-old.json and replay-new.json in the directory it names.
 `
 
 func cmdContract(u ui, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -223,6 +228,7 @@ func contractCheck(u ui, args []string, stdout, stderr io.Writer) int {
 	newBin := fs.String("new", "", "host command for the build under test")
 	noVariants := fs.Bool("no-variants", false, "skip variants of the feature steps")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
+	saveReplays := fs.String("save-replays", "", "write each build's replay of the traffic to `DIR`/replay-old.json and replay-new.json, as kavach replay --json prints it")
 	if pos, err := parse(fs, args); err != nil || len(pos) != 0 {
 		return exitUsage
 	}
@@ -230,7 +236,7 @@ func contractCheck(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kavach contract check: --new is required")
 		return exitUsage
 	}
-	r, wall, err := checkContract(*dir, *oldBin, *newBin, *noVariants)
+	r, wall, err := checkContract(*dir, *oldBin, *newBin, *noVariants, *saveReplays)
 	if err != nil {
 		fmt.Fprintf(stderr, "kavach contract check: %v\n", err)
 		return exitError
@@ -250,14 +256,44 @@ func contractCheck(u ui, args []string, stdout, stderr io.Writer) int {
 	return exitFail
 }
 
-func checkContract(dir, oldBin, newBin string, noVariants bool) (*contract.Report, time.Duration, error) {
+// checkContract checks the build newBin against the contract in dir. With
+// save set, each build's replay of the traffic (not of its variants) is
+// written there too, as kavach replay --json prints it: replay-old.json, and
+// replay-new.json unless the base build's replay already failed the check.
+func checkContract(dir, oldBin, newBin string, noVariants bool, save string) (*contract.Report, time.Duration, error) {
 	d, err := contract.Load(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-	o := contract.CheckOptions{New: hostContractReplayer(newBin), NoVariants: noVariants, Parallel: runtime.NumCPU(), Build: newBin}
+	if save != "" {
+		if err := os.MkdirAll(save, 0o755); err != nil {
+			return nil, 0, err
+		}
+	}
+	traffic := filepath.Join(d.Path, contract.FileTraffic)
+	replayer := func(bin, name string) contract.ReplayFunc {
+		run := hostContractReplayer(bin)
+		if save == "" {
+			return run
+		}
+		return func(j *journal.Journal, opts replay.Options) (*replay.Result, error) {
+			start := time.Now()
+			res, err := run(j, opts)
+			if err != nil || j != d.Traffic {
+				return res, err
+			}
+			b, err := json.MarshalIndent(map[string]any{
+				"fixture": traffic, "verdict": res.String(), "wall_ms": ms(time.Since(start)), "result": res,
+			}, "", "  ")
+			if err == nil {
+				err = os.WriteFile(filepath.Join(save, name), append(b, '\n'), 0o644)
+			}
+			return res, err
+		}
+	}
+	o := contract.CheckOptions{New: replayer(newBin, "replay-new.json"), NoVariants: noVariants, Parallel: runtime.NumCPU(), Build: newBin}
 	if oldBin != "" {
-		o.Old = hostContractReplayer(oldBin)
+		o.Old = replayer(oldBin, "replay-old.json")
 	}
 	start := time.Now()
 	r, err := d.Check(o)

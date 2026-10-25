@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kavachlabs/kavach/journal"
+	"github.com/kavachlabs/kavach/replay"
 )
 
 // storeContract builds the test host, writes traffic it recorded by hand and
@@ -68,6 +69,30 @@ func TestContractCLI(t *testing.T) {
 		code, r := check(build)
 		if v := r["verdict"].(string); !strings.HasPrefix(v, want) || code != exitFail {
 			t.Errorf("%s: exit %d, verdict %s, want %s", build, code, v, want)
+		}
+	}
+
+	// --save-replays keeps each build's replay of the traffic, every step of
+	// it, with the feature steps' changed outputs.
+	saved := filepath.Join(work, "replays")
+	if code, out, errs := runCLI(t, "contract", "check", "--dir", dir, "--old", host+" base", "--new", host+" good", "--save-replays", saved); code != exitFail {
+		t.Fatalf("check --save-replays: exit %d\n%s%s", code, out, errs)
+	}
+	for name, changed := range map[string]bool{"replay-old.json": false, "replay-new.json": true} {
+		b, err := os.ReadFile(filepath.Join(saved, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rep struct {
+			Fixture string
+			Verdict string
+			Result  replay.Result
+		}
+		if err := json.Unmarshal(b, &rep); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if rep.Fixture != filepath.Join(dir, "traffic.kavach") || rep.Verdict != "ok" || len(rep.Result.Steps) == 0 || (len(rep.Result.Changed) > 0) != changed {
+			t.Errorf("%s: fixture %s, verdict %s, %d steps, %d changed", name, rep.Fixture, rep.Verdict, len(rep.Result.Steps), len(rep.Result.Changed))
 		}
 	}
 
