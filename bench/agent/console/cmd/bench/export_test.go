@@ -94,6 +94,18 @@ func TestExport(t *testing.T) {
 		t.Error("no kavach attempt was exported, so the invariants check proved nothing")
 	}
 
+	// An attempt with an OpenCode log has its Events tab, as one page with
+	// nothing after it. That run hasn't finished, so it is exported by name.
+	glm := filepath.Join(t.TempDir(), "site")
+	if code := run(append(args[:len(args)-1], glm, "-job", "opencode-glm"), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	var ev harbor.Events
+	readJSON(t, filepath.Join(glm, "api/trials/opencode-glm/redis-10068-kavach__Pass001/events/index.json"), &ev)
+	if ev.Source != "agent/opencode.txt" || len(ev.Lines) == 0 || ev.Next != ev.Size {
+		t.Errorf("events: source %q, %d lines, next %d, size %d", ev.Source, len(ev.Lines), ev.Next, ev.Size)
+	}
+
 	filepath.WalkDir(out, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".json") {
 			return err
