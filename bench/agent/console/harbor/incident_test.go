@@ -153,3 +153,43 @@ func TestTaskFixture(t *testing.T) {
 		t.Errorf("taskFixture = %q, want %q", got, want)
 	}
 }
+
+// The traffic the grader checked, with its replays, comes before the
+// contract the agent collected.
+func TestTrialIncidentGradedTraffic(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "job", "task__abc")
+	cdir := filepath.Join(dir, filepath.FromSlash(contractSubdir))
+	if err := os.MkdirAll(cdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "verifier"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "ledger", "testdata", "null-amount.kavach"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"config.json":                      `{}`,
+		"verifier/traffic.kavach":          string(fixture),
+		"verifier/replay-old.json":         `{"result":{"status":"ok","steps":[{"seq":1,"outputs":[]}],"unreached":[1]},"verdict":"ok"}`,
+		"verifier/replay-new.json":         `{"result":{"status":"ok","steps":[{"seq":1,"outputs":[{"sink":"s","data":"aGk="}]}],"changed":[{"seq":1}]},"verdict":"ok"}`,
+		contractSubdir + "/traffic.kavach": "not a journal",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inc, err := (&Reader{Dir: root}).TrialIncident("job", "task__abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inc.Kind != "traffic" || inc.Fixture != "verifier/traffic.kavach" || len(inc.Steps) == 0 || inc.Diff != nil {
+		t.Fatalf("got kind %q fixture %q, %d steps, diff %v", inc.Kind, inc.Fixture, len(inc.Steps), inc.Diff)
+	}
+	if inc.Old == nil || len(inc.Old.Unreached) != 1 || inc.New == nil || len(inc.New.Changed) != 1 || inc.New.Changed[0] != 1 {
+		t.Errorf("old %+v, new %+v", inc.Old, inc.New)
+	}
+}

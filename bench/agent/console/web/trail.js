@@ -180,7 +180,13 @@ export function renderProbe(t) {
   // Columns hold the probes drawn at each input.
   const cols = steps.map(() => ({ up: [], down: [] }));
   let feats = new Set();
-  if (traffic) {
+  // The grader's traffic (verifier/traffic.kavach) comes with its replays,
+  // which name the feature steps; the agent's checks ran on other traffic.
+  const graded = traffic && !!(inc.old || inc.new);
+  const changed = new Set((graded && inc.new && inc.new.changed) || []);
+  if (graded) {
+    for (const b of [inc.old, inc.new]) for (const q of (b && [...(b.changed || []), ...(b.unreached || [])]) || []) feats.add(q);
+  } else if (traffic) {
     const checks = state.stepsFor === tkey(t) ? checksOf(state.steps) : [];
     const last = checks[checks.length - 1];
     if (last) {
@@ -257,7 +263,10 @@ export function renderProbe(t) {
 
   const summary = [];
   const c = counts(inc, t);
-  if (traffic) {
+  if (graded) {
+    summary.push(`${plural(n, "input")} of the traffic the grader checked`, `${plural(feats.size, "feature step")}`);
+    if (inc.new) summary.push(`${changed.size} changed by the new build`);
+  } else if (traffic) {
     const checks = state.stepsFor === tkey(t) ? checksOf(state.steps) : [];
     const last = checks[checks.length - 1];
     summary.push(`${plural(n, "input")} of recorded traffic`, `${plural(feats.size, "feature step")}`);
@@ -286,7 +295,9 @@ export function renderProbe(t) {
     h("div", { class: "pr-head" },
       h("span", { class: "b" }, traffic ? "Recorded traffic" : "The recording, and what diff tried"),
       h("span", { class: "pr-spacer" }),
-      !traffic ? h("button", { type: "button", class: "btn sm", "data-replay": "incident", title: "Step through the recorded incident as the old and the new build replay it", onclick: () => openIncident(t, inc.new || !inc.old ? "new" : "old") }, "▶ Replay the incident") : null),
+      !traffic ? h("button", { type: "button", class: "btn sm", "data-replay": "incident", title: "Step through the recorded incident as the old and the new build replay it", onclick: () => openIncident(t, inc.new || !inc.old ? "new" : "old") }, "▶ Replay the incident")
+        // The traffic's replays are saved only by graders from --save-replays on.
+        : inc.old || inc.new ? h("button", { type: "button", class: "btn sm", "data-replay": "incident", title: "Step through the recorded traffic as the old and the new build replay it", onclick: () => openIncident(t, inc.new ? "new" : "old", true) }, "▶ Replay the traffic") : null),
     h("div", { class: "pr-sum faint" }, summary.join(" · ")),
     h("div", { class: `pr-wrap ${hasDown ? "two" : ""} ${hasProbes ? "" : "bare"}` },
       !hasProbes ? h("span", {}) : h("div", { class: "pr-lanes faint", "aria-hidden": "true" },

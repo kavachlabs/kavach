@@ -141,6 +141,13 @@ type VariantResult struct {
 	Invariant string              `json:"invariant,omitempty"`
 	Detail    string              `json:"detail,omitempty"`
 	Steps     []VariantResultStep `json:"steps"`
+	// Changed and Unreached are set on a replay of a contract's traffic: the
+	// feature steps whose outputs changed, and those that kept the recorded
+	// outputs.
+	Changed   []uint64 `json:"changed,omitempty"`
+	Unreached []uint64 `json:"unreached,omitempty"`
+	// Invariants are the invariants the build declared.
+	Invariants []string `json:"invariants,omitempty"`
 }
 
 // VariantResultStep is what one step produced in the new build's replay.
@@ -317,7 +324,10 @@ func isFailureMarker(kind string) bool {
 func variantResult(res *replay.Result) (*VariantResult, bool) {
 	v := &VariantResult{
 		Verdict: res.String(), Status: string(res.Status), Seq: res.Seq, Invariant: res.Invariant,
-		Detail: clipTo(res.Detail, maxVariantText), Steps: []VariantResultStep{},
+		Detail: clipTo(res.Detail, maxVariantText), Steps: []VariantResultStep{}, Unreached: res.Unreached, Invariants: res.Invariants,
+	}
+	for _, c := range res.Changed {
+		v.Changed = append(v.Changed, c.Seq)
 	}
 	cut := false
 	for _, s := range res.Steps {

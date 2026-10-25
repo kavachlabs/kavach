@@ -952,8 +952,12 @@ when the task has neither.
 
 - The fixture is the grader's copy (`verifier/incident.kavach`), else the
   `incident.kavach` beside the Dockerfile the task's verifier image is built from; for a
-  feature task, the collected contract's `traffic.kavach` (`kind:
-  "traffic"`, with no `old`, `new` or `diff`).
+  feature task (`kind: "traffic"`, with no `diff`), the traffic the grader
+  checked (`verifier/traffic.kavach`), with `old` and `new` from
+  `kavach contract check --save-replays`, else the collected contract's
+  `traffic.kavach`, with no `old` or `new`. A traffic replay also has
+  `changed` and `unreached`, the feature steps' seqs whose outputs the build
+  changed or kept, and `invariants`, those the build declared.
 - `steps` are as in a variant's replay below; `recorded` holds production's
   outputs. `failure` is the first step with a failure marker, `null` when
   there is none.

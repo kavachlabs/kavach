@@ -18,6 +18,12 @@ import (
 // task's fixture with the verifier's kavach diff of it and the old and new
 // builds' replays, or, for a feature task, the contract's recorded traffic.
 //
+// The contract task graders save the traffic they checked as
+// verifier/traffic.kavach, with each build's replay of it in
+// replay-{old,new}.json (kavach contract check --save-replays). Before they
+// did, a trial shows the traffic of the contract the agent collected, with
+// no replays.
+//
 // The diff task graders save verifier/incident.kavach, kavach-diff.json and
 // replay-{old,new}.json. Runs graded before they did have only the report
 // the grader logged (grade.log), so Diff comes from that, the fixture from
@@ -116,8 +122,12 @@ func (r *Reader) TrialIncident(job, id string) (*Incident, error) {
 		inc.Fixture = path
 	}
 	if path == "" {
+		path = filepath.Join(v, "traffic.kavach")
+		inc.Kind, inc.Fixture = "traffic", "verifier/traffic.kavach"
+	}
+	if inc.Kind == "traffic" && !exists(path) {
 		path = filepath.Join(dir, filepath.FromSlash(contractSubdir), "traffic.kavach")
-		inc.Kind, inc.Fixture = "traffic", contractSubdir+"/traffic.kavach"
+		inc.Fixture = contractSubdir + "/traffic.kavach"
 		if !exists(path) {
 			return nil, ErrNotFound
 		}
@@ -134,7 +144,7 @@ func (r *Reader) TrialIncident(job, id string) (*Incident, error) {
 			break
 		}
 	}
-	if inc.Kind == "traffic" {
+	if inc.Kind == "traffic" && inc.Fixture != "verifier/traffic.kavach" {
 		return inc, nil
 	}
 	for _, b := range []struct {
@@ -146,6 +156,9 @@ func (r *Reader) TrialIncident(job, id string) (*Incident, error) {
 			*b.dst, cut = variantResult(res)
 			inc.Truncated = inc.Truncated || cut
 		}
+	}
+	if inc.Kind == "traffic" {
+		return inc, nil
 	}
 	inc.Diff = readDiffReport(filepath.Join(v, "kavach-diff.json"))
 	if inc.Diff == nil {
