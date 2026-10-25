@@ -1,0 +1,112 @@
+name: release-notes
+
+# Drafts a release's notes for the website's release notes page
+# (thekavachlabs.com/release-notes) and opens a pull request on kavachlabs/web
+# with them. The draft is marked `draft: true`: Vercel's preview of the pull
+# request shows it, the live site leaves it out until someone rewrites it and
+# removes the mark.
+#
+# release.yml runs this after it publishes a release. Run it by hand to draft
+# the notes of a release that already exists.
+#
+# Needs the WEB_REPO_TOKEN secret: a fine-grained token for kavachlabs/web with
+# Contents and Pull requests set to read and write. Without it, this does
+# nothing and says so.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      WEB_REPO_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to draft notes for, e.g. v0.1.4'
+        required: true
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check for the website token
+        id: token
+        env:
+          WEB_REPO_TOKEN: ${{ secrets.WEB_REPO_TOKEN }}
+        run: |
+          if [ -z "$WEB_REPO_TOKEN" ]; then
+            echo "::notice::WEB_REPO_TOKEN is not set, so no release notes were drafted for $TAG."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.ok == 'true'
+
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.ok == 'true'
+        with:
+          repository: kavachlabs/web
+          token: ${{ secrets.WEB_REPO_TOKEN }}
+          path: web
+
+      - name: Draft the notes
+        id: draft
+        if: steps.token.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/draft-release-notes.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --out web/content/releases 2> left-out.txt
+          cat left-out.txt
+          if [ -z "$(git -C web status --porcelain)" ]; then
+            echo "::notice::web already has notes for $TAG; nothing to draft."
+            echo "drafted=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drafted=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open a pull request on kavachlabs/web
+        if: steps.draft.outputs.drafted == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.WEB_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          branch="release-notes/${TAG}"
+          cd web
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "content/releases/${version}.md"
+          git commit -s -m "Release notes for Kavach ${version}, drafted"
+          git push origin "$branch"
+
+          left_out="$(sed -n 's/^left out: /- /p' ../left-out.txt)"
+          {
+            echo "Drafted from the [${TAG} release](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}): one bullet per pull request, sorted into sections by its title."
+            echo
+            echo "The file is marked \`draft: true\`, so this preview shows it and the live site does not. Before merging:"
+            echo
+            echo "- [ ] Write the headline: one line on what the release lets people do."
+            echo "- [ ] Rewrite each bullet for someone using Kavach, replacing its TODO, and move any that sit in the wrong section."
+            echo "- [ ] Add a figure with a \`{{name}}\` line if one helps (components/ReleaseFigures.tsx)."
+            echo "- [ ] Remove \`draft: true\`."
+            if [ -n "$left_out" ]; then
+              echo
+              echo "Left out as internal (ci, test, chore):"
+              echo
+              echo "$left_out"
+            fi
+          } > ../body.md
+          gh pr create --repo kavachlabs/web --base main --head "$branch" \
+            --title "Release notes for Kavach ${version}" --body-file ../body.md
