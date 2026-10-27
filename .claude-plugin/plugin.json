@@ -1,6 +1,6 @@
 {
   "name": "kavach-skills",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "description": "Reproduce production bugs that won't reproduce locally, and prove a fix works: deterministic replay of recorded incidents, fix verification against mutated variants, contract-first features and invariant mutation testing for stateful services (queue consumers, webhook handlers, ledgers, state machines).",
   "author": {
     "name": "Kavach Labs",
