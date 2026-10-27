@@ -7,13 +7,13 @@ import (
 )
 
 type Event struct {
-	ID        string  `json:"id"`
-	Type      string  `json:"type"` // deposit, withdraw, transfer, refund
-	Account   string  `json:"account"`
-	To        string  `json:"to,omitempty"`
-	Amount    *int64  `json:"amount"` // minor units
-	Currency  string  `json:"currency"`
-	RefundFor string  `json:"refund_for,omitempty"`
+	ID        string `json:"id"`
+	Type      string `json:"type"` // deposit, withdraw, transfer, refund
+	Account   string `json:"account"`
+	To        string `json:"to,omitempty"`
+	Amount    *int64 `json:"amount"` // minor units
+	Currency  string `json:"currency"`
+	RefundFor string `json:"refund_for,omitempty"`
 }
 
 type Store struct {
