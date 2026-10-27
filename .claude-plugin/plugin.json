@@ -1,7 +1,7 @@
 {
   "name": "kavach-skills",
   "version": "0.1.2",
-  "description": "Agent skills for deterministic crash replay, 56-variant fix verification, contract-first feature implementation, and invariant mutation testing with Kavach.",
+  "description": "Reproduce production bugs that won't reproduce locally, and prove a fix works: deterministic replay of recorded incidents, fix verification against mutated variants, contract-first features and invariant mutation testing for stateful services (queue consumers, webhook handlers, ledgers, state machines).",
   "author": {
     "name": "Kavach Labs",
     "url": "https://www.thekavachlabs.com"
@@ -18,7 +18,14 @@
     "contracts",
     "invariants",
     "mcp",
-    "coding-agents"
+    "coding-agents",
+    "incident-replay",
+    "record-replay",
+    "reproduce-bugs",
+    "fix-verification",
+    "regression-testing",
+    "queue-consumer",
+    "webhooks"
   ],
   "skills": "./skills",
   "commands": "./commands"

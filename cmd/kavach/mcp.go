@@ -24,7 +24,7 @@ const mcpLatestVersion = "2025-06-18"
 
 var mcpVersions = []string{mcpLatestVersion, "2025-03-26", "2024-11-05"}
 
-const mcpInstructions = `Kavach replays production crashes of journal-driven services from fixture files (*.kavach) and verifies fixes.
+const mcpInstructions = `Kavach reproduces production bugs that won't reproduce locally, in services that handle events or requests one at a time and keep state (queue consumers, webhook handlers, ledgers, state machines): it replays a recorded incident (a *.kavach fixture) deterministically against any build, and accepts a fix only when it also holds on mutated variants of the incident. Use it whenever a fixture exists or a fix to such a service needs proof beyond one failing input.
 Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; kavach_time_travel to replay up to a step N and send probe inputs to inspect live state before or at the failure; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.
 Building a feature against a contract (a contract/ directory from kavach contract init): kavach_contract_show shows it; a person approves it, never you; kavach_contract_check checks a build. Only "pass" passes. regression@N: a step outside the feature changed. changed steps: read each against the spec. Stop and report after the same outcome three rounds in a row (streak 3). Never edit the contract to make a check pass.`
 

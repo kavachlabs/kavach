@@ -1,11 +1,14 @@
 ---
 name: kavach-invariants
 description: >
-  Discover domain invariants from `.kavach/plan/state-map.md`, write a
-  reviewable invariant blueprint to `.kavach/plan/invariants.md`, declare them
-  via the Kavach SDK, and falsify (mutation-test) each invariant in
-  milliseconds with `kavach replay` and `kavach diff` to prove that every
-  invariant catches real state corruption.
+  Find the rules a stateful service's data must always obey (balances never
+  negative, money neither created nor destroyed, one status per subscription),
+  declare them as Kavach invariants checked after every event, and
+  mutation-test each one so it provably catches corrupted state. Use when the
+  user asks what could go wrong in a ledger, payment flow, queue consumer or
+  state machine, wants invariants or property checks on its state, or is about
+  to write a Kavach contract. Reads `.kavach/plan/state-map.md` from
+  `kavach-setup` when it exists.
 compatibility: Requires the `kavach` CLI on PATH.
 metadata:
   version: "0.1.2"

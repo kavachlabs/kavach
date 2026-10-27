@@ -1,0 +1,7 @@
+{
+  "name": "dashboard",
+  "private": true,
+  "scripts": { "dev": "vite", "build": "vite build", "test": "vitest" },
+  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1" },
+  "devDependencies": { "vite": "5.4.8", "vitest": "2.1.2", "@vitejs/plugin-react": "4.3.2" }
+}

@@ -1,11 +1,17 @@
 ---
 name: kavach-fix
 description: >
-  Reproduce a production incident from a `.kavach` flight-recorder fixture and
-  fix the handler until `kavach diff` (or the `kavach_diff` MCP tool) returns
-  `verdict: "fixed"` across all incident perturbations and neighbour regression
-  variants. Use whenever fixing a bug captured in a `.kavach` file or verifying
-  that a patch is not a narrow single-trace workaround.
+  Reproduce a production bug that won't reproduce locally, fix it, and prove
+  the fix. Use when a crash, error, wrong balance or corrupted state came from a
+  service that handles events or requests one at a time and keeps state (queue
+  or Kafka consumers, webhook handlers, payment and ledger services, order or
+  workflow state machines), when the bug is intermittent or appeared only after
+  redeliveries or retries, when the user has a `.kavach` fixture, or when asked
+  whether a fix really works beyond the one failing input. Kavach replays the
+  incident deterministically and accepts a fix only when `kavach diff` (or the
+  `kavach_diff` MCP tool) returns `fixed` on the incident and on mutated
+  variants of it. Not for UI bugs, stateless scripts or bugs a unit test
+  already reproduces.
 compatibility: Requires the `kavach` CLI on PATH (or `kavach mcp` registered).
 metadata:
   version: "0.1.2"
