@@ -4,7 +4,7 @@
     "name": "Kavach Labs"
   },
   "metadata": {
-    "description": "Agent skills for deterministic crash replay, 56-variant fix verification, contract-first feature implementation, and invariant mutation testing with Kavach."
+    "description": "Reproduce production bugs that won't reproduce locally, and prove a fix works: deterministic replay of recorded incidents, fix verification against mutated variants, contract-first features and invariant mutation testing for stateful services (queue consumers, webhook handlers, ledgers, state machines)."
   },
   "plugins": [
     {

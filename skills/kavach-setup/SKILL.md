@@ -1,12 +1,16 @@
 ---
 name: kavach-setup
 description: >
-  Map a codebase's state boundaries into `.kavach/plan/state-map.md`, then
-  instrument an existing service or build a `kavach-host` harness using Kavach's
-  12 language SDKs (Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP,
-  Elixir, OCaml, Haskell, Julia) or the raw pipe protocol (`INTEGRATING.md`).
-  Use when onboarding a codebase to Kavach for production flight recording
-  (`kavach-recorder`), incident replay, or contract-first verification.
+  Add deterministic record and replay to a service, so that production
+  incidents replay exactly on a laptop and fixes can be verified instead of
+  guessed from logs. Use when the user wants to capture production traffic or
+  crashes for replay, make intermittent or prod-only bugs reproducible the next
+  time they happen, turn production incidents into regression tests, or set up
+  Kavach in a codebase. Fits services that handle events or requests one at a
+  time and keep state (queue consumers, webhook handlers, ledgers, state
+  machines), in Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP, Elixir,
+  OCaml, Haskell or Julia. Maps the service's state boundaries, then wires the
+  Kavach SDK into its handler or builds a small replay harness.
 compatibility: Requires `kavach` and `kavach-recorder` on PATH.
 metadata:
   version: "0.1.2"

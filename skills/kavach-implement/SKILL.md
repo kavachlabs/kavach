@@ -1,11 +1,15 @@
 ---
 name: kavach-implement
 description: >
-  Build a new feature contract-first with Kavach (`SPEC.md §6.4`): record
-  baseline and feature traffic on the current build, declare invariants from
-  the specification, stop for human approval (`kavach contract approve`), and
-  implement until `kavach contract check` returns `pass`. Use whenever
-  implementing a new feature, command, endpoint, or behaviour change.
+  Add a feature to a stateful service without breaking what it already does:
+  record traffic on the current build, write invariants from the
+  specification, have a person approve the contract, then implement until
+  `kavach contract check` returns `pass`. Use when adding an event type,
+  command, endpoint, state transition or business rule to a service that
+  handles events or requests and keeps state (ledgers, payments, subscriptions,
+  queue consumers, webhook handlers, state machines) and existing behaviour
+  must be preserved, or when the repository has a `contract/` directory. Not
+  for UI, scripts or stateless code.
 compatibility: Requires the `kavach` CLI on PATH (or `kavach mcp` registered).
 metadata:
   version: "0.1.2"

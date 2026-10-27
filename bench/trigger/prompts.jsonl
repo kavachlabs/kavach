@@ -1,0 +1,40 @@
+{"id": "fix-01", "workspace": "payments-consumer", "expect": "fix", "prompt": "We had an incident last night: two accounts ended up with negative balances after a burst of transfers. I can't reproduce it locally, the unit tests pass. Can you find and fix the bug?"}
+{"id": "fix-02", "workspace": "payments-consumer", "expect": "fix", "prompt": "The consumer crashed in prod with a nil pointer dereference in Apply and got restarted by k8s. Logs only show the stack trace. Fix it so it can't happen again."}
+{"id": "fix-03", "workspace": "payments-consumer", "expect": "fix", "prompt": "Customers are getting refunded twice sometimes. It only happens in production, maybe when Kafka redelivers. Track it down and fix it."}
+{"id": "fix-04", "workspace": "payments-consumer", "expect": "fix", "prompt": "Another agent already patched the nil amount panic in handler.go. How do I know the fix actually covers the real incident and isn't just a band-aid for that one message?"}
+{"id": "fix-05", "workspace": "payments-consumer", "expect": "fix", "prompt": "there's a heisenbug in this consumer, balances drift by a few cents every few days. nobody can repro it. help"}
+{"id": "fix-06", "workspace": "webhooks", "expect": "fix", "prompt": "A few customers show as 'active' even though Stripe says their subscription was canceled. It happened after an outage when Stripe retried a bunch of webhooks. I can't reproduce it. Can you fix it?"}
+{"id": "fix-07", "workspace": "webhooks", "expect": "fix", "prompt": "Production returned 500s on some Stripe webhooks during last week's incident and now some subscriptions are in the wrong state. Fix the handler and make sure the fix is right."}
+{"id": "fix-08", "workspace": "webhooks", "expect": "fix", "prompt": "Webhooks arriving out of order seem to corrupt subscription state but I only have the prod logs. Reproduce it and fix it properly, I don't want a fix that only works for the exact sequence we saw."}
+{"id": "fix-09", "workspace": "payments-consumer", "expect": "fix", "prompt": "I want a regression test that replays exactly what happened in last night's incident so this bug can never come back."}
+{"id": "fix-10", "workspace": "payments-consumer", "expect": "fix", "prompt": "Fix the crash in the refund path. Before you change anything, reproduce it the way it happened in prod, and after, prove the fix holds for similar inputs too."}
+{"id": "setup-01", "workspace": "payments-consumer", "expect": "setup", "prompt": "Next time this consumer crashes in production I want to be able to replay exactly what it saw on my laptop. How do I set that up?"}
+{"id": "setup-02", "workspace": "webhooks", "expect": "setup", "prompt": "Set up record and replay for this webhook service so we can capture production incidents and replay them locally."}
+{"id": "setup-03", "workspace": "payments-consumer", "expect": "setup", "prompt": "We keep getting bugs that only show up in prod. What can I add to this service so those incidents become reproducible?"}
+{"id": "setup-04", "workspace": "webhooks", "expect": "setup", "prompt": "Is there a way to make the bugs in this service deterministic to reproduce? Our AI agents keep guessing at fixes from logs."}
+{"id": "setup-05", "workspace": "payments-consumer", "expect": "setup", "prompt": "Add a flight recorder to this consumer so we can turn any production crash into a test case."}
+{"id": "setup-06", "workspace": "payments-consumer", "expect": "setup", "prompt": "Set up Kavach in this repo."}
+{"id": "impl-01", "workspace": "payments-consumer", "expect": "implement", "prompt": "Add a 'chargeback' event type: it reverses a deposit and freezes the account. Existing event handling must not change at all, this is a payments system."}
+{"id": "impl-02", "workspace": "webhooks", "expect": "implement", "prompt": "Handle customer.subscription.paused and resumed webhooks. Make sure you don't break anything in how the existing events update subscription state."}
+{"id": "impl-03", "workspace": "payments-consumer", "expect": "implement", "prompt": "Implement per-account daily withdrawal limits of 10,000. I need proof that nothing else about how balances are computed changes."}
+{"id": "impl-04", "workspace": "payments-consumer", "expect": "implement", "prompt": "Add multi-currency support to the ledger. Last time someone changed this code it broke transfers in prod, so verify behaviour is preserved for existing events."}
+{"id": "impl-05", "workspace": "webhooks", "expect": "implement", "prompt": "Add support for trial periods: a 'trialing' status from subscription.created that becomes active after the first paid invoice. Don't regress existing state transitions."}
+{"id": "inv-01", "workspace": "payments-consumer", "expect": "invariants", "prompt": "What invariants should this ledger always maintain? I want checks that would actually catch corrupted state."}
+{"id": "inv-02", "workspace": "webhooks", "expect": "invariants", "prompt": "What rules should the subscription state always obey, and how do I check them automatically on every event?"}
+{"id": "inv-03", "workspace": "payments-consumer", "expect": "invariants", "prompt": "I want property checks on the balances map that run after every event and fail loudly if money is created or destroyed."}
+{"id": "neg-01", "workspace": "dashboard", "expect": "none", "prompt": "The revenue chart bars overflow the container on mobile. Fix the CSS."}
+{"id": "neg-02", "workspace": "dashboard", "expect": "none", "prompt": "The chart renders nothing and shows -Infinity heights when the API returns an empty list. Fix it."}
+{"id": "neg-03", "workspace": "dashboard", "expect": "none", "prompt": "Write vitest tests for formatCurrency."}
+{"id": "neg-04", "workspace": "dashboard", "expect": "none", "prompt": "Add a tooltip to each bar showing the revenue amount."}
+{"id": "neg-05", "workspace": "scripts", "expect": "none", "prompt": "parse_dates fails on '2024-03-05T10:00:00Z'. Add ISO 8601 timestamps."}
+{"id": "neg-06", "workspace": "scripts", "expect": "none", "prompt": "Make dedupe_csv.py case-insensitive on the key column, with a --ignore-case flag."}
+{"id": "neg-07", "workspace": "scripts", "expect": "none", "prompt": "Add type hints and docstrings to these scripts."}
+{"id": "neg-08", "workspace": "scripts", "expect": "none", "prompt": "dedupe_csv.py is slow on a 2 GB file. Make it stream instead of loading everything."}
+{"id": "neg-09", "workspace": "payments-consumer", "expect": "none", "prompt": "Write a Dockerfile for this service."}
+{"id": "neg-10", "workspace": "payments-consumer", "expect": "none", "prompt": "Explain what handler.go does in a few sentences."}
+{"id": "neg-11", "workspace": "payments-consumer", "expect": "none", "prompt": "Rename Store to Ledger everywhere."}
+{"id": "neg-12", "workspace": "payments-consumer", "expect": "none", "prompt": "Add structured logging with slog instead of the log package."}
+{"id": "neg-13", "workspace": "webhooks", "expect": "none", "prompt": "Write a README section on how to run this locally."}
+{"id": "neg-14", "workspace": "webhooks", "expect": "none", "prompt": "Pin all dependencies and add a pyproject.toml."}
+{"id": "neg-15", "workspace": "webhooks", "expect": "none", "prompt": "Verify the Stripe webhook signature using the STRIPE_WEBHOOK_SECRET env var."}
+{"id": "neg-16", "workspace": "payments-consumer", "expect": "none", "prompt": "Add a GitHub Actions workflow that runs go vet and go test on every PR."}
