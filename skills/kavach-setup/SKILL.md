@@ -13,7 +13,7 @@ description: >
   Kavach SDK into its handler or builds a small replay harness.
 compatibility: Requires `kavach` and `kavach-recorder` on PATH.
 metadata:
-  version: "0.1.2"
+  version: "0.1.5"
 ---
 
 # Instrument a Service or Harness with Kavach (`kavach-setup`)

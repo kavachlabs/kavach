@@ -12,7 +12,7 @@ description: >
   for UI, scripts or stateless code.
 compatibility: Requires the `kavach` CLI on PATH (or `kavach mcp` registered).
 metadata:
-  version: "0.1.2"
+  version: "0.1.5"
 ---
 
 # Build a Feature Contract-First (`kavach-implement`)
