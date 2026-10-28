@@ -63,15 +63,16 @@ main() {
 	trap 'rm -rf "$tmp"' EXIT
 	log "building bench at $sha (checkout is $prev)"
 	# The whole tree: the console's go.mod replaces the root module with ../../..
-	git -C $REPO archive "$sha" | tar -x -C "$tmp"
+	mkdir "$tmp/src" "$tmp/out"
+	git -C $REPO archive "$sha" | tar -x -C "$tmp/src"
 	chown -R kavach:kavach "$tmp"
 	runuser -u kavach -- env HOME=/home/kavach GOTOOLCHAIN=local CGO_ENABLED=0 \
-		sh -c "cd '$tmp/bench/agent/console' && nice $GO build -o '$tmp/bench' ./cmd/bench" || {
+		sh -c "cd '$tmp/src/bench/agent/console' && nice $GO build -o '$tmp/out/bench' ./cmd/bench" || {
 		log "the build failed; nothing was changed"
 		exit 1
 	}
 
-	install -m 0755 "$tmp/bench" "$BENCH.new"
+	install -m 0755 "$tmp/out/bench" "$BENCH.new"
 	# The new binary must accept the config and usage files as they are, read
 	# as the service's user, which can't read what root can.
 	runuser -u kavach -- "$BENCH.new" api -trial -check -root $REPO -jobs /var/lib/kavach/jobs || {
