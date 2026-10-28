@@ -1,0 +1,12 @@
+# Runs bench-autodeploy.service each night, before retention.
+# install-autodeploy.sh enables it.
+[Unit]
+Description=Nightly Kavach trial deploy
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

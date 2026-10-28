@@ -1,0 +1,12 @@
+# Deploys the newest main if it changed and no trial run is live
+# (autodeploy.sh). Started by bench-autodeploy.timer.
+[Unit]
+Description=Kavach trial nightly deploy
+After=network-online.target bench-trial.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root: it replaces the binary and restarts bench-trial. It builds as kavach.
+ExecStart=/bin/sh /opt/kavach/bench/agent/deploy/trial/autodeploy.sh main
+TimeoutStartSec=1h
