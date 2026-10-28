@@ -53,7 +53,7 @@ func (s *Server) trialRoutes() {
 		h("GET "+p, func(w http.ResponseWriter, r *http.Request) { writeError(w, http.StatusNotFound, "not found") })
 	}
 	if s.cfg.Web != nil {
-		s.mux.Handle("GET /", http.FileServerFS(s.cfg.Web))
+		s.mux.Handle("GET /", webHandler(s.cfg.Web))
 	}
 }
 

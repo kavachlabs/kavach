@@ -266,13 +266,13 @@ code, pre, .m { font-family: var(--font-code); font-size: 12.5px; letter-spacing
   margin-bottom: 14px;
   border-radius: 12px;
 }
+/* The Kavach mark (kavach-icon.png without its background) as a mask, so it takes the theme's mark colour. */
 .rail-logo-ic {
-  width: 28px;
-  height: 28px;
-  fill: none;
-  stroke: var(--mark);
-  stroke-width: 2.4;
-  stroke-linecap: round;
+  width: 30px;
+  height: 30px;
+  background: var(--mark);
+  -webkit-mask: url(kavach-mark.png) center / contain no-repeat;
+  mask: url(kavach-mark.png) center / contain no-repeat;
 }
 .rail-items {
   display: flex;

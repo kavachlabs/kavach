@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
+	"github.com/kavachlabs/kavach/bench/agent/console/web"
 )
 
 // Config locates what the server reads and runs.
@@ -117,7 +118,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/trials/{job}/{trial}/variants/{round}/{id}", s.getVariant)
 	s.mux.HandleFunc("GET /api/events", s.getEvents)
 	if cfg.Web != nil {
-		s.mux.Handle("GET /", http.FileServerFS(cfg.Web))
+		s.mux.Handle("GET /", webHandler(cfg.Web))
 	}
 	return s
 }
@@ -858,4 +859,16 @@ func writeEnvKeys(path string, updates map[string]string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// webHandler serves the web app versioned (web.Handler), or answers 500 if
+// the files cannot be read.
+func webHandler(fsys fs.FS) http.Handler {
+	h, err := web.Handler(fsys)
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "web app: "+err.Error(), http.StatusInternalServerError)
+		})
+	}
+	return h
 }

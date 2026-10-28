@@ -1189,7 +1189,7 @@ const RAIL_ICONS = {
   replay: "M8 5.5v13l10-6.5z",
   compare: "M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z",
   tasks: "M9 7a3 3 0 0 1 6 0M7 10h10v4a5 5 0 0 1-10 0zM12 10v9M4 12h3M17 12h3M5 18l2.5-1.5M19 18l-2.5-1.5",
-  settings: "M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8",
+  settings: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
 };
 
 function railSVG(paths, cls) {
@@ -1259,7 +1259,7 @@ function renderRail() {
   const foot = STATIC ? null : railItem({ icon: "settings", label: "Settings (⌘,)", on: state.settings.open, onclick: () => openSettingsModal(hasConfiguredKey() ? undefined : "keys") });
   rail.replaceChildren(...[
     h("a", { class: "rail-logo", href: home, title: "Home", "aria-label": "Home" },
-      railSVG([{ cx: "12", cy: "12", r: "9" }, { d: "M12 6.5a5.5 5.5 0 1 1-5.5 5.5" }], "rail-logo-ic")),
+      h("span", { class: "rail-logo-ic", "aria-hidden": "true" })),
     h("div", { class: "rail-items" }, items),
     foot,
   ].filter(Boolean));
