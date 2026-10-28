@@ -5,7 +5,7 @@ import { h, state, trial, loadTrialSession, trialReady, renderView } from "./app
 
 export const TRIAL_VIEWS = ["landing", "keys", "invite", "terms"];
 
-const SITE = "https://kavachlabs.dev";
+const SITE = "https://www.thekavachlabs.com";
 const BENCH = "https://benchmark.kavachlabs.dev";
 const trust = () => h("span", {}, "Keys you enter stay in this server's memory and are used only for your runs. Runs on your own keys bill your provider accounts, so use keys with a spending limit. ", h("a", { href: "#/trial/terms" }, "Terms"));
 const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
@@ -176,7 +176,7 @@ function landing() {
         h("p", {}, "Every task, model and arm we have run, read-only, at ", link(BENCH, "benchmark.kavachlabs.dev"), ".")),
       h("div", { class: "tl-cta" },
         h("a", { class: "tl-btn", href: BENCH, target: "_blank", rel: "noopener" }, "Open the full benchmark ↗"),
-        h("a", { class: "tl-btn", href: SITE, target: "_blank", rel: "noopener" }, "kavachlabs.dev ↗"))),
+        h("a", { class: "tl-btn", href: SITE, target: "_blank", rel: "noopener" }, "thekavachlabs.com ↗"))),
 
     h("footer", { class: "tl-foot" },
       h("a", { href: "#/trial/terms" }, "Terms and how your keys are handled"),
@@ -220,7 +220,7 @@ function terms() {
       "Every run, running or finished, is listed with its results for every visitor, and finished runs appear on this page. Do not put anything private into a run."),
     sec("As is",
       "This is a free trial, provided as is, with no guarantee that it works, stays up, keeps your runs, or that results are correct. We may change or stop it at any time."),
-    h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "kavachlabs.dev"), "."),
+    h("p", { class: "tl-alt" }, "Questions or removal requests: contact us via ", link(SITE, "thekavachlabs.com"), "."),
     h("p", { class: "tl-alt" }, h("a", { href: "#/trial/keys" }, "Bring your keys"), " · ", h("a", { href: "#/trial/invite" }, "Use an invite code"), " · ", h("a", { href: "#/trial/about" }, "About the trial")));
 }
 
