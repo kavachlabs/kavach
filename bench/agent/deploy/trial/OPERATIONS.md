@@ -27,6 +27,7 @@ a server made with an SSH key has none, so set one under **Rescue** →
 | `bench-trial.service` | the console |
 | `cloudflared.service` | the tunnel; stopping it takes the site offline |
 | `bench-retention.timer` | deletes old runs daily (`retention.sh`) |
+| `bench-autodeploy.timer` | deploys main nightly when it changed (`autodeploy.sh`) |
 | `unattended-upgrades`, `fail2ban` | security updates, SSH bans (`harden.sh`) |
 
 ## Live runs
@@ -106,6 +107,29 @@ finish:
 3. `systemctl reboot`.
 4. After it comes back: `systemctl is-active bench-trial cloudflared` and
    `systemctl list-timers bench-retention.timer`, then open the site.
+
+## Nightly deploy
+
+`bench-autodeploy.timer` runs `autodeploy.sh` at 03:00 UTC (within 15
+minutes; on boot if the VM was off then). When `origin/main` differs from the
+checkout and no trial run is live, it does on the VM what `kavach-trial
+deploy main` does from a laptop: builds bench (as `kavach`, with Go in
+`/usr/local/go`), checks the new binary against `trial.json` and invite
+usage, checks out main, swaps the binary in, restarts bench-trial, and rolls
+back if the console does not answer. A live run, before or during the build,
+puts the deploy off to the next night. It does not republish the benchmark
+site.
+
+```sh
+sh /opt/kavach/bench/agent/deploy/trial/install-autodeploy.sh   # as root, once: Go and the timer
+journalctl -u bench-autodeploy                                   # what each night did
+systemctl start bench-autodeploy                                 # run it now
+systemctl disable --now bench-autodeploy.timer                   # stop deploying nightly
+```
+
+A failed build or check changes nothing; a rollback leaves the previous
+binary and checkout running. Either way the unit shows as failed
+(`systemctl --failed`), and `kavach-trial status` prints the last line.
 
 ## Retention
 

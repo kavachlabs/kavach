@@ -46,3 +46,4 @@ sh "$KIT/harden.sh"
 
 echo "next: copy bench to /opt/kavach/bin/bench, fill /etc/kavach/trial.env, set up the tunnel (README.md)"
 echo "then: sh $KIT/retention.sh --dry-run, and systemctl enable --now bench-retention.timer (OPERATIONS.md)"
+echo "and for nightly deploys of main: sh $KIT/install-autodeploy.sh (OPERATIONS.md)"

@@ -48,6 +48,7 @@ cmd_status() {
 		echo \"service:  \$(systemctl is-active bench-trial) since \$(systemctl show bench-trial -p ActiveEnterTimestamp --value)\"
 		echo \"checkout: \$(git -C /opt/kavach log -1 --format='%h %s')\"
 		echo \"binary:   \$(ls -l --time-style=long-iso $BENCH | awk '{print \$6, \$7}')\"
+		echo \"nightly:  \$(journalctl -u bench-autodeploy -n 1 -o short-iso --no-pager -q 2>/dev/null | grep . || echo 'not run yet (install-autodeploy.sh)')\"
 	"
 	echo "live runs: $(live_runs)"
 	echo "session endpoint: $(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/trial/session")"
