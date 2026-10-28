@@ -365,13 +365,15 @@ export function replayKey(e) {
 // drag on it carries on.
 function update() {
   const el = document.getElementById("rp");
-  if (!el || !ctx || !state.replay || el.dataset.key !== vkey(state.replay)) { renderView(); return; }
+  if (!el || !ctx || !state.replay || el.dataset.key !== vkey(state.replay) || !el.querySelector(".rp-side")) { renderView(); return; }
   const r = cur();
   const fid = document.activeElement && el.contains(document.activeElement) ? document.activeElement.dataset.fid : "";
   const { t, d, m } = ctx;
   el.querySelector(".rp-head").replaceWith(head(t, d, m, r));
-  el.querySelector(".rp-stage").replaceWith(stage(m, r));
+  el.querySelector(".rp-strip").replaceWith(strip(m, r));
   el.querySelector(".rp-ctl-row").replaceWith(ctlRow(m, r));
+  el.querySelector(".rp-stage").replaceWith(stage(d, m, r));
+  el.querySelector(".rp-side").replaceWith(side(m, r));
   const range = el.querySelector(".rp-range");
   if (range && +range.value !== r.i) range.value = String(r.i);
   if (range) range.setAttribute("aria-valuetext", valueText(m, r.i));
@@ -383,158 +385,301 @@ function update() {
 
 const valueText = (m, i) => (m.steps[i] ? `input @${m.steps[i].seq}, step ${i + 1} of ${m.n}` : "");
 const sceneName = (r) => (r.traffic ? "the recorded traffic" : r.incident ? "the recorded incident" : `variant ${r.id}, round ${r.round}`);
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function reportFor(t, round) {
   if (state.stepsFor !== tkey(t)) return null;
   return checksOf(state.steps).find((c) => (c.round || c.n) === round) || null;
 }
 
-// renderReplay is the job view's left pane while a variant is open.
+// renderReplay is the job view's left pane while a variant is open: the
+// site hero's window, with the step strip and the controls on top, the step
+// and its verdict below, and the clock and the inputs to come beside them.
 export function renderReplay(t) {
   const r = state.replay;
   load(r);
   const got = sceneData(r);
   const fid = document.activeElement && document.activeElement.closest("#rp") ? document.activeElement.dataset.fid : "";
   const pane = h("div", { class: "pane rp-pane", id: "rp", tabindex: "-1", role: "region", "aria-label": `Replay of ${sceneName(r)}`, dataset: { key: vkey(r) } });
+  const win = (...kids) => h("div", { class: "rp-win" }, kids);
   if (!got || got === "loading" || got.error) {
     ctx = null;
     const what = r.traffic ? "the traffic" : r.incident ? "the incident" : "the variant";
-    pane.append(h("header", { class: "rp-head" }, backBtn(), h("div", { class: "rp-title" }, r.incident ? h("span", { class: "rp-name" }, r.traffic ? "Recorded traffic" : "Recorded incident")
-      : h("span", { class: "rp-name" }, `Variant ${r.id}`, h("span", { class: "m faint" }, ` round ${r.round}`)))),
-      h("div", { class: "rp-stage rp-empty" }, !got || got === "loading" ? h("span", { class: "dim" }, `Loading ${what}…`)
+    pane.append(win(
+      h("header", { class: "rp-head" }, backBtn(), h("div", { class: "rp-title" },
+        h("span", { class: "rp-name" }, h("span", { class: "rp-dot none", "aria-hidden": "true" }),
+          r.incident ? (r.traffic ? "Recorded traffic" : "Recorded incident") : [`Variant ${r.id}`, h("span", { class: "m faint" }, ` · round ${r.round}`)]))),
+      h("div", { class: "rp-body rp-empty" }, !got || got === "loading" ? h("span", { class: "dim" }, `Loading ${what}…`)
         : got.status === 404 ? h("span", { class: "dim" }, r.incident ? "This trial's task has no recorded incident, or the server predates incident replays."
           : "The console's API has no replay of this variant: it was not saved, or the server predates saved variants.")
-          : h("span", { class: "bad" }, `Couldn't load ${what}: ${got.error}`)));
+          : h("span", { class: "bad" }, `Couldn't load ${what}: ${got.error}`))));
     return pane;
   }
   const m = derive(got, got.traffic ? got.traffic.report : r.incident ? null : reportFor(t, r.round));
   ctx = { t, d: got, m };
   const rr = cur();
   if (!m.n) {
-    pane.append(head(t, got, m, rr), h("div", { class: "rp-stage rp-empty" }, h("span", { class: "dim" }, `This ${r.incident ? "recording" : "variant's journal"} has no steps.`)));
+    pane.append(win(head(t, got, m, rr), h("div", { class: "rp-body rp-empty" }, h("span", { class: "dim" }, `This ${r.incident ? "recording" : "variant's journal"} has no steps.`))));
     return pane;
   }
-  pane.append(head(t, got, m, rr), stage(m, rr), controls(m, rr));
+  pane.append(win(
+    head(t, got, m, rr),
+    h("div", { class: "rp-body" },
+      h("div", { class: "rp-main" }, controls(m, rr), stage(got, m, rr), legend(m)),
+      side(m, rr))));
   if (fid) queueMicrotask(() => { const f = document.querySelector(`#rp [data-fid="${CSS.escape(fid)}"]`); if (f) f.focus({ preventScroll: true }); });
   return pane;
 }
 
 function backBtn() {
-  return h("button", { type: "button", class: "btn rp-back", "data-fid": "back", onclick: closeReplay, title: "Back to the run (Esc)" }, "← Back to the run");
+  return h("button", { type: "button", class: "rp-back", "data-fid": "back", onclick: closeReplay, title: "Back to the run (Esc)" }, "← Run");
 }
 
+// head is the window's bar: what is replayed, with a dot in the replay's
+// colour, and for the recording a switch between the builds replaying it.
 function head(t, d, m, r) {
-  if (m.incident) return incidentHead(d, m, r);
-  const nw = m.nw;
-  const step = m.steps[r.i];
-  let badge, tone;
-  if (!nw) { badge = "the new build's replay wasn't saved"; tone = "none"; }
-  else if (m.failing && r.i < m.fail) { badge = `running · stops at @${m.steps[m.fail].seq}`; tone = "run"; }
-  else { badge = nw.verdict; tone = m.failing ? "bad" : "ok"; }
-  return h("header", { class: "rp-head" },
-    backBtn(),
-    h("div", { class: "rp-title" },
-      h("span", { class: "rp-name" }, `Variant ${m.v.id}`, h("span", { class: "m dim" }, ` round ${r.round}`)),
-      h("span", { class: "rp-sub" },
-        d.service ? h("span", { class: "m" }, d.service) : null,
-        d.service ? " · " : null,
-        h("span", { class: "violet-t" }, m.v.mutation || "mutation not recorded"),
-        m.v.failure ? h("span", { class: "faint" }, ` · old build: ${m.v.failure}`) : null),
-      d.new_error ? h("span", { class: "bad rp-sub" }, `The new build's replay couldn't be read: ${d.new_error}`) : null),
-    h("span", { class: `rp-badge ${tone}`, title: step ? `at input @${step.seq}` : null }, badge));
-}
-
-// incidentHead titles the recorded incident, with a switch between the
-// builds replaying it.
-function incidentHead(d, m, r) {
-  const nw = m.nw;
-  const step = m.steps[r.i];
-  const logged = d.diff && d.diff[d.build];
-  let badge, tone;
-  if (!nw) { badge = logged ? `${logged} · steps not saved for this run` : `the ${m.bname}'s replay wasn't saved`; tone = "none"; }
-  else if (m.failing && r.i < m.fail) { badge = `running · stops at @${m.steps[m.fail].seq}`; tone = "run"; }
-  else { badge = nw.verdict; tone = m.failing ? "bad" : "ok"; }
-  const f = d.failure;
+  const tone = !m.nw ? "none" : m.failing ? "bad" : "ok";
+  let name, sub;
+  if (m.incident) {
+    const f = d.failure;
+    name = [m.traffic ? "Recorded traffic" : "Recorded incident", d.service ? h("span", { class: "m faint" }, ` · ${d.service}`) : null];
+    sub = m.traffic
+      ? [h("span", {}, `${m.n} input${m.n === 1 ? "" : "s"} recorded on the base build`),
+        h("span", { class: "violet-t" }, ` · ${m.feats.size} feature step${m.feats.size === 1 ? "" : "s"}, ${m.changed.size} changed by the new build`)]
+      : [h("span", {}, `${m.n} input${m.n === 1 ? "" : "s"} from production`),
+        f ? h("span", { class: "violet-t" }, ` · failed at @${f.seq}: ${f.kind}`) : h("span", { class: "faint" }, " · no failure recorded"),
+        d.diff && d.diff.verdict ? h("span", { class: "faint" }, ` · kavach diff ${d.diff.verdict}`) : null];
+  } else {
+    name = [`Variant ${m.v.id}`, h("span", { class: "m faint" }, ` · round ${r.round}`)];
+    sub = [d.service ? h("span", { class: "m" }, `${d.service} · `) : null,
+      h("span", { class: "violet-t" }, m.v.mutation || "mutation not recorded"),
+      m.v.failure ? h("span", { class: "faint" }, ` · old build: ${m.v.failure}`) : null];
+  }
   const pick = (b, label) => h("button", {
-    type: "button", class: `rp-build ${d.build === b ? "on" : ""}`, "data-fid": `build-${b}`, "aria-pressed": String(d.build === b),
-    title: `Replay the recording on the ${label}`, onclick: () => { if (d.build !== b) openIncident(t0(), b, m.traffic); },
+    type: "button", class: "rp-build", "data-fid": `build-${b}`, "aria-pressed": String(d.build === b),
+    title: `Replay the recording on the ${label.toLowerCase()}`, onclick: () => { if (d.build !== b) openIncident(t0(), b, m.traffic); },
   }, label);
-  const sub = m.traffic
-    ? [h("span", {}, `${m.n} input${m.n === 1 ? "" : "s"} recorded on the base build`),
-      h("span", { class: "violet-t" }, ` · ${m.feats.size} feature step${m.feats.size === 1 ? "" : "s"}, ${m.changed.size} changed by the new build`)]
-    : [h("span", {}, `${m.n} input${m.n === 1 ? "" : "s"} from production`),
-      f ? h("span", { class: "violet-t" }, ` · failed at @${f.seq}: ${f.kind}`) : h("span", { class: "faint" }, " · no failure recorded"),
-      d.diff && d.diff.verdict ? h("span", { class: "faint" }, ` · kavach diff ${d.diff.verdict}`) : null];
   return h("header", { class: "rp-head" },
     backBtn(),
     h("div", { class: "rp-title" },
-      h("span", { class: "rp-name" }, m.traffic ? "Recorded traffic" : "Recorded incident", h("span", { class: "m dim" }, d.service ? ` ${d.service}` : "")),
-      h("span", { class: "rp-sub" }, sub)),
-    h("span", { class: "rp-builds", role: "group", "aria-label": "Build" }, pick("old", "old build"), pick("new", "new build")),
-    h("span", { class: `rp-badge ${tone}`, title: step ? `at input @${step.seq}` : null }, badge));
+      h("span", { class: "rp-name" }, h("span", { class: `rp-dot ${tone}`, "aria-hidden": "true" }), name),
+      h("span", { class: "rp-sub" }, sub),
+      d.new_error ? h("span", { class: "bad rp-sub" }, `The new build's replay couldn't be read: ${d.new_error}`) : null),
+    m.incident ? h("span", { class: "rp-builds", role: "group", "aria-label": "Replay on" }, pick("old", "Old build"), pick("new", "New build")) : null);
 }
 
 const t0 = () => (ctx ? ctx.t : { job: state.replay.job, id: state.replay.trial });
 
-function stage(m, r) {
+// verdict is what the replay says at step i: running toward where it stops,
+// stopped there, or through; or that the build's replay wasn't saved. Why
+// the step matters is in its input row.
+function verdict(d, m, i, ns) {
+  const nw = m.nw;
+  const s = m.steps[i];
+  if (!nw) {
+    const logged = m.incident && d.diff && d.diff[d.build];
+    return { tone: "none", title: logged || "not replayed", detail: [logged ? "this run saved the verdict, not the replay's steps" : `the ${m.bname}'s replay wasn't saved`] };
+  }
+  if (m.failing && i < m.fail) return { tone: "run", title: "running", detail: [`the ${m.bname} stops at @${m.steps[m.fail].seq}`] };
+  if (m.failing) {
+    const why = (ns && (ns.panic || ns.error || ns.crash)) || nw.detail || "";
+    const how = !ns ? "" : ns.panic ? "panic" : ns.error ? "error" : ns.crash ? "crash" : ns.timeout ? "timed out" : "";
+    return { tone: "bad", title: nw.verdict, detail: [`replay stopped at @${s.seq}`, how], why };
+  }
+  const left = m.end - i;
+  return { tone: "ok", title: nw.verdict, detail: [left ? `${left} more input${left === 1 ? "" : "s"} to replay` : `the ${m.bname} replayed all ${m.end + 1} inputs`] };
+}
+
+const MARKS = { ok: "M3.5 8.5l3 3 6-7", bad: "M4.5 4.5l7 7m0-7l-7 7", run: "M6 4.5v7l5.5-3.5z", none: "M4.5 8h7" };
+
+// stage is the step: its input, env reads and outputs, then the verdict at
+// it and the invariants after it.
+function stage(d, m, r) {
   const i = r.i;
   const s = m.steps[i];
   const ns = m.newAt(i);
+  const v = verdict(d, m, i, ns);
+  const detail = v.detail.filter(Boolean).join(" · ");
+  const held = m.names.filter((name) => lampState(m, name, i)[0] === "held").length;
+  return h("div", { class: `rp-stage st-${v.tone}` },
+    io(m, i, s, ns),
+    h("div", { class: "rp-verdict" },
+      h("span", { class: "rp-mark", "aria-hidden": "true" }, icon(MARKS[v.tone], v.tone === "run", 16)),
+      h("div", { class: "rp-verdict-txt" },
+        h("strong", { class: "m" }, v.title),
+        detail ? h("span", {}, detail) : null,
+        v.why ? h("code", { class: `rp-why ${expanded ? "full" : ""}` }, v.why) : null)),
+    h("div", { class: "rp-invs" },
+      h("div", { class: "rp-invs-head" }, h("span", {}, "Invariants"),
+        m.names.length && m.nw ? h("span", { class: "m" }, `${held} of ${m.names.length} held at @${s.seq}`) : null),
+      m.names.length ? h("div", { class: "rp-lamps" }, m.names.map((name, k) => lampEl(m, name, i, k)))
+        : h("span", { class: "faint rp-nolamps" }, m.traffic ? `The ${m.bname} declares no invariants.` : m.incident ? "The recorded failure names no invariant." : "No invariants named for this round.")));
+}
+
+// io lists what the step read through env and what it emitted, the
+// journal's record against the build's when they differ.
+function io(m, i, s, ns) {
+  const inp = decodeInput(s);
   const isFault = i === m.fault.i;
   const isFeat = m.feats.has(s.tseq);
+  const row = (k, v, cls = "") => h("div", { class: `rp-row ${cls}` }, h("dt", {}, k), h("dd", {}, v));
+  const note = (text, cls = "faint") => h("span", { class: `rp-row-note ${cls}` }, text);
+  const tag = isFault ? (m.incident ? m.fault.why : `fault: ${m.fault.why}`) : isFeat ? (m.changed.has(s.seq) ? "feature step · changed by the new build" : "feature step") : m.incident ? "recorded step" : "baseline step";
 
-  const queue = h("div", { class: "rp-queue", style: "grid-area: queue" },
-    h("span", { class: "rp-lbl" }, "Next inputs"),
-    [1, 2, 3, 4].map((k) => i + k).filter((j) => j < m.n).map((j) => {
-      const q = m.steps[j];
-      const cls = j === m.fault.i ? "fault" : m.feats.has(q.tseq) ? "feat" : "";
-      return h("div", { class: `rp-q ${cls} ${j > m.end ? "off" : ""}`, title: j > m.end ? "not replayed: the replay stopped before it" : null },
-        h("span", { class: "m faint" }, `@${q.seq}`, q.tseq !== q.seq ? ` · traffic @${q.tseq}` : ""),
-        h("span", { class: "m rp-q-op" }, clip(decodeInput(q).line, 60) || "(empty)"));
-    }),
-    i + 1 >= m.n ? h("span", { class: "faint rp-q-end" }, "No more inputs.") : null);
+  const fromTraffic = Array.isArray(s.traffic);
+  const rec = fromTraffic ? s.traffic : s.recorded;
+  const recName = m.rname || (fromTraffic ? "old build" : "recorded");
+  const bn = m.bname;
+  const got = ns ? ns.outputs : null;
+  const same = got && got.length === rec.length && got.every((o, k) => outKey(o) === outKey(rec[k]));
+  const long = inp.long || [...rec, ...(got || [])].some((o) => o.data.length > 80)
+    || s.gateways.some((g) => g.request.length + g.response.length > 80);
 
-  const reads = s.clock;
+  const rows = [row(
+    ["Input ", h("span", { class: "m" }, `@${s.seq}`), s.tseq !== s.seq ? h("span", { class: "faint" }, ` · traffic @${s.tseq}`) : null, s.source && s.source !== "traffic" ? h("span", { class: "faint" }, ` · ${s.source}`) : null],
+    [expanded && inp.long ? h("pre", { class: "m rp-input-full" }, inp.pretty) : h("code", { class: "rp-input-line" }, inp.line || "(empty input)"),
+      h("span", { class: "rp-tags" },
+        h("span", { class: `rp-tag ${isFault ? "fault" : isFeat ? "feat" : ""}` }, tag),
+        s.input_changed && !isFault ? h("span", { class: "rp-tag fault" }, "the mutation changed this input") : null,
+        inp.note ? h("span", { class: "rp-tag" }, inp.note) : null,
+        long ? h("button", { type: "button", class: "link-btn rp-expand", "data-fid": "expand", "aria-pressed": String(expanded), onclick: () => { expanded = !expanded; update(); } }, expanded ? "Clip" : "Show in full") : null),
+      s.marker && !m.incident ? h("span", { class: "rp-marker" }, `the variant records the old build failing here: ${[s.marker.kind, s.marker.message].filter(Boolean).join(": ")}`) : null],
+    isFault ? "fault" : "")];
+
+  const clockN = s.clock.length;
+  if (clockN) rows.push(row(h("span", { class: "m" }, "clock"), h("span", { class: "m" }, `${clockN} read${clockN === 1 ? "" : "s"}`, h("span", { class: "faint" }, ` · ${s.clock.slice(0, 4).map((x) => fmtClock(x).time).join(", ")}${clockN > 4 ? " …" : ""}`))));
+  if (s.random > 0) rows.push(row(h("span", { class: "m" }, "random"), h("span", { class: "m" }, String(s.random))));
+  for (const g of s.gateways) {
+    rows.push(row(h("span", { class: "m" }, g.gateway || "gateway"), h("span", { class: "m rp-gw" },
+      line(g.request, "rp-req"), h("span", { class: "faint" }, " → "), g.error ? line(`error: ${g.error}`, "bad") : line(g.response, ""))));
+  }
+  for (const c of s.config) {
+    rows.push(row(h("span", { class: "m" }, `config ${c.key}`), h("span", { class: "m" }, !c.present ? h("span", { class: "faint" }, "not set") : line(c.value, ""))));
+  }
+
+  const outList = (list, other, cls) => {
+    const keys = new Set(other ? other.map(outKey) : []);
+    return list.length ? list.map((o) => h("div", { class: `rp-out ${other && !keys.has(outKey(o)) ? cls : ""}` },
+      h("span", { class: "m faint rp-sink" }, o.sink || "out"), line(o.data, "rp-data"), o.local ? h("span", { class: "faint rp-local", title: "a local output: not compared" }, "local") : null))
+      : [h("div", { class: "faint rp-out" }, "nothing")];
+  };
+  if (i > m.end || (!ns && m.nw)) {
+    rows.push(row(cap(recName), [outList(rec, null, ""), note(`not replayed by the ${bn}`)]));
+  } else if (!m.nw) {
+    rows.push(row(cap(recName), [outList(rec, null, ""), note(`the ${bn}'s replay wasn't saved`)]));
+  } else if (same) {
+    rows.push(row("Emitted", [outList(got, null, ""), rec.length ? note(`the same as ${m.rname ? "" : "the "}${recName}'s`) : null]));
+  } else {
+    rows.push(row(cap(recName), outList(rec, got, "gone")),
+      row(cap(bn), [outList(got, rec, "new"), note(`differs from ${m.rname ? "" : "the "}${recName}'s`, "peach")]));
+  }
+  return h("dl", { class: `rp-io ${i === m.fail ? "stopped" : ""}` }, rows);
+}
+
+function line(text, cls) {
+  return h("span", { class: `rp-clip ${expanded ? "full" : ""} ${cls}`, title: !expanded && text.length > 80 ? clip(text, 600) : null }, text || " ");
+}
+
+// side is the trail beside the step: the clock as the step read it, and the
+// input at hand with the ones after it.
+function side(m, r) {
+  const i = r.i;
+  const reads = m.steps[i].clock;
   const shown = reads.length ? { ns: reads[0], i } : m.lastRead[i];
   const before = (() => { const j = reads.length ? i - 1 : (shown ? shown.i - 1 : -1); return j >= 0 ? m.lastRead[j] : null; })();
   const fc = shown ? fmtClock(shown.ns) : null;
-  const clock = h("div", { class: "rp-clock", style: "grid-area: clock" },
-    h("span", { class: "rp-lbl m" }, "env.Now()"),
+  const clock = h("div", { class: "rp-clock" },
+    h("span", { class: "m rp-clock-k" }, "env.Now()"),
     h("span", { class: `m rp-time ${reads.length ? "" : "stale"}` }, fc ? fc.time : "—"),
     fc ? h("span", { class: "m faint rp-date" }, fc.date) : null,
     h("span", { class: "m rp-clock-note" },
       !shown ? "no clock read yet" : !reads.length ? `no read at this step · last at @${m.steps[shown.i].seq}`
         : reads.length > 1 ? `first of ${reads.length} reads` : before ? `${fmtDelta(shown.ns - before.ns)} since @${m.steps[before.i].seq}` : "the first read"),
     m.shift ? h("span", { class: "m rp-shift", title: shown ? `every clock read in this variant is shifted; the recording read ${fmtClock(shown.ns - m.shift.ns).time} UTC here` : "every clock read in this variant is shifted" }, `clock shifted ${m.shift.label}`)
-      : h("span", { class: "m faint rp-shift-none" }, "as recorded"));
+      : h("span", { class: "m faint" }, "as recorded"));
+  const items = [0, 1, 2, 3, 4].map((k) => i + k).filter((j) => j < m.n).map((j) => {
+    const q = m.steps[j];
+    const cls = [j === i ? "cur" : "", j === m.fault.i ? "fault" : m.feats.has(q.tseq) ? "feat" : "", j > m.end ? "off" : ""].join(" ");
+    return h("li", { class: `rp-q ${cls}`, "aria-current": j === i ? "step" : null },
+      h("button", {
+        type: "button", class: "rp-q-btn", "data-fid": `q-${j - i}`, disabled: j > m.end || j === i,
+        title: j > m.end ? "not replayed: the replay stopped before it" : j === i ? "the input at hand" : `Go to input @${q.seq}`,
+        onclick: () => { stop(); go(j); },
+      },
+        h("span", { class: "m rp-q-at" }, `@${q.seq}`, q.tseq !== q.seq ? ` · traffic @${q.tseq}` : "", j === m.fault.i ? (m.incident ? " · failed" : " · fault") : ""),
+        h("span", { class: "m rp-q-op" }, clip(decodeInput(q).line, 80) || "(empty)")));
+  });
+  return h("aside", { class: "rp-side", "aria-label": "The clock, and the inputs to come" },
+    h("h3", {}, "Clock"), clock,
+    h("h3", {}, "Inputs"),
+    h("ol", { class: "rp-queue" }, items),
+    i + 1 >= m.n ? h("span", { class: "faint rp-q-end" }, "No more inputs.") : null);
+}
 
-  const inp = decodeInput(s);
-  const tag = isFault ? (m.incident ? m.fault.why : `fault: ${m.fault.why}`) : isFeat ? (m.changed.has(s.seq) ? "feature step · changed by the new build" : "feature step") : m.incident ? "recorded step" : "baseline step";
-  const card = h("div", { class: `rp-input ${isFault ? "fault" : ""}` },
-    h("span", { class: "rp-lbl peach" }, `input @${s.seq}`, s.tseq !== s.seq ? h("span", { class: "faint" }, ` · traffic @${s.tseq}`) : null, s.source && s.source !== "traffic" ? h("span", { class: "faint" }, ` · ${s.source}`) : null),
-    expanded && inp.long ? h("pre", { class: "m rp-input-full" }, inp.pretty) : h("span", { class: "m rp-input-line" }, inp.line || "(empty input)"),
-    inp.note ? h("span", { class: "faint rp-note" }, inp.note) : null,
-    h("span", { class: `rp-tag ${isFault ? "fault" : isFeat ? "feat" : ""}` }, tag),
-    s.input_changed && !isFault ? h("span", { class: "rp-tag fault" }, "the mutation changed this input") : null,
-    s.marker && !m.incident ? h("span", { class: "rp-marker" }, `the variant records the old build failing here: ${[s.marker.kind, s.marker.message].filter(Boolean).join(": ")}`) : null);
+// strip is the recording's inputs, one segment each: replayed so far,
+// the one at hand, feature steps, the fault, where the replay stopped.
+function strip(m, r) {
+  return h("div", { class: `rp-strip ${m.n > 90 ? "dense" : ""}`, style: `--n:${m.n}`, "aria-hidden": "true" },
+    m.steps.map((q, j) => h("i", {
+      class: [j <= r.i ? "done" : "", j === r.i ? "cur" : "", j === m.fault.i ? "fault" : m.feats.has(q.tseq) ? "feat" : "", j === m.fail ? "stop" : "", j > m.end ? "off" : ""].join(" "),
+    })));
+}
 
-  const center = h("div", { class: "rp-center", style: "grid-area: center" },
-    card,
-    h("div", { class: "rp-wire", "aria-hidden": "true" }, h("span", {})),
-    stepBox(m, i, s, ns, inp));
+function ctlRow(m, r) {
+  const s = m.steps[r.i];
+  const playing = !!timer;
+  return h("div", { class: "rp-ctl-row" },
+    h("button", { type: "button", class: "rp-ctl", "data-fid": "prev", "aria-label": "Back one step", title: "Back one step (←)", disabled: r.i <= 0, onclick: () => { stop(); go(r.i - 1); } }, icon("M8 2 L3 6 L8 10", false)),
+    h("button", { type: "button", class: "rp-ctl play", "data-fid": "play", "aria-label": playing ? "Pause" : "Play", title: `${playing ? "Pause" : "Play"} (space)`, onclick: toggle }, icon(playing ? "M2 1 H5 V11 H2 Z M7 1 H10 V11 H7 Z" : "M2.5 1 L11 6 L2.5 11 Z", true)),
+    h("button", { type: "button", class: "rp-ctl", "data-fid": "next", "aria-label": "Forward one step", title: "Forward one step (→)", disabled: r.i >= m.end, onclick: () => { stop(); go(r.i + 1); } }, icon("M4 2 L9 6 L4 10", false)),
+    m.fault.i >= 0 ? h("button", { type: "button", class: "rp-jump", "data-fid": "jump", title: `Jump to the ${m.traffic ? "first changed feature step" : m.incident ? "recorded failure" : "fault"} (F)`, onclick: jump }, `Jump to ${m.traffic ? "change" : m.incident ? "failure" : "fault"} @${m.steps[m.fault.i].seq}`) : null,
+    h("span", { class: "rp-spacer" }),
+    h("span", { class: "m rp-pos", "aria-live": playing ? "off" : "polite" }, h("b", {}, `@${s.seq}`),
+      h("span", { class: "faint" }, ` · ${r.i + 1} of ${m.end + 1} replayed · ${m.n} in the ${m.incident ? "recording" : "variant"}${ctx.d.truncated || ctx.d.journal_truncated ? " (the API sent only the first steps)" : ""}`)));
+}
 
-  // Invariant lamps go in the corners: the first at bottom left, the second
-  // bottom right, then left middle and right top.
-  const lamps = m.names.map((name, k) => lampEl(m, name, i, k));
-  const grp = (cls, area, kids) => (kids.length ? h("div", { class: `rp-lamps ${cls}`, style: `grid-area: ${area}` }, kids) : null);
-  const evens = lamps.filter((_, k) => k % 2 === 0), odds = lamps.filter((_, k) => k % 2 === 1);
-  return h("div", { class: "rp-stage" },
-    queue, clock, center,
-    grp("lmid", "lmid", evens.slice(1)),
-    grp("lbot", "lbot", evens.slice(0, 1)),
-    grp("rtop", "rtop", odds.slice(1)),
-    grp("rbot", "rbot", odds.slice(0, 1)),
-    !m.names.length ? h("span", { class: "faint rp-nolamps", style: "grid-area: lbot" }, m.traffic ? `The ${m.bname} declares no invariants.` : m.incident ? "The recorded failure names no invariant." : "No invariants named for this round.") : null);
+function icon(d, fill, size = 12) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", d);
+  if (fill) p.setAttribute("fill", "currentColor");
+  else { p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", size > 12 ? "2.2" : "1.6"); p.setAttribute("stroke-linecap", "round"); p.setAttribute("stroke-linejoin", "round"); }
+  svg.append(p);
+  return svg;
+}
+
+// controls is the strip with the scrubber over it, its ends, and the
+// buttons; the scrubber is the one part update leaves in place.
+function controls(m, r) {
+  const range = h("input", {
+    id: "rp-scrub", class: "rp-range", type: "range", min: "0", max: String(m.n - 1), step: "1", value: String(r.i),
+    "aria-valuetext": valueText(m, r.i),
+    oninput: (e) => {
+      stop();
+      const v = Math.min(+e.target.value, m.end);
+      if (+e.target.value !== v) e.target.value = String(v);
+      go(v);
+    },
+  });
+  return h("div", { class: "rp-scrub" },
+    h("div", { class: "rp-track" }, strip(m, r), h("label", { class: "rp-sr", for: "rp-scrub" }, "Step"), range),
+    h("div", { class: "m faint rp-ends", "aria-hidden": "true" }, h("span", {}, `@${m.steps[0].seq}`), h("span", {}, `@${m.steps[m.n - 1].seq}`)),
+    ctlRow(m, r));
+}
+
+function legend(m) {
+  return h("div", { class: "rp-legend" },
+    h("span", {}, h("i", { class: "lg-cur" }), "the input at hand"),
+    m.featIdx.length ? h("span", {}, h("i", { class: "lg-feat" }), "feature step") : null,
+    m.fault.i >= 0 ? h("span", {}, h("i", { class: "lg-fault" }), m.traffic ? "the first changed feature step" : m.incident ? "the recorded failure" : "fault: the mutated input") : null,
+    m.fail >= 0 ? h("span", {}, h("i", { class: "lg-stop" }), "replay stopped") : null,
+    m.end < m.n - 1 ? h("span", {}, h("i", { class: "lg-off" }), "not replayed") : null,
+    h("span", { class: "faint rp-keys" }, "← → step · space play · F fault · Esc back"));
 }
 
 function lampState(m, name, i) {
@@ -570,136 +715,4 @@ function lampEl(m, name, i, k) {
   },
     h("span", { class: "rp-bulb", "aria-hidden": "true" }),
     h("span", { class: "rp-lamp-txt" }, h("span", { class: "m b" }, name), h("span", { class: "rp-lamp-sub" }, sub)));
-}
-
-// stepBox shows what the step read through env and what it emitted, the
-// journal's record against the new build's when they differ.
-function stepBox(m, i, s, ns, inp) {
-  const rows = [];
-  const clockN = s.clock.length;
-  if (clockN) rows.push(["clock", h("span", { class: "m" }, `${clockN} read${clockN === 1 ? "" : "s"}`, clockN > 1 ? h("span", { class: "faint" }, ` · ${s.clock.slice(0, 4).map((x) => fmtClock(x).time).join(", ")}${clockN > 4 ? " …" : ""}`) : null)]);
-  if (s.random > 0) rows.push(["random", h("span", { class: "m" }, String(s.random))]);
-  for (const g of s.gateways) {
-    rows.push([g.gateway || "gateway", h("span", { class: "m rp-gw" },
-      line(g.request, "rp-req"),
-      h("span", { class: "faint" }, " → "),
-      g.error ? line(`error: ${g.error}`, "bad") : line(g.response, ""))]);
-  }
-  for (const c of s.config) {
-    rows.push([`config ${c.key}`, h("span", { class: "m" }, !c.present ? h("span", { class: "faint" }, "not set") : line(c.value, ""))]);
-  }
-  // The old build's outputs for this input, from the contract's traffic;
-  // a journal that records outputs itself has them in recorded.
-  const fromTraffic = Array.isArray(s.traffic);
-  const rec = fromTraffic ? s.traffic : s.recorded;
-  const recName = m.rname || (fromTraffic ? "old build" : "recorded");
-  const bn = m.bname;
-  const got = ns ? ns.outputs : null;
-  const same = got && got.length === rec.length && got.every((o, k) => outKey(o) === outKey(rec[k]));
-  const long = inp.long || [...rec, ...(got || [])].some((o) => o.data.length > 80)
-    || s.gateways.some((g) => g.request.length + g.response.length > 80);
-
-  let emitted;
-  const outList = (list, other, cls) => {
-    const keys = new Set(other ? other.map(outKey) : []);
-    return list.length ? list.map((o) => h("div", { class: `rp-out ${other && !keys.has(outKey(o)) ? cls : ""}` },
-      h("span", { class: "m faint rp-sink" }, o.sink || "out"), line(o.data, "rp-data"), o.local ? h("span", { class: "faint rp-local", title: "a local output: not compared" }, "local") : null))
-      : [h("div", { class: "faint rp-out" }, "nothing")];
-  };
-  if (i > m.end || (!ns && m.nw)) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, `not replayed by the ${bn}`)),
-      h("div", { class: "rp-col-h faint" }, recName), outList(rec, null, ""));
-  } else if (!m.nw) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, `${recName}; the ${bn}'s replay wasn't saved`)), outList(rec, null, ""));
-  } else if (same) {
-    emitted = h("div", { class: "rp-outs" }, h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "faint" }, rec.length ? `the ${bn}'s, the same as ${m.rname ? "" : "the "}${recName}'s` : "")), outList(got, null, ""));
-  } else {
-    emitted = h("div", { class: "rp-outs" },
-      h("div", { class: "rp-out-head" }, h("span", { class: "rp-lbl" }, "Emitted"), h("span", { class: "peach" }, `the ${bn}'s differ from ${m.rname ? "" : "the "}${recName}'s`)),
-      h("div", { class: "rp-diff" },
-        h("div", {}, h("div", { class: "rp-col-h faint" }, recName), outList(rec, got, "gone")),
-        h("div", {}, h("div", { class: "rp-col-h faint" }, bn), outList(got, rec, "new"))));
-  }
-
-  let stopLine = null;
-  if (i === m.fail && m.nw) {
-    const why = (ns && (ns.panic || ns.error || ns.crash)) || m.nw.detail || "";
-    const how = !ns ? "" : ns.panic ? "panic" : ns.error ? "error" : ns.crash ? "crash" : ns.timeout ? "timed out" : "";
-    stopLine = h("div", { class: "rp-stop" },
-      h("span", { class: "m b" }, `replay stopped: ${m.nw.verdict}`),
-      how ? h("span", { class: "faint" }, ` · ${how}`) : null,
-      why ? h("code", { class: `rp-why ${expanded ? "full" : ""}` }, why) : null);
-  }
-
-  return h("div", { class: `rp-step ${i === m.fail ? "stopped" : ""}` },
-    h("div", { class: "rp-step-head" },
-      h("span", { class: "b" }, "The step"),
-      h("span", { class: "faint m" }, rows.length ? `${rows.length} env read${rows.length === 1 ? "" : "s"}` : "no env reads"),
-      long ? h("button", { type: "button", class: "link-btn rp-expand", "data-fid": "expand", "aria-pressed": String(expanded), onclick: () => { expanded = !expanded; update(); } }, expanded ? "Clip" : "Show in full") : null),
-    rows.length ? h("div", { class: "rp-env" }, rows.map(([k, v]) => [h("span", { class: "m faint rp-env-k" }, k), v])) : null,
-    emitted,
-    stopLine);
-}
-
-function line(text, cls) {
-  return h("span", { class: `rp-clip ${expanded ? "full" : ""} ${cls}`, title: !expanded && text.length > 80 ? clip(text, 600) : null }, text || " ");
-}
-
-function ctlRow(m, r) {
-  const s = m.steps[r.i];
-  const playing = !!timer;
-  return h("div", { class: "rp-ctl-row" },
-    h("button", { type: "button", class: "rp-ctl", "data-fid": "prev", "aria-label": "Back one step", title: "Back one step (←)", disabled: r.i <= 0, onclick: () => { stop(); go(r.i - 1); } }, icon("M8 2 L3 6 L8 10", false)),
-    h("button", { type: "button", class: "rp-ctl play", "data-fid": "play", "aria-label": playing ? "Pause" : "Play", title: `${playing ? "Pause" : "Play"} (space)`, onclick: toggle }, icon(playing ? "M2 1 H5 V11 H2 Z M7 1 H10 V11 H7 Z" : "M2 1 L11 6 L2 11 Z", true)),
-    h("button", { type: "button", class: "rp-ctl", "data-fid": "next", "aria-label": "Forward one step", title: "Forward one step (→)", disabled: r.i >= m.end, onclick: () => { stop(); go(r.i + 1); } }, icon("M4 2 L9 6 L4 10", false)),
-    m.fault.i >= 0 ? h("button", { type: "button", class: "rp-jump", "data-fid": "jump", title: `Jump to the ${m.traffic ? "first changed feature step" : m.incident ? "recorded failure" : "fault"} (F)`, onclick: jump }, `Jump to ${m.traffic ? "change" : m.incident ? "failure" : "fault"} @${m.steps[m.fault.i].seq}`) : null,
-    h("span", { class: "rp-spacer" }),
-    h("span", { class: "m rp-pos", "aria-live": playing ? "off" : "polite" }, "step ", h("b", {}, `@${s.seq}`),
-      h("span", { class: "faint" }, ` · ${r.i + 1} of ${m.end + 1} replayed · ${m.n} in the ${m.incident ? "recording" : "variant"}${ctx.d.truncated || ctx.d.journal_truncated ? " (the API sent only the first steps)" : ""}`)));
-}
-
-function icon(d, fill) {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "12");
-  svg.setAttribute("height", "12");
-  svg.setAttribute("viewBox", "0 0 12 12");
-  svg.setAttribute("aria-hidden", "true");
-  const p = document.createElementNS(ns, "path");
-  p.setAttribute("d", d);
-  if (fill) p.setAttribute("fill", "currentColor");
-  else { p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", "1.6"); }
-  svg.append(p);
-  return svg;
-}
-
-function controls(m, r) {
-  const pct = (i) => `${m.n > 1 ? ((i / (m.n - 1)) * 100).toFixed(3) : 0}%`;
-  const range = h("input", {
-    id: "rp-scrub", class: "rp-range", type: "range", min: "0", max: String(m.n - 1), step: "1", value: String(r.i),
-    "aria-valuetext": valueText(m, r.i),
-    oninput: (e) => {
-      stop();
-      const v = Math.min(+e.target.value, m.end);
-      if (+e.target.value !== v) e.target.value = String(v);
-      go(v);
-    },
-  });
-  return h("div", { class: "rp-ctl-box" },
-    ctlRow(m, r),
-    h("div", { class: "rp-track" },
-      h("div", { class: "rp-rail", "aria-hidden": "true" },
-        h("span", { class: "rp-done", style: `width:${pct(Math.max(0, m.end))}` }),
-        h("span", { class: "rp-rest", style: `left:${pct(Math.max(0, m.end))}` }),
-        m.featIdx.map((j) => h("span", { class: `rp-tick ${j === m.fault.i ? "fault" : ""} ${j > m.end ? "off" : ""}`, style: `left:${pct(j)}` })),
-        m.fault.i >= 0 ? h("span", { class: "rp-diamond", style: `left:${pct(m.fault.i)}` }) : null,
-        m.fail >= 0 ? h("span", { class: "rp-trip", style: `left:${pct(m.fail)}` }) : null),
-      h("label", { class: "rp-sr", for: "rp-scrub" }, "Step"),
-      range),
-    h("div", { class: "rp-legend" },
-      m.featIdx.length ? h("span", {}, h("i", { class: "lg-tick" }), "feature step") : null,
-      m.fault.i >= 0 ? h("span", {}, h("i", { class: "lg-diamond" }), m.traffic ? "the first changed feature step" : m.incident ? "the recorded failure" : "fault: the mutated input") : null,
-      m.fail >= 0 ? h("span", {}, h("i", { class: "lg-trip" }), "replay stopped") : null,
-      m.end < m.n - 1 ? h("span", {}, h("i", { class: "lg-rest" }), "not replayed") : null,
-      h("span", { class: "faint rp-keys" }, "← → step · space play · F fault · Esc back")));
 }
