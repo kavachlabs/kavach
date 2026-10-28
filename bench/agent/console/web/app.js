@@ -120,6 +120,21 @@ function saveUIPrefs() {
 }
 
 const narrowScreen = () => window.matchMedia(NARROW).matches;
+
+// Which list the left sidebar holds, "runs" or "tasks": the rail picks it.
+// It is kept apart from the panes' prefs, which uistate.js owns.
+const SIDE_PANE_KEY = "kavach-bench.side-pane";
+function loadSidePane() {
+  try {
+    if (localStorage.getItem(SIDE_PANE_KEY) === "tasks") return "tasks";
+  } catch {}
+  return "runs";
+}
+function saveSidePane() {
+  try {
+    localStorage.setItem(SIDE_PANE_KEY, state.sidePane);
+  } catch {}
+}
 const initialPrefs = loadUIPrefs();
 
 // The editors code links can open, by their URL schemes. The source tree is
@@ -167,6 +182,7 @@ export const state = {
   // auxiliary pane), folded (the sidebar sections folded shut: "runs",
   // "tasks", "incident", "feature"), leftW and rightW.
   ...initialPanes(initialPrefs, narrowScreen()),
+  sidePane: loadSidePane(), // "runs" | "tasks"
   auxTab: "task", // "task" | "arms" | "models"
   codeEditor: loadCodeEditor(), // CODE_EDITORS id
   live: false,
@@ -1089,14 +1105,15 @@ function renderSide() {
         h("span", {}, "Settings")),
       h("span", { class: `key-badge ${keyOk ? "ok" : "warn"}` }, keyOk ? "Keys ready" : "Add API key")));
 
-  const scrollKids = [
+  const tasksPane = state.sidePane === "tasks" && hasTasksPane();
+  const scrollKids = tasksPane ? [] : [
     STATIC ? null : h("a", { href: "#/new", class: `new-run-link ${current.view === "new" ? "on" : ""}` },
       h("span", {}, "+ New benchmark run"),
       h("span", { class: "faint m" }, "/new")),
     sideSection("runs", "Runs", state.jobs ? state.jobs.length : null),
   ].filter(Boolean);
 
-  const runsShut = state.folded.has("runs");
+  const runsShut = tasksPane || state.folded.has("runs");
   if (runsShut) {
     // nothing under a folded heading
   } else if (state.jobsErr) scrollKids.push(h("div", { class: "none bad" }, "Couldn't list runs: " + state.jobsErr));
@@ -1117,9 +1134,9 @@ function renderSide() {
   }
 
   // A task's link opens the new-run form, which a copy doesn't have.
-  if (!STATIC && fullConsole()) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
+  if (tasksPane) scrollKids.push(sideSection("tasks", "Tasks", state.tasks ? state.tasks.length : null));
 
-  const tasksShut = STATIC || !fullConsole() || state.folded.has("tasks");
+  const tasksShut = !tasksPane || state.folded.has("tasks");
   if (!tasksShut && state.tasks && !state.tasks.length) scrollKids.push(h("div", { class: "none" }, "None found."));
   // Incidents first, then features; each task names the benchmark it came from.
   const groups = tasksShut ? [] : [["incident", "Incidents"], ["feature", "Features"]]
@@ -1158,6 +1175,94 @@ function renderSide() {
   side.replaceChildren(scrollEl, foot, makeResizeSash("left"));
   scrollEl.scrollTop = top;
   if (hadFocus) side.querySelector(".side-settings-btn").focus({ preventScroll: true });
+  renderRail();
+}
+
+// A task's link opens the new-run form, which a copy doesn't have.
+function hasTasksPane() {
+  return !STATIC && fullConsole();
+}
+
+// The rail's icons, drawn like the site's hero: 24-unit strokes.
+const RAIL_ICONS = {
+  runs: "M5 7h14M5 12h14M5 17h9",
+  replay: "M8 5.5v13l10-6.5z",
+  compare: "M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z",
+  tasks: "M9 7a3 3 0 0 1 6 0M7 10h10v4a5 5 0 0 1-10 0zM12 10v9M4 12h3M17 12h3M5 18l2.5-1.5M19 18l-2.5-1.5",
+  settings: "M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8",
+};
+
+function railSVG(paths, cls) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("aria-hidden", "true");
+  for (const p of paths) {
+    const el = document.createElementNS(ns, p.r ? "circle" : "path");
+    for (const [k, v] of Object.entries(p)) el.setAttribute(k, v);
+    svg.append(el);
+  }
+  return svg;
+}
+
+// railItem is one of the rail's icons: a link when href is set, else a
+// button. on marks the section in view; off, one that needs a run open.
+function railItem({ icon, label, href, onclick, on = false, off = false }) {
+  const attrs = { class: `rail-item ${on ? "on" : ""}`, title: label, "aria-label": label };
+  const svg = railSVG([{ d: RAIL_ICONS[icon] }], "rail-ic");
+  if (href && !off) return h("a", { ...attrs, href, "aria-current": on ? "page" : null }, svg);
+  return h("button", { ...attrs, type: "button", disabled: off, "aria-pressed": onclick ? String(on) : null, onclick }, svg);
+}
+
+// toggleSidePane opens the left sidebar on pane, or closes it when it
+// already shows pane.
+function toggleSidePane(pane) {
+  if (sideOpen() && state.sidePane === pane) {
+    toggleSide(state, narrowScreen());
+  } else {
+    state.sidePane = pane;
+    if (!sideOpen()) toggleSide(state, narrowScreen());
+  }
+  saveUIPrefs();
+  saveSidePane();
+  renderSide();
+}
+
+// renderRail draws the rail of sections at the page's left edge: home, the
+// runs, the replay of the recorded incident, the comparison, the tasks, and
+// Settings. Replay opens what the attempt shown offers.
+function renderRail() {
+  const rail = document.getElementById("rail");
+  if (!rail) return;
+  const open = sideOpen();
+  const enc = current.job ? encodeURIComponent(current.job) : "";
+  const replayBtn = document.querySelector("[data-replay]");
+  const home = TRIAL ? (trialReady() ? "#/new" : "#/") : STATIC ? `#/jobs/${encodeURIComponent(LANDING)}/compare` : "#/new";
+  const items = [
+    railItem({ icon: "runs", label: `${open && state.sidePane === "runs" ? "Hide" : "Show"} runs (⌘B)`, on: open && (state.sidePane === "runs" || !hasTasksPane()), onclick: () => toggleSidePane("runs") }),
+    current.view === "runs" || current.view === "compare"
+      ? railItem({
+        icon: "replay",
+        label: state.replay ? "Replaying the recording" : replayBtn ? replayBtn.textContent.replace(/^▶\s*/, "") : "Nothing to replay for this attempt",
+        on: !!state.replay,
+        off: !state.replay && !replayBtn,
+        onclick: () => {
+          const b = document.querySelector("[data-replay]");
+          if (!state.replay && b) b.click();
+        },
+      })
+      : railItem({ icon: "replay", label: "Open a run to replay its recording", off: true }),
+    railItem({ icon: "compare", label: "Pass rate & arm comparison", href: `#/jobs/${enc}/compare`, on: current.view === "compare", off: !current.job }),
+    hasTasksPane() ? railItem({ icon: "tasks", label: `${open && state.sidePane === "tasks" ? "Hide" : "Show"} tasks: incidents and features`, on: open && state.sidePane === "tasks", onclick: () => toggleSidePane("tasks") }) : null,
+  ];
+  const foot = STATIC ? null : railItem({ icon: "settings", label: "Settings (⌘,)", on: state.settings.open, onclick: () => openSettingsModal(hasConfiguredKey() ? undefined : "keys") });
+  rail.replaceChildren(...[
+    h("a", { class: "rail-logo", href: home, title: "Home", "aria-label": "Home" },
+      railSVG([{ cx: "12", cy: "12", r: "9" }, { d: "M12 6.5a5.5 5.5 0 1 1-5.5 5.5" }], "rail-logo-ic")),
+    h("div", { class: "rail-items" }, items),
+    foot,
+  ].filter(Boolean));
 }
 
 // staticFoot is the sidebar's foot in a copy: what it is, in place of the
@@ -1864,6 +1969,11 @@ function renderAll() {
 }
 
 export function renderView() {
+  renderViewOnly();
+  renderRail(); // its Replay follows what the view offers
+}
+
+function renderViewOnly() {
   const view = document.getElementById("view");
   if (TRIAL && TRIAL_VIEWS.includes(current.view)) return renderTrialView(view, current.view);
   if (current.view === "new") {

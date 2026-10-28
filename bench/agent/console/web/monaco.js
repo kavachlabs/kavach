@@ -160,7 +160,7 @@ function setup() {
       },
     });
   }
-  // IBM Plex Mono loads after the page; measure again once it has.
+  // Geist Mono loads after the page; measure again once it has.
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => monaco.editor.remeasureFonts());
 }
 
