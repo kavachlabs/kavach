@@ -155,9 +155,13 @@ func readOnly(j *harbor.Job) {
 	j.Stoppable, j.Resumable, j.Retryable, j.RetryQueued, j.Sync = false, false, false, nil, nil
 }
 
-// app writes the web app, with index.html marked as a copy that opens on
-// landing.
+// app writes the web app, with index.html stamped (web.Stamp) and marked as
+// a copy that opens on landing.
 func (e *exporter) app(landing string) error {
+	version, err := web.Version(web.Files)
+	if err != nil {
+		return err
+	}
 	return fs.WalkDir(web.Files, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -168,7 +172,7 @@ func (e *exporter) app(landing string) error {
 		}
 		if p == "index.html" {
 			meta := fmt.Sprintf(`<meta charset="utf-8">`+"\n"+`<meta name="bench-static" content="%s">`, landing)
-			b = bytes.Replace(b, []byte(`<meta charset="utf-8">`), []byte(meta), 1)
+			b = bytes.Replace(web.Stamp(b, version), []byte(`<meta charset="utf-8">`), []byte(meta), 1)
 		}
 		return e.write(p, b)
 	})

@@ -1,25 +1,19 @@
 /* kavach bench console */
-/* IBM Plex, vendored so the console has its type offline too (SIL OFL 1.1). */
+/* The site's type, vendored so the console has it offline too (SIL OFL 1.1,
+   fonts/OFL.txt): Instrument Sans and Geist Mono, Latin, variable weight. */
 @font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "Instrument Sans";
   font-style: normal;
-  font-weight: 100 700;
+  font-weight: 400 700;
   font-display: swap;
-  src: url(fonts/ibm-plex-sans.woff2) format("woff2");
+  src: url(fonts/instrument-sans.woff2) format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Mono";
+  font-family: "Geist Mono";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
   font-display: swap;
-  src: url(fonts/ibm-plex-mono-400.woff2) format("woff2");
-}
-@font-face {
-  font-family: "IBM Plex Mono";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url(fonts/ibm-plex-mono-600.woff2) format("woff2");
+  src: url(fonts/geist-mono.woff2) format("woff2");
 }
 
 /* Colours after the Kavach Labs site: strip-chart paper and navy ink by
@@ -27,11 +21,12 @@
    behind the page. Light by default; dark follows the system unless
    data-theme on <html> picks one. */
 :root {
-  --font-ui: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-code: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-ui: "Instrument Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-code: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 140ms;
   --dur-med: 220ms;
+  --rail-w: 60px;
 
   --app: #eef1ec;
   --bar: #e3e8e1;
@@ -66,6 +61,12 @@
   --glow-a: rgba(79, 124, 255, 0.22);
   --glow-b: rgba(255, 154, 61, 0.24);
   --glow-c: rgba(124, 77, 255, 0.16);
+  /* The hero's glass: see-through panels the glow shows behind. */
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-2: rgba(255, 255, 255, 0.4);
+  --glass-sunk: rgba(227, 232, 225, 0.55);
+  --glass-edge: color-mix(in srgb, var(--edge-strong) 70%, transparent);
+  --mark: #1a2142; /* the logo's pen: ink by day, orange at night */
   --shadow-pop: 0 18px 44px -12px rgba(16, 22, 47, 0.22), 0 0 0 1px rgba(16, 22, 47, 0.04);
   --shadow-card: 0 3px 12px -4px rgba(16, 22, 47, 0.14);
   color-scheme: light;
@@ -105,6 +106,11 @@
     --glow-a: rgba(79, 124, 255, 0.32);
     --glow-b: rgba(255, 154, 61, 0.2);
     --glow-c: rgba(124, 77, 255, 0.28);
+    --glass: rgba(21, 27, 55, 0.62);
+    --glass-2: rgba(27, 34, 66, 0.45);
+    --glass-sunk: rgba(8, 12, 28, 0.5);
+    --glass-edge: color-mix(in srgb, var(--edge-strong) 75%, transparent);
+    --mark: #ff9a3d;
     --shadow-pop: 0 18px 44px -10px rgba(4, 6, 16, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
     --shadow-card: 0 4px 16px -4px rgba(4, 6, 16, 0.45);
     color-scheme: dark;
@@ -144,6 +150,11 @@
   --glow-a: rgba(79, 124, 255, 0.32);
   --glow-b: rgba(255, 154, 61, 0.2);
   --glow-c: rgba(124, 77, 255, 0.28);
+  --glass: rgba(21, 27, 55, 0.62);
+  --glass-2: rgba(27, 34, 66, 0.45);
+  --glass-sunk: rgba(8, 12, 28, 0.5);
+  --glass-edge: color-mix(in srgb, var(--edge-strong) 75%, transparent);
+  --mark: #ff9a3d;
   --shadow-pop: 0 18px 44px -10px rgba(4, 6, 16, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-card: 0 4px 16px -4px rgba(4, 6, 16, 0.45);
   color-scheme: dark;
@@ -171,8 +182,8 @@ body {
   background-attachment: fixed;
 }
 body {
-  font: 13.5px/1.5 var(--font-ui);
-  letter-spacing: -0.008em;
+  font: 14px/1.5 var(--font-ui);
+  letter-spacing: -0.003em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -224,8 +235,78 @@ code, pre, .m { font-family: var(--font-code); font-size: 12.5px; letter-spacing
 .app {
   height: 100%;
   display: grid;
+  grid-template-areas: "rail top" "rail main";
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
   grid-template-rows: 50px minmax(0, 1fr);
 }
+.app > .top { grid-area: top; }
+.app > .main { grid-area: main; }
+
+/* The rail of sections down the left edge, as in the site's hero: the logo,
+   then an icon for each section (renderRail in app.js). */
+.rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0 12px;
+  border-right: 1px solid var(--edge);
+  background: color-mix(in srgb, var(--bar) 60%, transparent);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  z-index: 46;
+  min-height: 0;
+}
+.rail-logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+}
+/* The Kavach mark (kavach-icon.png without its background) as a mask, so it takes the theme's mark colour. */
+.rail-logo-ic {
+  width: 30px;
+  height: 30px;
+  background: var(--mark);
+  -webkit-mask: url(kavach-mark.png) center / contain no-repeat;
+  mask: url(kavach-mark.png) center / contain no-repeat;
+}
+.rail-items {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+.rail-item {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--dim);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.rail-item:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.rail-item.on { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+.rail-item:disabled { opacity: 0.35; cursor: default; }
+.rail-ic {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rail-item.on .rail-ic { stroke-width: 1.9; }
 
 /* Top navigation bar — overflow: visible so dropdown menus are never clipped */
 .top {
@@ -244,6 +325,9 @@ code, pre, .m { font-family: var(--font-code); font-size: 12.5px; letter-spacing
 .top:has(.aux-toggle) {
   padding-right: 0;
 }
+/* The rail's runs icon does what the menu button did. */
+.top .menu { display: none; }
+.top .titlewrap { margin-left: 18px; }
 .menu,
 .aux-toggle {
   background: none;
@@ -2831,17 +2915,26 @@ details.patch[open] > summary::before { content: "▾ "; }
     position: fixed;
     top: 50px;
     bottom: 0;
-    left: 0;
-    width: min(280px, 85vw);
+    left: var(--rail-w);
+    width: min(280px, calc(100vw - var(--rail-w) - 24px));
     z-index: 45;
     box-shadow: 0 0 40px rgba(0, 0, 0, 0.75);
   }
   .main.noside .side, .boot-noside .main .side { display: none; }
+  /* Over the view, the sidebar is solid: nothing under it shows through. */
+  .main .side { background: var(--bar); }
   .pane { padding: 20px 16px; }
   .center { padding: 28px 16px 32px; }
   .right .wide { display: none; }
 }
 @media (max-width: 600px) {
+  :root { --rail-w: 52px; }
+  /* A phone's top bar keeps the run's title and the pane toggles, not its pills... */
+  .top .titlewrap { margin-left: 8px; }
+  .top .right { flex: 0 1 auto; min-width: 0; gap: 8px; }
+  .top .right .status-pill:not(.bad) { display: none; }
+  /* ...and the rail's grid icon opens the comparison these buttons link. */
+  .top .right .btn { display: none; }
   .logo-mark { height: 26px; }
   .meta > div { grid-template-columns: 64px minmax(0, 1fr); }
   .meta .ic { display: none; }
@@ -3789,8 +3882,9 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
 }
 
 /* The public trial (trial.js): landing, keys, invite and run form. */
-.trial-bare .side, .trial-bare #menu { display: none; }
+.trial-bare .side, .trial-bare #menu, .trial-bare .rail { display: none; }
 .trial-bare .main { grid-template-columns: minmax(0, 1fr); }
+.app.trial-bare { grid-template-areas: "top" "main"; grid-template-columns: minmax(0, 1fr); }
 .tl { max-width: 960px; margin: 0 auto; padding: 56px 24px 72px; display: flex; flex-direction: column; gap: 56px; }
 .tl-narrow { max-width: 600px; gap: 18px; padding-top: 40px; }
 .tl-hero { display: flex; flex-direction: column; align-items: flex-start; gap: 18px; padding-top: 8px; }
@@ -3905,3 +3999,22 @@ button.pr-col:focus-visible { outline: 2px solid var(--blue); outline-offset: 1p
 .event-json { margin: 0; padding: 6px 8px 8px 68px; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; max-height: 40vh; overflow: auto; }
 .event.plain { padding: 4px 8px; white-space: pre-wrap; word-break: break-word; opacity: 0.75; }
 @media (prefers-reduced-motion: reduce) { .events-head .run { animation: none; } }
+
+/* ---------- The hero's finish ----------
+   The site's hero window, on the console's own surfaces: glass panels the
+   glow shows behind, softer edges and larger corners. Popovers, menus and
+   the replay's step stay solid, so what is under them never shows through. */
+.config-card, .prompt, .tablewrap, .kcard, .task-card, .aux-spec-card,
+.rp-ctl-box, .headline, .probe, .inv-band, .inv-def, .arm-guide,
+.settings-rows, .tl-terms, .tl-step, .tl-card, .tl-more, .tf fieldset {
+  background: var(--glass);
+  border-color: var(--glass-edge);
+  border-radius: 16px;
+}
+.kcol { background: var(--glass-2); border-color: var(--glass-edge); border-radius: 16px; }
+.rp-stage, .radar { background: var(--glass-sunk); border-color: var(--glass-edge); border-radius: 16px; }
+.rp-input, .rp-step { border-radius: 14px; }
+.prompt { box-shadow: var(--shadow-card); }
+.pop, .cmds, .picker, .cselect-menu { border-radius: 14px; }
+.settings-modal { border-radius: 20px; }
+
