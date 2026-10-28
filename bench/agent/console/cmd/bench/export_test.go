@@ -147,3 +147,29 @@ func readJSON(t *testing.T, path string, v any) {
 		t.Fatalf("%s: %v", path, err)
 	}
 }
+
+// TestExportAppOnly writes the app alone, opening on the named run, with no
+// jobs or tasks directory to read.
+func TestExportAppOnly(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "site")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"export", "-app-only", "-landing", "some-run", "-out", out}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	index, err := os.ReadFile(filepath.Join(out, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(index, []byte(`<meta name="bench-static" content="some-run">`)) {
+		t.Error("index.html isn't marked as a copy that opens on some-run")
+	}
+	if _, err := os.Stat(filepath.Join(out, "app.css")); err != nil {
+		t.Error(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "api")); !os.IsNotExist(err) {
+		t.Errorf("an app-only copy holds api/: %v", err)
+	}
+	if code := run([]string{"export", "-app-only", "-out", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code != 2 {
+		t.Errorf("-app-only with no -landing: exit %d, want 2", code)
+	}
+}

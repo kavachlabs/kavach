@@ -1,0 +1,115 @@
+name: trial-deploy
+
+# Deploys main to the public trial (try.kavachlabs.dev) when a push changes
+# what the console's binary is built from, then, when the console's web app
+# changed, re-uploads that app to the benchmark site
+# (benchmark.kavachlabs.dev), whose runs stay as they are. Both go through
+# bench/agent/deploy/trial/kavach-trial, as from a laptop (ONBOARDING.md).
+#
+# Secrets:
+#   TRIAL_SSH_KEY          a private key that logs in as root on the VM
+#   TRIAL_SSH_KNOWN_HOSTS  the VM's line for ~/.ssh/known_hosts
+#                          (ssh-keyscan 178.105.177.23, checked by hand)
+#   CLOUDFLARE_API_TOKEN   R2 write on the kavach-bench-site bucket
+#   CLOUDFLARE_ACCOUNT_ID  the account that holds it
+on:
+  push:
+    branches: [main]
+    # The console and the packages of the root module it builds in.
+    paths:
+      - bench/agent/console/**
+      - bench/agent/deploy/trial/**
+      - internal/**
+      - journal/**
+      - replay/**
+      - sdk/go/**
+      - go.mod
+      - go.sum
+      - .github/workflows/trial-deploy.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Also re-upload the benchmark site's app
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never one cut off halfway.
+concurrency:
+  group: trial-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: bench/agent/deploy/trial
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the push's first commit, to see what it changed
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bench/agent/console/go.mod
+          cache-dependency-path: bench/agent/console/go.sum
+
+      - name: Set up ssh to the VM
+        env:
+          KEY: ${{ secrets.TRIAL_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.TRIAL_SSH_KNOWN_HOSTS }}
+        run: |
+          [ -n "$KEY" ] && [ -n "$KNOWN_HOSTS" ] || { echo "::error::TRIAL_SSH_KEY and TRIAL_SSH_KNOWN_HOSTS must be set"; exit 1; }
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$KEY" >~/.ssh/id_ed25519
+          chmod 0600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" >~/.ssh/known_hosts
+
+      # A restart forgets every visitor's keys and cuts off live runs, so
+      # wait for none to be live: up to an hour, checking every 5 minutes.
+      - name: Wait for no live trial runs
+        run: |
+          for i in $(seq 1 12); do
+            live=$(./kavach-trial status | sed -n 's/^live runs: //p')
+            [ "$live" != 0 ] || exit 0
+            echo "${live:-unknown} live run(s); checking again in 5 minutes"
+            sleep 300
+          done
+          echo "::error::trial runs were still live after an hour; nothing was deployed"
+          exit 1
+
+      - name: Deploy to try.kavachlabs.dev
+        run: ./kavach-trial deploy "$GITHUB_SHA"
+
+      - name: Did the web app change?
+        id: web
+        env:
+          BEFORE: ${{ github.event.before }}
+          DISPATCHED: ${{ github.event_name == 'workflow_dispatch' }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$DISPATCHED" = true ]; then
+            echo "changed=$PUBLISH" >>"$GITHUB_OUTPUT"
+          elif [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "changed=true" >>"$GITHUB_OUTPUT" # no earlier commit to compare with
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- ../../console/web; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.web.outputs.changed == 'true'
+        with:
+          node-version: 22
+
+      - name: Re-upload the benchmark site's app
+        if: steps.web.outputs.changed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./kavach-trial publish --app-only

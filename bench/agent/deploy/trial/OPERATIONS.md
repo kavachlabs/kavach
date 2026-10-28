@@ -79,7 +79,11 @@ which `kavach-trial deploy` installs from the checkout it deploys).
 - **The console**: `kavach-trial deploy [ref]` (ONBOARDING.md, "Ship a
   console change"). It refuses while runs are live, checks the new binary
   against `trial.json` first and rolls back on a failed restart. A restart
-  leaves runs and sessions going but forgets visitors' keys.
+  leaves runs and sessions going but forgets visitors' keys. A push to
+  main that changes the console or the root packages it builds in deploys
+  itself: `.github/workflows/trial-deploy.yml` waits up to an hour for no
+  live runs, then runs `kavach-trial deploy` on that commit. Run it by hand
+  from the Actions tab (workflow_dispatch) to redeploy main.
 - **Disk**: `df -h /` and `du -sh /var/lib/kavach/jobs`. The journal is
   capped at 200M (`journalctl --disk-usage`).
 - **Memory**: `free -h`. Each live run is a Harbor process on 2 GB;
@@ -163,6 +167,18 @@ out as they are, so read the dry run's copy in `~/.cache/kavach-trial/site`
 first. Each run copied from the VM is then added to the showcase
 (`kavach-trial showcase add|remove|list`), so retention keeps it. Files the
 new copy no longer has stay in the bucket, unreachable from its pages.
+
+To ship a change to the console's web app without exporting the runs again:
+
+```sh
+sh bench/agent/deploy/trial/kavach-trial publish --app-only [--landing ID]
+```
+
+It uploads only the app's files, and opens on the run the live site opens on
+unless `--landing` names another. The trial-deploy workflow runs it after a
+deploy whose push changed `bench/agent/console/web`, with the
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets in place of a
+wrangler login.
 
 ## Monitoring
 

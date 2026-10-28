@@ -36,12 +36,29 @@ func cmdExport(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "the directory to write the copy to (required; must be empty or not exist)")
 	jobs := fs.String("job", "", "comma-separated runs to include (default: every finished run)")
 	landing := fs.String("landing", "", "the run the copy opens on (default: the newest included)")
+	appOnly := fs.Bool("app-only", false, "write only the web app, for a copy whose runs are already up (requires -landing)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *out == "" {
 		fmt.Fprintln(stderr, "bench export: -out is required")
 		return 2
+	}
+	if *appOnly {
+		if *landing == "" || *jobs != "" {
+			fmt.Fprintln(stderr, "bench export: -app-only takes -landing and no -job")
+			return 2
+		}
+		// The app names no machine, so there is nothing to scrub, and no runs
+		// to read: it needs no jobs or tasks directory.
+		e := &exporter{out: *out, scrub: strings.NewReplacer()}
+		n, err := e.appOnly(*landing)
+		if err != nil {
+			fmt.Fprintf(stderr, "bench export: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "bench export: the app, %d files in %s\n", n, *out)
+		return 0
 	}
 	cfg, err := o.config()
 	if err != nil {
@@ -153,6 +170,18 @@ func (e *exporter) export(ids []string, landing string) (int, error) {
 // is about this machine: the copy has no server.
 func readOnly(j *harbor.Job) {
 	j.Stoppable, j.Resumable, j.Retryable, j.RetryQueued, j.Sync = false, false, false, nil, nil
+}
+
+// appOnly writes the web app alone, for a copy whose runs are published
+// already; landing is the run that copy opens on.
+func (e *exporter) appOnly(landing string) (int, error) {
+	if entries, err := os.ReadDir(e.out); err == nil && len(entries) > 0 {
+		return 0, fmt.Errorf("%s is not empty", e.out)
+	}
+	if err := e.app(landing); err != nil {
+		return 0, err
+	}
+	return e.files, nil
 }
 
 // app writes the web app, with index.html marked as a copy that opens on

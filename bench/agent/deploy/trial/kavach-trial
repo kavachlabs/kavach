@@ -11,13 +11,16 @@
 #   kavach-trial deploy [--force] [--build-only] [ref]
 #   kavach-trial showcase add|remove|list <run>...
 #   kavach-trial publish [--dry-run] [--landing ID] <run>...  (the benchmark site)
+#   kavach-trial publish --app-only [--dry-run] [--landing ID]   (its app alone)
 #
 # KAVACH_TRIAL_HOST is the VM (default 178.105.177.23), KAVACH_TRIAL_URL the
-# public address (default https://try.kavachlabs.dev).
+# public address (default https://try.kavachlabs.dev), KAVACH_BENCH_URL the
+# benchmark site (default https://benchmark.kavachlabs.dev).
 set -eu
 
 HOST=${KAVACH_TRIAL_HOST:-178.105.177.23}
 SITE=${KAVACH_TRIAL_URL:-https://try.kavachlabs.dev}
+BENCH_SITE=${KAVACH_BENCH_URL:-https://benchmark.kavachlabs.dev}
 BENCH=/opt/kavach/bin/bench
 API=http://127.0.0.1:8480
 
@@ -154,17 +157,28 @@ content_type() {
 # (KAVACH_BENCH_JOBS) if it is there, else from the VM, where it is also put
 # on the showcase so retention never deletes a run the site shows.
 cmd_publish() {
-	dry=0 landing=""
+	dry=0 landing="" app_only=0
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--dry-run) dry=1 ;; # export and check, upload nothing
+		--app-only) app_only=1 ;; # the web app alone; the site's runs stay as they are
 		--landing) shift; landing=${1:?--landing needs a run id} ;;
 		-*) die "unknown flag $1" ;;
 		*) break ;;
 		esac
 		shift
 	done
-	[ $# -gt 0 ] || die "name every run the site should hold"
+	if [ "$app_only" = 1 ]; then
+		[ $# = 0 ] || die "--app-only takes no runs: the site keeps the ones it has"
+		if [ -z "$landing" ]; then
+			# The run the site opens on now, from its index.html.
+			landing=$(curl -fsS "$BENCH_SITE/" | sed -n 's/.*name="bench-static" content="\([^"]*\)".*/\1/p') ||
+				die "could not read $BENCH_SITE"
+			[ -n "$landing" ] || die "$BENCH_SITE names no landing run; pass --landing"
+		fi
+	else
+		[ $# -gt 0 ] || die "name every run the site should hold"
+	fi
 	top=$(git rev-parse --show-toplevel) || die "run publish from inside the kavach checkout"
 	local_jobs=${KAVACH_BENCH_JOBS:-$top/bench/agent/results/harbor}
 	cache=${KAVACH_TRIAL_CACHE:-$HOME/.cache/kavach-trial}
@@ -195,9 +209,15 @@ cmd_publish() {
 		done
 	done
 
-	echo "exporting $ids"
-	(cd "$top/bench/agent/console" && go run ./cmd/bench export --out "$tmp/site" --jobs "$tmp/jobs" --job "$ids" ${landing:+--landing "$landing"}) ||
-		die "the export failed"
+	if [ "$app_only" = 1 ]; then
+		echo "exporting the app, opening on $landing"
+		(cd "$top/bench/agent/console" && go run ./cmd/bench export --app-only --out "$tmp/site" --landing "$landing") ||
+			die "the export failed"
+	else
+		echo "exporting $ids"
+		(cd "$top/bench/agent/console" && go run ./cmd/bench export --out "$tmp/site" --jobs "$tmp/jobs" --job "$ids" ${landing:+--landing "$landing"}) ||
+			die "the export failed"
+	fi
 	# Export publishes transcripts as they are: refuse anything shaped like a
 	# key the trial handles.
 	if grep -rlE 'sk-or-v1-[0-9a-f]{20}|sk-ant-[A-Za-z0-9_-]{20}|dtn_[0-9a-f]{20}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY' "$tmp/site" >"$tmp/leaks"; then
