@@ -652,8 +652,18 @@ func verifyFix(fixture, oldBin, newBin string, minVariants, regressions int, kee
 	if regressions == 0 {
 		opts.Regressions = -1
 	}
+	oldPool, err := replay.NewHostPool(oldBin)
+	if err != nil {
+		return nil, fmt.Errorf("old build: %w", err)
+	}
+	defer oldPool.Close()
+	newPool, err := replay.NewHostPool(newBin)
+	if err != nil {
+		return nil, fmt.Errorf("new build: %w", err)
+	}
+	defer newPool.Close()
 	start := time.Now()
-	v, err := replay.VerifyWith(j, hostReplayer(oldBin), hostReplayer(newBin), opts)
+	v, err := replay.VerifyWith(j, oldPool.Run, newPool.Run, opts)
 	wall := time.Since(start)
 	if err != nil {
 		return nil, err
@@ -711,11 +721,6 @@ func (o *diffOutcome) report() map[string]any {
 		},
 		"wall_ms": ms(o.wall),
 	}
-}
-
-// hostReplayer replays journals through a host command.
-func hostReplayer(bin string) replay.ReplayFunc {
-	return func(j *journal.Journal) (*replay.Result, error) { return replay.RunHost(j, bin) }
 }
 
 // saveFailingVariants writes the variants and regression variants the new
