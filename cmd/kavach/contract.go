@@ -271,8 +271,7 @@ func checkContract(dir, oldBin, newBin string, noVariants bool, save string) (*c
 		}
 	}
 	traffic := filepath.Join(d.Path, contract.FileTraffic)
-	replayer := func(bin, name string) contract.ReplayFunc {
-		run := hostContractReplayer(bin)
+	wrapSave := func(run contract.ReplayFunc, name string) contract.ReplayFunc {
 		if save == "" {
 			return run
 		}
@@ -291,19 +290,31 @@ func checkContract(dir, oldBin, newBin string, noVariants bool, save string) (*c
 			return res, err
 		}
 	}
-	o := contract.CheckOptions{New: replayer(newBin, "replay-new.json"), NoVariants: noVariants, Parallel: runtime.NumCPU(), Build: newBin}
+	newRun, closeNew, err := hostContractReplayer(newBin)
+	if err != nil {
+		return nil, 0, fmt.Errorf("new build: %w", err)
+	}
+	defer closeNew()
+	o := contract.CheckOptions{New: wrapSave(newRun, "replay-new.json"), NoVariants: noVariants, Parallel: runtime.NumCPU(), Build: newBin}
 	if oldBin != "" {
-		o.Old = replayer(oldBin, "replay-old.json")
+		oldRun, closeOld, err := hostContractReplayer(oldBin)
+		if err != nil {
+			return nil, 0, fmt.Errorf("old build: %w", err)
+		}
+		defer closeOld()
+		o.Old = wrapSave(oldRun, "replay-old.json")
 	}
 	start := time.Now()
 	r, err := d.Check(o)
 	return r, time.Since(start), err
 }
 
-func hostContractReplayer(bin string) contract.ReplayFunc {
-	return func(j *journal.Journal, opts replay.Options) (*replay.Result, error) {
-		return replay.RunHostWith(j, bin, opts)
+func hostContractReplayer(bin string) (contract.ReplayFunc, func() error, error) {
+	pool, err := replay.NewHostPool(bin)
+	if err != nil {
+		return nil, nil, err
 	}
+	return pool.RunWith, pool.Close, nil
 }
 
 func contractReport(dir string, r *contract.Report) map[string]any {

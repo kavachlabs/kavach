@@ -89,22 +89,7 @@ func ServeHost(newHandler func() Handler, in io.Reader, out io.Writer) (err erro
 	if hello.T != "hello" || hello.Protocol != 1 {
 		panic(hostFatal{fmt.Errorf("want hello for protocol 1, got %q protocol %d", hello.T, hello.Protocol)})
 	}
-	h := newHandler()
-	if hello.Start == journal.StartSnapshot {
-		sn, ok := h.(Snapshotter)
-		if !ok {
-			panic(hostFatal{errors.New("the handler does not implement Snapshotter")})
-		}
-		if err := sn.Restore(hello.Snapshot); err != nil {
-			panic(hostFatal{fmt.Errorf("restoring snapshot: %w", err)})
-		}
-	}
-	names := []string{}
-	if c, ok := h.(Checker); ok {
-		for _, inv := range c.Invariants() {
-			names = append(names, inv.Name)
-		}
-	}
+	h, names := initHostHandler(newHandler, hello.Start, hello.Snapshot)
 	facts := append(envfacts.New().Facts(nil), journal.Fact{Key: "host.runtime", Form: journal.FactValue, Value: []byte(runtime.Version())})
 	s.send(map[string]any{"t": "ready", "protocol": 1, "sdk": "kavach-go/" + Version, "invariants": names, "environment": envfacts.ToJSON(facts)})
 
@@ -114,10 +99,36 @@ func ServeHost(newHandler func() Handler, in io.Reader, out io.Writer) (err erro
 			return nil
 		case "step":
 			s.step(h, m)
+		case "reset":
+			if m.Protocol != 0 && m.Protocol != 1 {
+				panic(hostFatal{fmt.Errorf("want reset for protocol 1, got protocol %d", m.Protocol)})
+			}
+			h, names = initHostHandler(newHandler, m.Start, m.Snapshot)
+			s.send(map[string]any{"t": "ready", "protocol": 1, "sdk": "kavach-go/" + Version, "invariants": names})
 		default:
 			panic(hostFatal{fmt.Errorf("unexpected %q between steps", m.T)})
 		}
 	}
+}
+
+func initHostHandler(newHandler func() Handler, start string, snapshot []byte) (Handler, []string) {
+	h := newHandler()
+	if start == journal.StartSnapshot {
+		sn, ok := h.(Snapshotter)
+		if !ok {
+			panic(hostFatal{errors.New("the handler does not implement Snapshotter")})
+		}
+		if err := sn.Restore(snapshot); err != nil {
+			panic(hostFatal{fmt.Errorf("restoring snapshot: %w", err)})
+		}
+	}
+	names := []string{}
+	if c, ok := h.(Checker); ok {
+		for _, inv := range c.Invariants() {
+			names = append(names, inv.Name)
+		}
+	}
+	return h, names
 }
 
 func (s *session) step(h Handler, m driverMsg) {
