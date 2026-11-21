@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kavachlabs/kavach/journal"
 )
 
 // mcpSession sends each message to a server and decodes every response.
@@ -56,15 +60,25 @@ func TestMCPProtocol(t *testing.T) {
 		t.Fatalf("ping: %v", resps[1])
 	}
 	var names []string
+	var mapTool map[string]any
 	for _, tool := range resps[2]["result"].(map[string]any)["tools"].([]any) {
 		tm := tool.(map[string]any)
 		names = append(names, tm["name"].(string))
 		if tm["inputSchema"].(map[string]any)["type"] != "object" || tm["description"] == "" {
 			t.Fatalf("tool %v", tm)
 		}
+		if tm["name"] == "kavach_map" {
+			mapTool = tm
+		}
 	}
-	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_time_travel,kavach_diff,kavach_contract_show,kavach_contract_check" {
+	if strings.Join(names, ",") != "kavach_list_incidents,kavach_replay,kavach_time_travel,kavach_diff,kavach_contract_show,kavach_contract_check,kavach_map" {
 		t.Fatalf("tools: %v", names)
+	}
+	props := mapTool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	for _, wantProp := range []string{"spec", "fixtures", "bin", "new", "diffs", "overlays", "out", "max_data", "title", "include_model"} {
+		if _, ok := props[wantProp]; !ok {
+			t.Fatalf("kavach_map inputSchema missing property %q: %v", wantProp, props)
+		}
 	}
 	for i, code := range map[int]float64{3: rpcMethodNotFound, 4: rpcParseError, 6: rpcInvalidParams} {
 		if e, _ := resps[i]["error"].(map[string]any); e == nil || e["code"] != code {
@@ -145,5 +159,164 @@ func TestListCommand(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "list", "a", "b"); code != exitUsage {
 		t.Fatalf("exit %d for two directories", code)
+	}
+}
+
+func TestMCPMap(t *testing.T) {
+	dir := t.TempDir()
+
+	// Generate a minimal .kavach fixture with two inputs, an output, and a panic marker.
+	fxPath := filepath.Join(dir, "incident.kavach")
+	jf, err := journal.OpenFile(fxPath, journal.Meta{Service: "billing"}, journal.FileOptions{})
+	if err != nil {
+		t.Fatalf("open journal: %v", err)
+	}
+	records := []journal.Record{
+		{Type: journal.TypeEnvironment, Flags: journal.FlagCritical},
+		{Type: journal.TypeInput, Source: "queue", Position: "1", Data: []byte(`{"op":"charge","amount":100}`)},
+		{Type: journal.TypeOutput, Sink: "ledger", Data: []byte(`{"ok":true}`)},
+		{Type: journal.TypeInput, Source: "queue", Position: "2", Data: []byte(`{"op":"charge","amount":null}`)},
+		{Type: journal.TypeMarker, Kind: journal.MarkerPanic, Message: "nil amount"},
+	}
+	for _, r := range records {
+		if _, err := jf.Append(r); err != nil {
+			t.Fatalf("append record: %v", err)
+		}
+	}
+	if err := jf.Close(); err != nil {
+		t.Fatalf("close journal: %v", err)
+	}
+
+	// Write a minimal map.json spec matching the generated fixture.
+	specPath := filepath.Join(dir, "map.json")
+	specJSON := `{
+		"kavach_map": 1,
+		"title": "Billing Map",
+		"groups": [
+			{"id": "in", "title": "Inputs"},
+			{"id": "out", "title": "Outputs"}
+		],
+		"nodes": [
+			{"id": "charge", "group": "in", "kind": "entry", "title": "Charge", "match": [{"on": "input", "source": "queue"}]},
+			{"id": "ledger", "group": "out", "kind": "sink", "title": "Ledger", "match": [{"on": "output", "sink": "ledger"}]}
+		],
+		"edges": [
+			{"from": "charge", "to": "ledger", "kind": "emits"}
+		],
+		"flows": [
+			{"id": "happy", "title": "Charge Flow", "steps": [{"node": "charge", "text": "Receive charge"}, {"node": "ledger", "text": "Write ledger"}]}
+		]
+	}`
+	if err := os.WriteFile(specPath, []byte(specJSON), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	outHTML := filepath.Join(dir, "out", "billing-map.html")
+
+	mustJSON := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	resps := mcpSession(t,
+		call(1, "kavach_map", mustJSON(map[string]any{
+			"spec":     specPath,
+			"fixtures": []string{fxPath},
+			"out":      outHTML,
+		})),
+		call(2, "kavach_map", mustJSON(map[string]any{
+			"spec":          specPath,
+			"fixtures":      []string{fxPath},
+			"include_model": true,
+		})),
+		call(3, "kavach_map", `{}`),
+		call(4, "kavach_map", mustJSON(map[string]any{
+			"fixtures": []string{fxPath},
+			"new":      "./fixed-host",
+		})),
+		call(5, "kavach_map", mustJSON(map[string]any{
+			"fixtures": []string{fxPath},
+			"max_data": -1,
+		})),
+	)
+
+	// 1. Summary mode + HTML output
+	sc, text, isErr := toolOutput(t, resps[0])
+	if isErr {
+		t.Fatalf("kavach_map summary error: %s", text)
+	}
+	if _, hasModel := sc["model"]; hasModel {
+		t.Fatalf("summary mode should not include model: %v", sc)
+	}
+	if sc["title"] != "Billing Map" || sc["spec_path"] != specPath || sc["out_path"] != outHTML {
+		t.Fatalf("summary header mismatch: %v", sc)
+	}
+	htmlBytes, _ := sc["html_bytes"].(float64)
+	if htmlBytes <= 0 {
+		t.Fatalf("expected html_bytes > 0, got %v", sc["html_bytes"])
+	}
+	if sc["nodes"].(float64) < 2 || sc["edges"].(float64) < 1 || sc["flows"].(float64) != 1 {
+		t.Fatalf("unexpected graph counts: nodes=%v edges=%v flows=%v", sc["nodes"], sc["edges"], sc["flows"])
+	}
+	fxs := sc["fixtures"].([]any)
+	if len(fxs) != 1 {
+		t.Fatalf("expected 1 fixture, got %v", fxs)
+	}
+	runs := fxs[0].(map[string]any)["runs"].([]any)
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run, got %v", runs)
+	}
+	r0 := runs[0].(map[string]any)
+	if r0["id"] != "recorded" || r0["steps"].(float64) != 2 || !strings.HasPrefix(r0["verdict"].(string), "panic@") {
+		t.Fatalf("unexpected run summary: %v", r0)
+	}
+	ff, ok := r0["first_failure"].(map[string]any)
+	if !ok || ff["outcome"] != "panic" || ff["message"] != "nil amount" {
+		t.Fatalf("unexpected first_failure: %v", r0["first_failure"])
+	}
+	if _, ok := sc["overlays"].([]any); !ok {
+		t.Fatalf("missing overlays slice: %v", sc)
+	}
+	if _, ok := sc["warnings"].([]any); !ok {
+		t.Fatalf("missing warnings slice: %v", sc)
+	}
+	if stats, ok := sc["stats"].(map[string]any); !ok || len(stats) < 2 {
+		t.Fatalf("unexpected stats: %v", sc["stats"])
+	}
+
+	htmlData, err := os.ReadFile(outHTML)
+	if err != nil {
+		t.Fatalf("read written HTML: %v", err)
+	}
+	if len(htmlData) != int(htmlBytes) || !strings.Contains(string(htmlData), `id="kavach-map-data"`) {
+		t.Fatalf("HTML output invalid: len=%d html_bytes=%v", len(htmlData), htmlBytes)
+	}
+
+	// 2. Full model mode
+	scFull, textFull, isErrFull := toolOutput(t, resps[1])
+	if isErrFull {
+		t.Fatalf("kavach_map include_model error: %s", textFull)
+	}
+	model, ok := scFull["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected model in include_model=true response: %v", scFull)
+	}
+	if model["kavach_map_model"] != 1.0 || model["title"] != "Billing Map" {
+		t.Fatalf("unexpected model: %v", model)
+	}
+
+	// 3-5. Validation errors
+	for i, want := range map[int]string{
+		2: "at least one of spec, fixtures, or overlays is required",
+		3: "new requires bin",
+		4: "max_data must not be negative",
+	} {
+		_, errText, errFlag := toolOutput(t, resps[i])
+		if !errFlag || !strings.Contains(errText, want) {
+			t.Fatalf("call %d: isError=%v %q, want %q", i+1, errFlag, errText, want)
+		}
 	}
 }

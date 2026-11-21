@@ -14,6 +14,7 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 
 - [README.md](README.md): the demo (a wallet ledger that crashes on `"amount": null`), how recording, replay and verification work, and what is out of scope.
 - [SPEC.md](SPEC.md): the journal and fixture format, the fix-verification rules (section 6.1), and the host and recorder protocols (sections 9 and 10).
+- [MAP.md](MAP.md): `kavach map` usage (including `--watch` live HTTP/SSE map), `map.json` spec, invariant-status semantics, overlay schema, and the `kavach_map` MCP tool.
 - [BENCHMARKS.md](BENCHMARKS.md): every published number, with the command that measured it.
 - [CONTRIBUTING.md](CONTRIBUTING.md): DCO sign-off is required on every commit; keep pull requests small.
 
@@ -25,7 +26,7 @@ Start with AGENTS.md. It is the loop to follow and the table of verdicts. Never 
 - [sdk](sdk): the SDKs, one per language (Go, Python, TypeScript, Rust, Java, C and C++, Julia, Ruby, PHP, Elixir, Haskell, OCaml), each with a port of the ledger demo.
 - [replay](replay): the replay engine, host-protocol driver and fix verification behind the CLI.
 - [contract](contract): behaviour contracts for features (SPEC.md section 6.4) behind `kavach contract`.
-- [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`, `contract`) and the MCP server (`kavach mcp`).
+- [cmd/kavach](cmd/kavach): the CLI (`inspect`, `replay`, `diff`, `list`, `contract`, `map` with `--watch` live server) and the MCP server (`kavach mcp`, including `kavach_map`).
 
 ## Optional
 

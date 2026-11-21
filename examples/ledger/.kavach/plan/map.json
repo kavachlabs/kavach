@@ -1,0 +1,188 @@
+{
+  "kavach_map": 1,
+  "title": "Wallet Ledger (examples/ledger)",
+  "summary": "Single-writer wallet ledger event loop, state mutations, sinks, declared invariants, and the nil-amount crash site.",
+  "service": "ledger",
+  "groups": [
+    {
+      "id": "entries",
+      "title": "Inputs",
+      "plain": "Wallet events read from events.jsonl or Kafka"
+    },
+    {
+      "id": "handlers",
+      "title": "Handlers",
+      "plain": "Handler functions in examples/ledger/sdk/ledger.go"
+    },
+    {
+      "id": "state",
+      "title": "State & Sinks",
+      "plain": "In-memory ledger balances, net total, and emitted outputs"
+    },
+    {
+      "id": "invariants",
+      "title": "Invariants",
+      "plain": "Rules checked by the Kavach SDK after every ok step"
+    },
+    {
+      "id": "bugs",
+      "title": "Known Bug",
+      "plain": "Unvalidated null amount dereference"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "in_deposit",
+      "group": "entries",
+      "kind": "entry",
+      "title": "deposit",
+      "plain": "Credits an account and increases Net by amount.",
+      "code": ["examples/ledger/sdk/ledger.go:64-66"],
+      "match": [{"on": "input", "json": {"type": "deposit"}}]
+    },
+    {
+      "id": "in_withdraw",
+      "group": "entries",
+      "kind": "entry",
+      "title": "withdraw",
+      "plain": "Checks funds, debits account, and decreases Net.",
+      "code": ["examples/ledger/sdk/ledger.go:67-72"],
+      "match": [{"on": "input", "json": {"type": "withdraw"}}]
+    },
+    {
+      "id": "in_transfer",
+      "group": "entries",
+      "kind": "entry",
+      "title": "transfer",
+      "plain": "Moves amount from sender to recipient without changing Net.",
+      "code": ["examples/ledger/sdk/ledger.go:73-80"],
+      "match": [{"on": "input", "json": {"type": "transfer"}}]
+    },
+    {
+      "id": "in_null_amount",
+      "group": "entries",
+      "kind": "entry",
+      "title": "null-amount event",
+      "plain": "Event payload arrives with \"amount\": null.",
+      "code": ["examples/ledger/testdata/events.jsonl:8"],
+      "match": [{"on": "input", "json": {"amount": null}}]
+    },
+    {
+      "id": "fn_handle",
+      "group": "handlers",
+      "kind": "function",
+      "title": "Ledger.Handle",
+      "plain": "Decodes JSON Event, reads env.Now(), and dispatches deposit/withdraw/transfer.",
+      "code": ["examples/ledger/sdk/ledger.go:46-83"]
+    },
+    {
+      "id": "fn_post",
+      "group": "handlers",
+      "kind": "function",
+      "title": "Ledger.post",
+      "plain": "Mutates Balances[account], draws 8 random bytes via env.Read, and emits ledger.entries.",
+      "code": ["examples/ledger/sdk/ledger.go:85-100"]
+    },
+    {
+      "id": "fn_reject",
+      "group": "handlers",
+      "kind": "function",
+      "title": "reject",
+      "plain": "Emits a rejection record without modifying balances.",
+      "code": ["examples/ledger/sdk/ledger.go:102-109"]
+    },
+    {
+      "id": "st_balances",
+      "group": "state",
+      "kind": "state",
+      "title": "Ledger.Balances",
+      "plain": "Per-account minor-unit balance map (map[string]int64).",
+      "code": ["examples/ledger/sdk/ledger.go:40"]
+    },
+    {
+      "id": "st_net",
+      "group": "state",
+      "kind": "state",
+      "title": "Ledger.Net",
+      "plain": "Running total of deposits minus withdrawals.",
+      "code": ["examples/ledger/sdk/ledger.go:41"]
+    },
+    {
+      "id": "sink_entries",
+      "group": "state",
+      "kind": "sink",
+      "title": "ledger.entries",
+      "plain": "Emitted Entry JSON for each posted debit/credit.",
+      "code": ["examples/ledger/sdk/ledger.go:98"],
+      "match": [{"on": "output", "sink": "ledger.entries"}]
+    },
+    {
+      "id": "sink_rejections",
+      "group": "state",
+      "kind": "sink",
+      "title": "ledger.rejections",
+      "plain": "Emitted Rejection JSON for insufficient funds or invalid amounts.",
+      "code": ["examples/ledger/sdk/ledger.go:107"],
+      "match": [{"on": "output", "sink": "ledger.rejections"}]
+    },
+    {
+      "id": "inv_balances",
+      "group": "invariants",
+      "kind": "invariant",
+      "title": "balances_non_negative",
+      "plain": "Every account balance in Ledger.Balances remains >= 0 after every step.",
+      "code": ["examples/ledger/sdk/ledger.go:114-121"],
+      "invariant": "balances_non_negative"
+    },
+    {
+      "id": "inv_money",
+      "group": "invariants",
+      "kind": "invariant",
+      "title": "money_conserved",
+      "plain": "sum(Ledger.Balances) == Ledger.Net after every step.",
+      "code": ["examples/ledger/sdk/ledger.go:122-131"],
+      "invariant": "money_conserved"
+    },
+    {
+      "id": "bug_nil_amount",
+      "group": "bugs",
+      "kind": "bug",
+      "title": "Nil *ev.Amount dereference",
+      "plain": "Dereferences *ev.Amount unconditionally before checking ev.Amount == nil.",
+      "detail": "In unpatched builds, amount := *ev.Amount panics with nil pointer dereference; partialFix only guards deposits.",
+      "code": ["examples/ledger/sdk/ledger.go:57"],
+      "match": [{"kind": "panic"}]
+    }
+  ],
+  "edges": [
+    {"from": "in_deposit", "to": "fn_handle", "kind": "calls"},
+    {"from": "in_withdraw", "to": "fn_handle", "kind": "calls"},
+    {"from": "in_transfer", "to": "fn_handle", "kind": "calls"},
+    {"from": "in_null_amount", "to": "fn_handle", "kind": "calls"},
+    {"from": "fn_handle", "to": "st_net", "kind": "writes", "label": "±amount"},
+    {"from": "fn_handle", "to": "fn_post", "kind": "calls"},
+    {"from": "fn_handle", "to": "fn_reject", "kind": "calls", "label": "invalid / overdraft"},
+    {"from": "fn_handle", "to": "bug_nil_amount", "kind": "breaks", "label": "amount == nil"},
+    {"from": "fn_post", "to": "st_balances", "kind": "writes", "label": "+delta"},
+    {"from": "fn_post", "to": "sink_entries", "kind": "emits"},
+    {"from": "fn_reject", "to": "sink_rejections", "kind": "emits"},
+    {"from": "st_balances", "to": "inv_balances", "kind": "checks"},
+    {"from": "st_balances", "to": "inv_money", "kind": "checks"},
+    {"from": "st_net", "to": "inv_money", "kind": "checks"},
+    {"from": "bug_nil_amount", "to": "inv_balances", "kind": "breaks", "label": "skips invariant check on panic"}
+  ],
+  "flows": [
+    {
+      "id": "null-amount-crash",
+      "title": "Null amount crash",
+      "plain": "Walks evt-008 (seq 32) from null JSON input to the nil-pointer panic.",
+      "fixture": "null-amount.kavach",
+      "steps": [
+        {"node": "in_null_amount", "text": "evt-008 arrives at seq 32 with type \"deposit\" and \"amount\": null."},
+        {"node": "fn_handle", "text": "Ledger.Handle decodes Event into ev where ev.Amount is nil."},
+        {"node": "bug_nil_amount", "text": "Line 57 executes amount := *ev.Amount without a nil guard and panics."},
+        {"node": "inv_balances", "text": "Because the step panics, declared invariants are skipped and the recorder flushes the fixture."}
+      ]
+    }
+  ]
+}

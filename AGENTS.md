@@ -151,6 +151,7 @@ claude mcp add kavach -- kavach mcp
 | `kavach_diff` | `fixture`, `old`, `new`, `variants` (default 10), `regressions` (default 48, 0 skips), `keep` | `verdict`, `passed`, the old and new replays of the fixture, `variants` with every check and saved failing variants, and `regressions` with the same for regression variants |
 | `kavach_contract_show` | `dir` (default `./contract`) | the contract, every input with the feature steps marked, and the lock |
 | `kavach_contract_check` | `dir`, `new`, `old`, `no_variants` | `verdict`, `passed`, and `report`: changed and unreached steps, variant failures, `round` and `streak` |
+| `kavach_map` | `spec`, `fixtures`, `bin`, `new`, `diffs`, `overlays`, `out`, `max_data`, `title`, `include_model` | lean map summary (`nodes`, `edges`, `flows`, per-fixture `runs`/`first_failure`, `stats`, optional `out_path`/`html_bytes`), or full `model` when `include_model: true` |
 
 There is no tool to approve a contract: a person does that.
 

@@ -75,3 +75,11 @@ Update the **Falsification Results** table in `.kavach/plan/invariants.md` and p
 - 1-line mutant injected (`file:line`)
 - Verdict & step (`invariant_violated(X)@N` or `variant_failed(K)@N`)
 - Replay / diff verification time
+
+## Step 5: Render `.kavach/plan/map.json`
+
+Write `.kavach/plan/map.json` (following [`../kavach-setup/references/map-template.md`](../kavach-setup/references/map-template.md)) mapping entry ops, upstream functions, state/sinks, declared invariants, and known bugs, then render the interactive map:
+
+```bash
+kavach map .kavach/plan/map.json <fixtures> --bin <host> -o .kavach/plan/map.html
+```

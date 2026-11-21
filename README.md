@@ -102,13 +102,24 @@ The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
 and it still replays with no broker running. Kafka is a dependency of the demo
 only, not of the SDK.
 
+## See the flow: `kavach map`
+
+Render an interactive, self-contained HTML map showing how events flow from entrypoints through handlers, state mutations, sinks, and invariant checks—with recorded/replayed step highlighting and diff verification:
+
+```bash
+kavach map examples/ledger/.kavach/plan/map.json examples/ledger/testdata/null-amount.kavach \
+  --bin ./ledger-old --new ./ledger-new -o ledger-map.html
+```
+
+Or pass any `.kavach` fixture alone to synthesize an automatic flow map (`kavach map fixture.kavach`), or run `kavach map --watch <recorder-dir>` to serve a live map over HTTP/SSE (`--listen`, `--interval`) as fixtures arrive. See [MAP.md](MAP.md) for the `map.json` schema, live mode, replay/invariant semantics, and stage overlay format.
+
 ## With an AI agent
 
 `kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server with six tools (`kavach_list_incidents`, `kavach_replay`,
-`kavach_time_travel`, `kavach_diff`, `kavach_contract_show`, and
-`kavach_contract_check`) returning the same verdicts as the CLI as structured
-JSON:
+server with seven tools (`kavach_list_incidents`, `kavach_replay`,
+`kavach_time_travel`, `kavach_diff`, `kavach_contract_show`,
+`kavach_contract_check`, and `kavach_map`) returning the same verdicts and flow map
+summaries (or optional HTML maps) as the CLI as structured JSON:
 
 ```bash
 claude mcp add kavach -- kavach mcp
@@ -213,6 +224,7 @@ Check `.kavach` fixtures into `testdata/` and run `kavachlabs/kavach` in pull re
 | File | What it is |
 | --- | --- |
 | [SPEC.md](SPEC.md) | Journal and fixture format, and the host and recorder protocols, v0 |
+| [MAP.md](MAP.md) | `kavach map` CLI usage, `map.json` spec, invariant rules, and overlay schema |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
 | [INTEGRATING.md](INTEGRATING.md) | Using Kavach from a language with no SDK |
 | [sdk](sdk) | The SDKs, one per language |

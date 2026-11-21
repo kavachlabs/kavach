@@ -40,6 +40,7 @@ Usage:
   kavach replay  <fixture> --bin <host-command> [--until <seq>] [--probe <input>]... [--hold] [--json]
   kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--regressions N] [--keep DIR] [--json]
   kavach contract init|show|approve|check ...
+  kavach map     [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N]
   kavach mcp
   kavach version
 
@@ -48,10 +49,14 @@ replay re-runs a fixture; --until N stops after the last step with input seq <= 
 --probe sends synthetic inputs to the held host at that point to inspect live
 state, and --hold reads further probe inputs line-by-line from stdin until EOF.
 contract checks a build against a behaviour contract when adding a feature;
-kavach contract help says more. mcp serves kavach_list_incidents,
-kavach_replay, kavach_time_travel, kavach_diff, kavach_contract_show and
-kavach_contract_check to an AI agent as a Model Context Protocol server on
-stdin/stdout.
+kavach contract help says more. map renders one self-contained interactive HTML
+file (or --json model) showing the call, data and invariant flow across a
+map.json spec, recorded fixtures, optional --bin/--new replay runs, --diff
+reports and --overlay stage lanes; --watch DIR serves a live auto-refreshing
+map over HTTP/SSE (--listen, default 127.0.0.1:8090; --interval, default 500ms).
+mcp serves kavach_list_incidents, kavach_replay, kavach_time_travel,
+kavach_diff, kavach_contract_show, kavach_contract_check and kavach_map to an
+AI agent as a Model Context Protocol server on stdin/stdout.
 
 A host command starts a service that runs its own handler under the host
 protocol (SPEC.md section 9), in any language: ./ledger, "python -m ledger",
@@ -111,6 +116,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdList(u, args, stdout, stderr)
 	case "contract":
 		return cmdContract(u, args, os.Stdin, stdout, stderr)
+	case "map":
+		return cmdMap(u, args, stdout, stderr)
 	case "mcp":
 		return cmdMCP(args, os.Stdin, stdout, stderr)
 	case "version", "--version", "-version", "-v":

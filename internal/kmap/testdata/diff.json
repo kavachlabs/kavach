@@ -1,0 +1,96 @@
+{
+  "fixture": "/abs/ci/runner/work/null-amount.kavach",
+  "verdict": "variant_failed(3)@19",
+  "old": "still_failing@32",
+  "new": "fixed",
+  "variants": {
+    "required": 10,
+    "candidates": 6,
+    "reproducing": 5,
+    "passing": 2,
+    "checks": [
+      {
+        "id": 1,
+        "incident_seq": 32,
+        "mutation": "failing input (seq 32): \"account\" \"bob\" → \"bob-1\"",
+        "reproduces": true,
+        "old": "still_failing@32",
+        "new": "ok",
+        "passed": true
+      },
+      {
+        "id": 2,
+        "incident_seq": 32,
+        "mutation": "failing input (seq 32): \"type\" \"deposit\" → \"transfer\", \"amount\" null → 100",
+        "reproduces": true,
+        "old": "invariant_violated(balances_non_negative)@32",
+        "new": "invariant_violated(balances_non_negative)@32",
+        "passed": false,
+        "detail": "account bob negative"
+      },
+      {
+        "id": 3,
+        "incident_seq": 19,
+        "mutation": "failing input (seq 32) moved earlier, before seq 19",
+        "reproduces": true,
+        "old": "still_failing@19",
+        "new": "invariant_violated(money_conserved)@19",
+        "passed": false,
+        "detail": "sum mismatch"
+      },
+      {
+        "id": 4,
+        "incident_seq": 32,
+        "mutation": "earlier input dropped",
+        "reproduces": true,
+        "old": "still_failing@28",
+        "new": "ok",
+        "passed": true
+      },
+      {
+        "id": 5,
+        "incident_seq": 32,
+        "mutation": "clock shifted +60s",
+        "reproduces": true,
+        "old": "invariant_violated(balances_non_negative)@32",
+        "new": "invariant_violated(money_conserved)@32",
+        "passed": false
+      },
+      {
+        "id": 6,
+        "incident_seq": 32,
+        "mutation": "input delivered twice",
+        "reproduces": false,
+        "old": "ok",
+        "passed": false
+      }
+    ]
+  },
+  "regressions": {
+    "neighbours": 1,
+    "candidates": 2,
+    "counted": 2,
+    "passing": 1,
+    "checks": [
+      {
+        "id": 1,
+        "input_seq": 15,
+        "mutation": "input (seq 15): \"amount\" 300 → 301",
+        "counted": true,
+        "old": "ok",
+        "new": "ok",
+        "passed": true
+      },
+      {
+        "id": 2,
+        "input_seq": 15,
+        "mutation": "input (seq 15): \"account\" \"bob\" → \"bob-1\"",
+        "counted": true,
+        "old": "ok",
+        "new": "invariant_violated(balances_non_negative)@15",
+        "passed": false,
+        "detail": "regression"
+      }
+    ]
+  }
+}

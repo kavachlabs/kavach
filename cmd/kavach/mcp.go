@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 	"unicode/utf8"
 
 	"github.com/kavachlabs/kavach/contract"
+	"github.com/kavachlabs/kavach/internal/kmap"
 	"github.com/kavachlabs/kavach/replay"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
@@ -26,7 +28,8 @@ var mcpVersions = []string{mcpLatestVersion, "2025-03-26", "2024-11-05"}
 
 const mcpInstructions = `Kavach reproduces production bugs that won't reproduce locally, in services that handle events or requests one at a time and keep state (queue consumers, webhook handlers, ledgers, state machines): it replays a recorded incident (a *.kavach fixture) deterministically against any build, and accepts a fix only when it also holds on mutated variants of the incident. Use it whenever a fixture exists or a fix to such a service needs proof beyond one failing input.
 Workflow: kavach_list_incidents to find fixtures; kavach_replay with the current build to reproduce (expect still_failing@N) before changing code; kavach_time_travel to replay up to a step N and send probe inputs to inspect live state before or at the failure; fix the handler, never the fixture; build old and new; kavach_diff to verify. A fix counts only when kavach_diff's verdict is "fixed". Report verdicts exactly as returned.
-Building a feature against a contract (a contract/ directory from kavach contract init): kavach_contract_show shows it; a person approves it, never you; kavach_contract_check checks a build. Only "pass" passes. regression@N: a step outside the feature changed. changed steps: read each against the spec. Stop and report after the same outcome three rounds in a row (streak 3). Never edit the contract to make a check pass.`
+Building a feature against a contract (a contract/ directory from kavach contract init): kavach_contract_show shows it; a person approves it, never you; kavach_contract_check checks a build. Only "pass" passes. regression@N: a step outside the feature changed. changed steps: read each against the spec. Stop and report after the same outcome three rounds in a row (streak 3). Never edit the contract to make a check pass.
+Visualizing data/call/invariant maps: kavach_map builds an interactive map (and optional self-contained HTML via out) from a map.json spec, *.kavach fixtures, optional replay builds, diff reports, or stage overlays.`
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -257,6 +260,40 @@ var mcpTools = []map[string]any{
 			"no_variants": map[string]any{"type": "boolean", "description": "skip variants of the feature steps"},
 		}, "new"),
 	},
+	{
+		"name":  "kavach_map",
+		"title": "Build a data/call/invariant map",
+		"description": "Build a data-flow, call-flow, and invariant map from a map.json spec, *.kavach fixtures, optional replay binaries, diff reports, or stage overlays, and optionally write a self-contained interactive HTML map to out. " +
+			"Returns a concise structured summary by default; pass include_model:true to include the full kmap.Model JSON.",
+		"inputSchema": obj(map[string]any{
+			"spec": str("path to map.json spec"),
+			"fixtures": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "paths to *.kavach fixtures",
+			},
+			"bin": str("host command to replay fixtures against (no env default)"),
+			"new": str("candidate fixed host command (requires bin)"),
+			"diffs": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "paths to kavach diff --json reports to attach",
+			},
+			"overlays": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "paths to stage overlay JSON files to attach",
+			},
+			"out": str("output path to write a self-contained HTML map"),
+			"max_data": map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"description": "max bytes of input/output payload previews; default 512, 0 omits payloads",
+			},
+			"title":         str("override the map title"),
+			"include_model": map[string]any{"type": "boolean", "description": "include the full kmap.Model in the JSON result; default false returns a concise summary"},
+		}),
+	},
 }
 
 var mcpHandlers = map[string]func(json.RawMessage) (map[string]any, error){
@@ -266,6 +303,7 @@ var mcpHandlers = map[string]func(json.RawMessage) (map[string]any, error){
 	"kavach_diff":           mcpDiff,
 	"kavach_contract_show":  mcpContractShow,
 	"kavach_contract_check": mcpContractCheck,
+	"kavach_map":            mcpMap,
 }
 
 func decodeArgs(raw json.RawMessage, v any) error {
@@ -496,4 +534,208 @@ func mcpContractCheck(raw json.RawMessage) (map[string]any, error) {
 	out := contractReport(a.Dir, r)
 	out["wall_ms"] = ms(wall)
 	return out, nil
+}
+
+func mcpMap(raw json.RawMessage) (map[string]any, error) {
+	var a struct {
+		Spec         string   `json:"spec"`
+		Fixtures     []string `json:"fixtures"`
+		Bin          string   `json:"bin"`
+		New          string   `json:"new"`
+		Diffs        []string `json:"diffs"`
+		Overlays     []string `json:"overlays"`
+		Out          string   `json:"out"`
+		MaxData      *int     `json:"max_data"`
+		Title        string   `json:"title"`
+		IncludeModel bool     `json:"include_model"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	if a.Spec == "" && len(a.Fixtures) == 0 && len(a.Overlays) == 0 {
+		return nil, errors.New("at least one of spec, fixtures, or overlays is required")
+	}
+	if a.New != "" && a.Bin == "" {
+		return nil, errors.New("new requires bin")
+	}
+	maxData := 512
+	if a.MaxData != nil {
+		if *a.MaxData < 0 {
+			return nil, errors.New("max_data must not be negative")
+		}
+		maxData = *a.MaxData
+	}
+
+	baseDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	if a.Out != "" {
+		absOut, err := filepath.Abs(a.Out)
+		if err != nil {
+			return nil, err
+		}
+		baseDir = filepath.Dir(absOut)
+	}
+
+	var spec *kmap.Spec
+	if a.Spec != "" {
+		spec, err = kmap.LoadSpec(a.Spec)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	m, err := kmap.Build(kmap.Input{
+		Spec:     spec,
+		Fixtures: a.Fixtures,
+		Bin:      a.Bin,
+		New:      a.New,
+		Diffs:    a.Diffs,
+		Overlays: a.Overlays,
+		MaxData:  maxData,
+		BaseDir:  baseDir,
+		Version:  version,
+		Title:    a.Title,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var htmlBytes int
+	if a.Out != "" {
+		var buf bytes.Buffer
+		if err := kmap.RenderHTML(&buf, m); err != nil {
+			return nil, err
+		}
+		htmlBytes = buf.Len()
+		if dir := filepath.Dir(a.Out); dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, err
+			}
+		}
+		if err := os.WriteFile(a.Out, buf.Bytes(), 0o644); err != nil {
+			return nil, err
+		}
+	}
+
+	out := mapSummary(m, a.Spec, a.Out, htmlBytes)
+	if a.IncludeModel {
+		out["model"] = m
+	}
+	return out, nil
+}
+
+func mapSummary(m *kmap.Model, specPath, outPath string, htmlBytes int) map[string]any {
+	fixtures := make([]map[string]any, len(m.Fixtures))
+	for i, fx := range m.Fixtures {
+		runs := make([]map[string]any, len(fx.Runs))
+		for j, rn := range fx.Runs {
+			rm := map[string]any{
+				"id":      rn.ID,
+				"mode":    rn.Mode,
+				"verdict": rn.Verdict,
+				"status":  rn.Status,
+				"steps":   len(rn.Steps),
+			}
+			var firstFailure map[string]any
+			for _, st := range rn.Steps {
+				if st.Outcome != "ok" && st.Outcome != "not_reached" {
+					firstFailure = map[string]any{
+						"seq":     st.Seq,
+						"outcome": st.Outcome,
+					}
+					if st.Message != "" {
+						firstFailure["message"] = st.Message
+					}
+					break
+				}
+			}
+			if firstFailure == nil && rn.Seq != nil && rn.Status != "ok" && rn.Status != "fixed" {
+				firstFailure = map[string]any{
+					"seq":     *rn.Seq,
+					"outcome": rn.Status,
+				}
+				if rn.Detail != "" {
+					firstFailure["message"] = rn.Detail
+				}
+			}
+			if firstFailure != nil {
+				rm["first_failure"] = firstFailure
+			}
+			if rn.Error != "" {
+				rm["error"] = rn.Error
+			}
+			runs[j] = rm
+		}
+		fm := map[string]any{
+			"id":    fx.ID,
+			"label": fx.Label,
+			"path":  fx.Path,
+			"runs":  runs,
+		}
+		if fx.Service != "" {
+			fm["service"] = fx.Service
+		}
+		if fx.Recorded != nil {
+			fm["recorded"] = fx.Recorded
+		}
+		fixtures[i] = fm
+	}
+
+	overlays := make([]map[string]any, len(m.Overlays))
+	for i, ov := range m.Overlays {
+		stages := 0
+		for _, l := range ov.Lanes {
+			stages += len(l.Stages)
+		}
+		overlays[i] = map[string]any{
+			"mode":   ov.Mode,
+			"title":  ov.Title,
+			"lanes":  len(ov.Lanes),
+			"stages": stages,
+		}
+	}
+
+	stats := make(map[string]map[string]any, len(m.Stats))
+	for id, st := range m.Stats {
+		if st == nil {
+			continue
+		}
+		sm := map[string]any{
+			"hits":       len(st.Hits),
+			"violations": len(st.Violations),
+		}
+		if st.VariantsOld > 0 {
+			sm["variants_old"] = st.VariantsOld
+		}
+		if st.VariantsNew > 0 {
+			sm["variants_new"] = st.VariantsNew
+		}
+		stats[id] = sm
+	}
+
+	warnings := m.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+
+	out := map[string]any{
+		"title":    m.Title,
+		"nodes":    len(m.Nodes),
+		"edges":    len(m.Edges),
+		"flows":    len(m.Flows),
+		"fixtures": fixtures,
+		"overlays": overlays,
+		"warnings": warnings,
+		"stats":    stats,
+	}
+	if specPath != "" {
+		out["spec_path"] = specPath
+	}
+	if outPath != "" {
+		out["out_path"] = outPath
+		out["html_bytes"] = htmlBytes
+	}
+	return out
 }
