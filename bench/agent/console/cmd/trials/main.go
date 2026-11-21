@@ -153,7 +153,6 @@ func finished(root string, names []string, all bool) ([]attempt, error) {
 // stack traces. Fixtures are committed, and the reader never reads them.
 var home, _ = os.UserHomeDir()
 
-// scrub writes the home directory as ~ in a file kept as text.
 func scrub(s string) string {
 	if home == "" {
 		return s

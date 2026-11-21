@@ -26,7 +26,6 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
 func safeName(s string) string { return unsafeName.ReplaceAllString(s, "_") }
 
-// countWriter counts the bytes written through it.
 type countWriter struct {
 	f *os.File
 	n atomic.Int64 // read by the loop while the block writer adds to it
@@ -38,7 +37,6 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// segment is a journal file being written.
 type segment struct {
 	path     string
 	f        *os.File
@@ -58,8 +56,6 @@ func (r *recorder) segmentPath(index int) string {
 // readers and prune never see it under a segment's name.
 const standbySuffix = ".standby"
 
-// newSegment creates the file of segment index and writes its header. A
-// standby segment is created under a temporary name; activate gives it its own.
 func (r *recorder) newSegment(index int, start string, standby bool) (*segment, error) {
 	meta := journal.Meta{
 		Service:     r.open.Service,
@@ -95,7 +91,6 @@ func (r *recorder) newSegment(index int, start string, standby bool) (*segment, 
 	return s, nil
 }
 
-// activate makes a standby segment the one being written.
 func (r *recorder) activate(s *segment) error {
 	path := r.segmentPath(s.index)
 	if err := os.Rename(s.path, path); err != nil {
@@ -105,7 +100,6 @@ func (r *recorder) activate(s *segment) error {
 	return nil
 }
 
-// sync writes the open block and makes the file durable.
 func (s *segment) sync() error {
 	if err := s.w.Flush(); err != nil {
 		return err
@@ -193,8 +187,6 @@ func (r *recorder) writeFixture(inputSeq, last uint64) (string, error) {
 	return path, os.Rename(tmp.Name(), path)
 }
 
-// prune deletes the oldest segments of the service beyond retain_segments. It
-// never touches fixtures, nor the segment being written, active ("" if none).
 func (r *recorder) prune(active string) error {
 	entries, err := os.ReadDir(r.open.Dir)
 	if err != nil {

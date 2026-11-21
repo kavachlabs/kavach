@@ -110,7 +110,7 @@ inline void* dup(const void* p, std::size_t n) {
   return d;
 }
 inline char* dup_str(const char* s) { return static_cast<char*>(dup(s, std::strlen(s) + 1)); }
-}  // namespace detail
+}
 
 // The result of a gateway query.
 struct QueryResult {
@@ -310,7 +310,7 @@ class HandlerBox {
   bool snapshots_ = false;
 };
 
-}  // namespace detail
+}
 
 // A gateway: a named connection to an external system. The callback returns the
 // response bytes, or throws QueryError (or any std::exception) to fail the query.
@@ -345,7 +345,7 @@ inline int gateway_cb(void* user, const char* name, const std::uint8_t* req, std
   }
   return KAVACH_ERROR;
 }
-}  // namespace detail
+}
 
 struct RecorderOptions {
   std::string service;  // required
@@ -651,6 +651,6 @@ inline void maybe_host(int argc, char** argv, std::function<std::unique_ptr<Hand
   kavach_maybe_host(argc, argv, &Ctx::make, &o);
 }
 
-}  // namespace kavach
+}
 
 #endif  // KAVACH_KAVACH_HPP

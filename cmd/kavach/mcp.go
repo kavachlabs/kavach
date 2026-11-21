@@ -69,7 +69,6 @@ func cmdMCP(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return exitPass
 }
 
-// serveMCP answers requests from r on w until r ends.
 func serveMCP(r io.Reader, w io.Writer) error {
 	in := bufio.NewReader(r)
 	enc := json.NewEncoder(w)
@@ -91,14 +90,13 @@ func serveMCP(r io.Reader, w io.Writer) error {
 	}
 }
 
-// handleMCP answers one message; it returns nil for notifications.
 func handleMCP(line []byte) *rpcResponse {
 	var req rpcRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		return &rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{rpcParseError, "parse error: " + err.Error()}}
 	}
 	if len(req.ID) == 0 || string(req.ID) == "null" {
-		return nil // a notification, e.g. notifications/initialized
+		return nil
 	}
 	resp := &rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	if req.JSONRPC != "2.0" || req.Method == "" {

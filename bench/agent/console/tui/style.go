@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// OpenCode's dark theme, with peach for Kavach and blue for the prompt.
 var (
 	colBg     = lipgloss.Color("#0a0a0a")
 	colPanel  = lipgloss.Color("#1c1c1c")
@@ -79,7 +78,6 @@ func panel(lines []string, width int, edge, bg lipgloss.Color) []string {
 	return out
 }
 
-// spread puts left and right on one line of width.
 func spread(left, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -88,7 +86,6 @@ func spread(left, right string, width int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// center pads s on the left so it sits in the middle of width.
 func center(s string, width int) string {
 	if pad := (width - lipgloss.Width(s)) / 2; pad > 0 {
 		return strings.Repeat(" ", pad) + s
@@ -96,7 +93,6 @@ func center(s string, width int) string {
 	return s
 }
 
-// hints renders key hints: the key bright, its label dim.
 func hints(pairs ...string) string {
 	var parts []string
 	for i := 0; i+1 < len(pairs); i += 2 {
@@ -144,7 +140,6 @@ func badge(status string) string {
 	return s.Background(colFaint).Render(strings.ToUpper(status))
 }
 
-// dot is an attempt's mark in the runs grid.
 func dot(status string) string {
 	switch status {
 	case "pass":

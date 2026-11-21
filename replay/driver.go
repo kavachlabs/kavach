@@ -322,8 +322,6 @@ func hostEnviron(genesis []journal.Fact) []string {
 	return env
 }
 
-// host is a running host process. As a Handler it proxies each step to the
-// process, serving the reads it makes from the replay's Env.
 type host struct {
 	cmd         *exec.Cmd
 	stdin       io.WriteCloser
@@ -340,7 +338,6 @@ type host struct {
 	closeOnce                     sync.Once
 }
 
-// wire is a message from the host.
 type wire struct {
 	T           string                       `json:"t"`
 	Protocol    int                          `json:"protocol"`
@@ -467,7 +464,6 @@ func (h *host) reset(service string, snapshot []byte) error {
 	return nil
 }
 
-// beforeReady describes why a host failed before sending ready.
 func (h *host) beforeReady(err error) error {
 	if errors.Is(err, errTimeout) {
 		return fmt.Errorf("host did not send ready within %s", StepTimeout)
@@ -487,9 +483,6 @@ func (h *host) send(msg map[string]any) error {
 	return err
 }
 
-// recv reads the host's next message. It returns errHostGone when the host has
-// closed its output and errTimeout at deadline. A line that is not a message
-// is a protocol violation.
 func (h *host) recv(deadline time.Time) (wire, error) {
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
@@ -529,8 +522,6 @@ func (h *host) exitStatus() string {
 	return "exit status 0"
 }
 
-// close ends the session: the host is asked to exit and is killed if it
-// does not.
 func (h *host) close() {
 	h.broken = true
 	h.closeOnce.Do(func() {
@@ -674,7 +665,6 @@ func (h *host) finish(m wire) error {
 	panic(hostFailure{fmt.Errorf("host ended a step with outcome %q", m.Outcome)})
 }
 
-// stepFailure ends a step whose host stopped answering.
 func (h *host) stepFailure(err error) error {
 	h.broken = true
 	switch {
@@ -709,7 +699,6 @@ func (h *host) Invariants() []kavach.Invariant {
 	return out
 }
 
-// tail keeps the end of a host's standard error for failure messages.
 type tail struct {
 	mu sync.Mutex
 	b  []byte
@@ -727,7 +716,6 @@ func (t *tail) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// suffix is the tail of standard error as the end of a message, or "".
 func (t *tail) suffix() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -55,7 +55,6 @@ func randomName() string {
 	return adj + "-" + colour + "-" + nameAnimals[rand.IntN(len(nameAnimals))] + "-" + string(suffix)
 }
 
-// newName picks a name no job has taken yet.
 func (r *Runner) newName() string {
 	for {
 		n := randomName()

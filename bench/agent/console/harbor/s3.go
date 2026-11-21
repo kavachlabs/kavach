@@ -177,7 +177,6 @@ func (g *guarded) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// sign adds the Authorization header and the headers it covers.
 func (c *S3) sign(req *http.Request) {
 	now := time.Now
 	if c.now != nil {

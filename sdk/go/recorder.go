@@ -23,9 +23,7 @@ import (
 
 const (
 	closeTimeout = 10 * time.Second
-	// failureWait bounds how long a step that is about to re-panic waits for
-	// the recorder to make the failure durable.
-	failureWait = 5 * time.Second
+	failureWait  = 5 * time.Second
 )
 
 // ErrNotRecording is returned by Flush when the recorder could not be started
@@ -118,15 +116,15 @@ func (e *InvariantError) Unwrap() error { return e.Err }
 // If the recorder cannot be started, dies, or reports a fatal error, the
 // problem is logged, recording stops and steps carry on unrecorded.
 type Recorder struct {
-	mu        sync.Mutex // steps, writes and flushes
+	mu        sync.Mutex
 	h         Handler
 	opts      Options
 	snapshots bool
 	enc       *recstream.Encoder
-	buf       []byte // frames of the step in progress, reused
+	buf       []byte
 	outs      []Output
 	env       recordEnv
-	requested int // durable flushes sent
+	requested int
 	closed    bool
 
 	active  atomic.Bool
@@ -138,12 +136,12 @@ type Recorder struct {
 	cmd       *exec.Cmd
 	stdin     *os.File
 	exited    chan struct{}
-	ready     chan struct{} // closed on the recorder's ready message
+	ready     chan struct{}
 	readyOnce sync.Once
 	closedAck chan struct{}
 	ackOnce   sync.Once
 
-	cmu     sync.Mutex // guards what the control goroutine writes
+	cmu     sync.Mutex
 	cond    *sync.Cond
 	durable int
 	file    string
@@ -181,7 +179,7 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 	r.env.r = r
 	r.enc = recstream.NewEncoder(pipe{r})
 	if err := r.start(); err != nil {
-		r.active.Store(true) // so that fail reports it
+		r.active.Store(true)
 		r.fail("could not start the recorder: %v", err)
 		if r.stdin != nil {
 			r.stdin.Close() // the recorder finishes and the control goroutine ends
@@ -207,7 +205,6 @@ func NewRecorder(h Handler, opts Options) *Recorder {
 // catches up.
 var readyTimeout = 2 * time.Second
 
-// pipe is the Encoder's writer: it drops frames once recording has stopped.
 type pipe struct{ r *Recorder }
 
 func (p pipe) Write(b []byte) (int, error) {
@@ -215,7 +212,6 @@ func (p pipe) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// publish hands whole frames to the recorder, through the ring or the pipe.
 func (r *Recorder) publish(b []byte) {
 	if !r.active.Load() {
 		return
@@ -348,8 +344,6 @@ type control struct {
 	Fatal   bool   `json:"fatal"`
 }
 
-// newRing sets up the ring unless the application asked for the pipe. When it
-// cannot be set up, recording goes on over the pipe.
 func (r *Recorder) newRing() (*recstream.Ring, *os.File) {
 	if r.opts.NoRing {
 		return nil, nil
@@ -426,7 +420,6 @@ func (r *Recorder) onControl(m control) {
 	}
 }
 
-// fail stops recording, loudly, once.
 func (r *Recorder) fail(format string, args ...any) {
 	if r.active.Swap(false) && !r.closing.Load() {
 		log.Printf("kavach: "+format+"; recording has stopped and steps run unrecorded", args...)
@@ -610,7 +603,6 @@ func (r *Recorder) Close() {
 	}
 }
 
-// recordEnv is the Env handed to the handler while recording.
 type recordEnv struct {
 	r *Recorder
 }

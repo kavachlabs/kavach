@@ -18,7 +18,6 @@ import (
 
 const topic = "wallet-events"
 
-// fakeKafka starts an in-process Kafka cluster seeded with the demo events.
 func fakeKafka(t *testing.T) []string {
 	t.Helper()
 	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
@@ -96,7 +95,6 @@ func TestKafkaCrashFixture(t *testing.T) {
 		t.Fatalf("input positions = %s", got)
 	}
 
-	// The fixture replays with no Kafka at all.
 	res, err := replay.Run(j, newHandler)
 	if err != nil || res.String() != "still_failing@32" {
 		t.Fatalf("replay: %v, %v", res, err)
@@ -138,7 +136,6 @@ func TestKafkaBinary(t *testing.T) {
 		t.Fatalf("replay: %v, %v", res, err)
 	}
 
-	// -seed needs -kafka.
 	if out, err := exec.Command(bin, "-seed", "../testdata/events.jsonl").CombinedOutput(); err == nil ||
 		!strings.Contains(string(out), "-seed needs -kafka") {
 		t.Fatalf("seed without kafka: %v\n%s", err, out)

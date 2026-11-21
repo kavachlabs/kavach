@@ -214,7 +214,6 @@ public final class Host {
             try {
                 send(msg("fatal", "message", f.getMessage()));
             } catch (Gone ignored) {
-                // nobody to tell
             }
             return 1;
         } catch (Gone g) {

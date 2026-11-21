@@ -318,7 +318,6 @@ func nonEmpty(a, b []string) []string {
 	return b
 }
 
-// fileStamp identifies a version of the config file.
 type fileStamp struct {
 	known bool
 	mod   time.Time

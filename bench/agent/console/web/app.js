@@ -36,7 +36,6 @@ const ARMS = ["control", "workflow", "kavach", "kavach-implement"];
 const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
 const SETTINGS_KEY = "kavach-bench.new-run";
 
-// Authoritative descriptions for each experiment arm shown on tiles, headers, and task cards.
 const ARM_INFO = {
   control: {
     label: "control",
@@ -156,7 +155,6 @@ function loadCodeEditor() {
   return "vscode";
 }
 
-// setCodeEditor picks the editor code links open in.
 export function setCodeEditor(id) {
   if (!CODE_EDITORS.some((e) => e.id === id)) return;
   state.codeEditor = id;
@@ -165,7 +163,6 @@ export function setCodeEditor(id) {
   if (state.settings.open) renderSettingsModal();
 }
 
-// editorURL opens path (absolute) at line in the chosen editor.
 export function editorURL(path, line, editor = state.codeEditor) {
   const p = encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F");
   return `${editor}://file${p.startsWith("/") ? "" : "/"}${p}:${line}:1`;
@@ -303,7 +300,6 @@ export async function loadTrialSession() {
 }
 if (!STATIC) await loadTrialSession();
 
-// trialReady is whether this session may start a run.
 export const trialReady = () => TRIAL && !!trial.session && (trial.session.has_keys || trial.session.invite);
 
 // apiURL is where an API request goes: to bench api, or in a copy to the
@@ -318,7 +314,6 @@ export function apiURL(path) {
   return `${base}/index.json`;
 }
 
-// fnv1a is the 32-bit FNV-1a hash of s's UTF-8 bytes, in hex.
 function fnv1a(s) {
   let h = 0x811c9dc5;
   for (const b of new TextEncoder().encode(s)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
@@ -401,7 +396,6 @@ function elapsed(iso, fmt = clock, prefix = "") {
   return h("span", { dataset: { since: iso, fmt: fmt === clock ? "clock" : "dur", prefix } }, prefix + fmt(since(iso)));
 }
 
-// What a running attempt is up to, shown the way Claude shows it's thinking.
 const VERBS = [
   "Apparating", "Brewing", "Conjuring", "Transfiguring", "Summoning", "Levitating",
   "Hexing", "Jinxing", "Unjinxing", "Charming", "Divining", "Scrying", "Sorting",
@@ -421,7 +415,6 @@ function verbFor(seed) {
   return VERBS[(n + Math.floor(Date.now() / VERB_EVERY)) % VERBS.length] + "…";
 }
 
-// spinner is Claude's glyph spinner, drawn by CSS.
 const spinner = () => h("span", { class: "st running", "aria-hidden": "true" });
 
 setInterval(() => {
@@ -788,7 +781,6 @@ function syncPill(sync) {
     h("span", { class: `dot ${dot}` }), held ? `${label} · ${sync.skipped} held back` : label);
 }
 
-// sandboxPill is where the session's runs execute, in the header and foot of the trial.
 function sandboxPill() {
   const p = trial.session && trial.session.provider;
   return h("span", { class: "status-pill", title: p ? "Where this session's attempts execute" : "No sandbox is available for this session" },
@@ -843,7 +835,6 @@ function renderTop() {
 
   kids.push(themeToggle());
 
-  // Antigravity symmetrical right-hand Auxiliary Pane toggle icon on #/new and #/jobs/<id>
   if ((current.view === "new" && fullConsole()) || current.view === "runs") {
     kids.push(h("button", {
       id: "aux-toggle",
@@ -908,7 +899,6 @@ function setTheme(theme, from) {
   t.finished.finally(() => root.classList.remove("theme-switching"));
 }
 
-// With no theme picked, follow the system's as it changes.
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (document.documentElement.dataset.theme) return;
   retheme();
@@ -1051,7 +1041,6 @@ function defaultKeySpecs() {
   ];
 }
 
-// sideSection is a sidebar heading that folds its section open and shut.
 function sideSection(key, label, count, cls = "") {
   const shut = state.folded.has(key);
   return h("button", {
@@ -1183,7 +1172,6 @@ function hasTasksPane() {
   return !STATIC && fullConsole();
 }
 
-// The rail's icons, drawn like the site's hero: 24-unit strokes.
 const RAIL_ICONS = {
   runs: "M5 7h14M5 12h14M5 17h9",
   replay: "M8 5.5v13l10-6.5z",
@@ -1215,8 +1203,6 @@ function railItem({ icon, label, href, onclick, on = false, off = false }) {
   return h("button", { ...attrs, type: "button", disabled: off, "aria-pressed": onclick ? String(on) : null, onclick }, svg);
 }
 
-// toggleSidePane opens the left sidebar on pane, or closes it when it
-// already shows pane.
 function toggleSidePane(pane) {
   if (sideOpen() && state.sidePane === pane) {
     toggleSide(state, narrowScreen());
@@ -1229,9 +1215,6 @@ function toggleSidePane(pane) {
   renderSide();
 }
 
-// renderRail draws the rail of sections at the page's left edge: home, the
-// runs, the replay of the recorded incident, the comparison, the tasks, and
-// Settings. Replay opens what the attempt shown offers.
 function renderRail() {
   const rail = document.getElementById("rail");
   if (!rail) return;
@@ -1277,9 +1260,6 @@ function staticFoot() {
       h("a", { href: "https://www.thekavachlabs.com" }, "Kavach Labs")));
 }
 
-// Settings modal: a rail of tabs on the left and one panel on the right.
-// Every way into settings (the sidebar button, /settings, the missing-key
-// banner) opens it.
 const SETTINGS_TABS = [
   { id: "general", label: "General", desc: "Defaults for new benchmark runs, and where code opens. Changes apply right away." },
   { id: "keys", label: "API keys", desc: "Provider keys the agents use to call models." },
@@ -1351,7 +1331,6 @@ function onSettingsTabKey(e) {
   selectSettingsTab(ids[i]);
 }
 
-// Keep Tab and Shift+Tab inside the dialog while it is open.
 function trapSettingsFocus(e) {
   if (e.key !== "Tab") return;
   const modal = e.currentTarget.querySelector(".settings-modal");
@@ -1418,7 +1397,6 @@ function settingsRow({ label, hint, control, below, labelId }) {
     below || null);
 }
 
-// A row of buttons where exactly one is pressed.
 function segmented({ id, labelledBy, value, options, onChange }) {
   return h("div", { class: "seg", role: "group", "aria-labelledby": labelledBy },
     options.map((o) => {
@@ -1673,8 +1651,6 @@ function resetTrialDrafts() {
   Object.assign(tset, { provider: (trial.session && trial.session.provider) === "modal" ? "modal" : "daytona", model_key: "", daytona: "", modal_id: "", modal_secret: "", code: "", err: "", msg: "", busy: false });
 }
 
-// sendTrial posts to one of the trial's own endpoints from the panel, then
-// refreshes everything that depends on the session.
 async function sendTrial(path, body, done) {
   tset.busy = true; tset.err = ""; tset.msg = "";
   renderSettingsModal();
@@ -1739,8 +1715,6 @@ function trialSessionTab() {
   return groups;
 }
 
-// trialKeysTab takes a visitor's own keys, the first time or to replace
-// them, as the trial's keys page does.
 function trialKeysTab() {
   const s = trial.session || {};
   const modal = tset.provider === "modal";
@@ -1866,7 +1840,6 @@ function renderSettingsModal() {
   }
 }
 
-// Custom Select Component (.cselect) to replace broken native <select> menus
 function renderSelect({ id, label, value, options, onChange, compact = false, up = false, searchable = false }) {
   const isOpen = state.openSelect === id;
   const currentOpt = options.find((o) => String(o.value) === String(value)) || options[0] || { label: String(value), value };
@@ -2011,12 +1984,10 @@ function sourceOf(task) {
   return src.split(/\s+/)[0] || "local";
 }
 
-// trackOf says whether a task is an incident to fix or a feature to build.
 function trackOf(task) {
   return task.track === "feature" || task.arms.some((a) => a.arm === "workflow" || a.arm === "kavach-implement") ? "feature" : "incident";
 }
 
-// Task Card component rendered in the Right Auxiliary Pane ("Task" tab)
 function renderTaskCard(task) {
   if (!task) return null;
   const isFeature = trackOf(task) === "feature";
@@ -2047,7 +2018,6 @@ function renderTaskCard(task) {
       : null);
 }
 
-// Interactive vertical list of experiment arms in the Right Auxiliary Pane ("Arms" tab)
 function renderRightArms(task, selectedArms) {
   if (!task || !task.arms || !task.arms.length) return null;
   const activeCount = task.arms.filter((a) => selectedArms.includes(a.arm)).length;
@@ -2077,7 +2047,6 @@ function renderRightArms(task, selectedArms) {
       })));
 }
 
-// Model Card component for selected OpenRouter models and live picker preview
 function renderModelCard(modelId, { onRemove = null, isPreview = false } = {}) {
   const cleanId = orId(modelId);
   const meta = state.modelCatalog.get(cleanId) || (state.picker.list || []).find((m) => m.id === cleanId);
@@ -2205,7 +2174,6 @@ function renderRightSidebar(task) {
     h("div", { class: "aux-body", role: "tabpanel" }, bodyContent));
 }
 
-// Line icons for the new-run form's rows, drawn like the top bar's.
 const ROW_ICONS = {
   task: '<path d="M4 1.75h5.25l3 3v9.5H4z"/><path d="M9.25 1.75v3h3"/><path d="M6.25 8.25h3.5M6.25 10.75h2.5"/>',
   arms: '<circle cx="4.25" cy="3.5" r="1.6"/><circle cx="11.75" cy="3.5" r="1.6"/><circle cx="8" cy="12.5" r="1.6"/><path d="M4.25 5.1v.9c0 2 3.75 2.4 3.75 4.9M11.75 5.1v.9c0 2-3.75 2.4-3.75 4.9"/>',
@@ -2907,7 +2875,6 @@ function matrixRows(job) {
   return [...rows.values()];
 }
 
-// A table's first cell: the model's lab mark, then its name.
 function modelCell(model, label) {
   if (!model) return label;
   return h("span", { class: "model-cell" }, labMark(model), h("span", {}, label));
@@ -2968,7 +2935,6 @@ function pill(t) {
   return h("span", { class: `pill ${t.status}` }, word);
 }
 
-// Arm Guide / Legend banner explaining what control, workflow, kavach, and kavach-implement mean
 function renderArmGuide(arms, track) {
   const known = arms.filter(Boolean);
   if (!known.length) return null;
@@ -3260,8 +3226,6 @@ function firstEventTime() {
   return 0;
 }
 
-// eventRow is one line of the log: its time, type and a summary, opening
-// on the whole event.
 function eventRow(line, t0) {
   let e = null;
   try { e = JSON.parse(line); } catch { /* OpenCode also prints plain lines */ }
@@ -3463,8 +3427,6 @@ function compactKavachJSON(detail) {
   });
 }
 
-// labMark is the mark of the lab behind a model, or its initial when there is
-// no mark for it.
 function labMark(model) {
   const slug = labOf(model);
   const lab = LABS[slug];
@@ -3721,8 +3683,6 @@ function runControl(job) {
       h("button", { type: "button", class: "btn", onclick: () => { state.confirm = ""; renderView(); } }, "Cancel")));
 }
 
-// retryControl offers to run a failed attempt again: at once, or, while its
-// run goes on, as soon as the run ends.
 function retryControl(t, job) {
   if ((job.retry_queued || []).includes(t.id)) {
     return h("span", { class: "dim" }, "Runs again when this run ends");
@@ -3867,7 +3827,6 @@ function renderCompare(view) {
 // An attempt Harbor has not started: it has no trial folder yet.
 const isQueued = (t) => !t.id || t.status === "queued";
 
-// The board's columns, left to right, by where an attempt is.
 const KANBAN = [
   { id: "queued", label: "Queued", empty: "Nothing waiting.", has: isQueued },
   { id: "running", label: "Running", empty: "Nothing running.", has: (t) => !isQueued(t) && !finished(t) },
@@ -3904,7 +3863,6 @@ function queuedCard(t, multi) {
     h("div", { class: "faint card-meta" }, "Waiting for a free slot"));
 }
 
-// The track of the run's tasks, when they share one.
 function jobTrack() {
   const job = state.job;
   if (!job || !state.tasks) return null;
@@ -3930,7 +3888,6 @@ function attemptCard(t, job, multi = false) {
     !oc || oc.tagName === "SPAN" ? null : oc,
     finished(t) ? patchView(t) : null,
     h("a", { href: `#/jobs/${encodeURIComponent(job.id)}`, onclick: () => { state.sel = trialKey(t); } }, "Steps →"));
-  // Only strip button styling from top-level links/summaries, preserving inner buttons like Copy!
   for (const b of links.querySelectorAll(":scope > .btn, :scope > details > summary.btn")) {
     b.classList.remove("btn", "blue");
   }
@@ -4040,7 +3997,6 @@ enterView(() => {
   if (current.job) return refreshJob();
 });
 
-// The trial's "Copy share link" on a run's page.
 function shareButton() {
   const b = h("button", { type: "button", class: "btn", title: "Copy a link to this run", onclick: async () => {
     try { await navigator.clipboard.writeText(location.href); b.textContent = "Link copied"; } catch { b.textContent = "Copy failed"; }

@@ -365,7 +365,6 @@ func text(b []byte) (string, bool) {
 	return base64.StdEncoding.EncodeToString(b), true
 }
 
-// trafficStep is what the contract's traffic recorded for one input.
 type trafficStep struct {
 	seq     uint64
 	input   string
@@ -414,7 +413,6 @@ func readRounds(path string) []ContractRound {
 	return rounds
 }
 
-// readHeader reads only a journal's header.
 func readHeader(path string) (journal.Header, error) {
 	f, err := os.Open(path)
 	if err != nil {

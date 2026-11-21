@@ -46,8 +46,6 @@ begin
     next if result.ok?
 
     warn "ledger: line #{line_no}: #{result.kind}: #{result.message}"
-    # Stop the service, as the Go demo does. The recorder has already marked
-    # the failure and cut a fixture.
     exit 1 if result.kind == "panic"
   end
 ensure

@@ -44,7 +44,6 @@ func TestTrialConfigFileFallsBackToEnv(t *testing.T) {
 	if code, _ := e.do(e.visitor(), "POST", "/api/trial/invite", `{"code":"env-code-1"}`); code != 200 {
 		t.Errorf("env code beside a file: %d", code)
 	}
-	// Removing the file returns to the environment alone.
 	os.Remove(path)
 	if code, _ := e.do(e.visitor(), "POST", "/api/trial/invite", `{"code":"partner-code-1"}`); code != 403 {
 		t.Errorf("file code after the file went: %d", code)

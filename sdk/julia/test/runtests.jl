@@ -54,7 +54,6 @@ end
     @test (f.kind, f.message) == ("error", "amount is null")
 end
 
-# Runs a host session in memory: the driver's lines are queued, then read back.
 function session(factory, msgs)
     driver, out = Base.BufferStream(), Base.BufferStream()
     for m in msgs

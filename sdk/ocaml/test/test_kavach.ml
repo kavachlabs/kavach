@@ -7,7 +7,6 @@ let check name cond =
 
 let input data : Input.t = { source = "test"; position = "0"; data }
 
-(* A handler whose handle runs [f]. *)
 let handler f : (module HANDLER) =
   (module struct
     type t = unit
@@ -46,7 +45,6 @@ let () =
      Wire.uvarint b 300;
      Buffer.contents b = "\xac\x02");
 
-  (* Failure mapping (README). *)
   (match run (fun () -> raise (Panic "boom")) with
   | Some { kind = "panic"; message = "boom"; _ } -> ()
   | _ -> check "Panic message is exact" false);
@@ -70,7 +68,6 @@ let () =
     (fun () -> raise (Match_failure ("src/file.ml", 12, 3)))
     "Match_failure";
 
-  (* A recorder that cannot start never fails the step; required makes it fail. *)
   let missing = [| "/nonexistent/kavach-recorder" |] in
   let r = Recorder.create ~recorder_command:missing ~service:"t" (handler (fun () -> Ok ())) in
   check "unrecorded step still runs" (Recorder.step r (input "") = Ok ());

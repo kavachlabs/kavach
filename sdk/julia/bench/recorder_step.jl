@@ -20,7 +20,7 @@ function run_once(steps; ring)
     mktempdir() do dir
         rec = Recorder(BenchHandler(); service="bench", dir, ring, random_bytes=n -> fill(0x2a, n), required=true)
         inp = Input("bench", "0", Vector{UInt8}(codeunits("{\"account\":\"alice\",\"amount\":10}   ")))
-        for _ in 1:2_000   # warm up
+        for _ in 1:2_000
             step!(rec, inp)
         end
         t = @elapsed for _ in 1:steps

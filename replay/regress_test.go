@@ -129,7 +129,6 @@ func TestRegressionNeighbours(t *testing.T) {
 	if len(few) != 5 {
 		t.Fatalf("limit 5 gave %d variants", len(few))
 	}
-	// They are a budget of their own.
 	inc, _ := replay.Variants(j)
 	if len(inc) == 0 || inc[0].Header.Meta.Variant.Kind == replay.KindRegression {
 		t.Fatal("incident variants changed")

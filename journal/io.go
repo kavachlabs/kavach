@@ -96,7 +96,6 @@ func corrupt(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrCorrupt, fmt.Sprintf(format, args...))
 }
 
-// appendHeader appends the header frame for meta to dst.
 func appendHeader(dst []byte, meta Meta) ([]byte, error) {
 	m, err := json.Marshal(meta)
 	if err != nil {
@@ -194,17 +193,15 @@ type Writer struct {
 	meta  Meta
 	opts  WriterOptions
 	ord   order
-	raw   []byte // records of the open block
+	raw   []byte
 	count int
 	first uint64
 	out   []byte
-	body  []byte // scratch for one record
+	body  []byte
 
-	// Async state: filled blocks go to the writer goroutine, which hands the
-	// buffers back.
 	jobs    chan blockJob
 	free    chan []byte
-	wg      sync.WaitGroup // blocks handed over and not yet written
+	wg      sync.WaitGroup
 	errMu   sync.Mutex
 	asyncEr error
 }
@@ -254,7 +251,6 @@ func newWriter(w io.Writer, meta Meta, opts WriterOptions, ord order) *Writer {
 	return jw
 }
 
-// run compresses and writes the blocks handed over, in order.
 func (w *Writer) run(jobs <-chan blockJob) {
 	var out []byte
 	for j := range jobs {
@@ -313,8 +309,6 @@ func (w *Writer) Write(r Record) error {
 	return w.end()
 }
 
-// begin starts a record body of n bytes in the open block: it closes a block
-// the record would overfill and writes the length.
 func (w *Writer) begin(seq uint64, n int) error {
 	if w.count > 0 && len(w.raw)+n+binary.MaxVarintLen64 > MaxBlockLen {
 		if err := w.flushBlock(); err != nil {
@@ -328,7 +322,6 @@ func (w *Writer) begin(seq uint64, n int) error {
 	return nil
 }
 
-// end counts the record just appended and closes the block once it is full.
 func (w *Writer) end() error {
 	w.count++
 	if len(w.raw) >= w.opts.BlockBytes {
@@ -376,8 +369,6 @@ func (w *Writer) Flush() error {
 	return err
 }
 
-// flushBlock closes the open block: it writes it, or hands it to the writer
-// goroutine.
 func (w *Writer) flushBlock() error {
 	if w.count == 0 {
 		return nil
@@ -421,8 +412,8 @@ type Reader struct {
 	r       *bufio.Reader
 	hdr     Header
 	ord     order
-	pos     int64 // bytes consumed from the stream
-	good    int64 // end of the last complete frame
+	pos     int64
+	good    int64
 	queue   []Record
 	err     error
 	done    bool
@@ -535,15 +526,11 @@ func (r *Reader) read() (Record, error) {
 	return rec, nil
 }
 
-// cut records that the file ended inside a frame, and how many bytes after the
-// last complete one it did.
 func (r *Reader) cut() {
 	r.done = true
 	r.ignored = r.pos - r.good
 }
 
-// nextBlock reads frames up to and including the next block and queues its
-// records. At the end of the file it sets done.
 func (r *Reader) nextBlock() error {
 	for {
 		var fh [8]byte
@@ -613,7 +600,6 @@ func (r *Reader) block(length uint32) error {
 	return nil
 }
 
-// records decodes and checks the records of a block.
 func (r *Reader) records(h blockHeader, raw []byte) ([]Record, error) {
 	recs := make([]Record, 0, h.count)
 	for len(raw) > 0 {

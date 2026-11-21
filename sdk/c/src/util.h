@@ -42,7 +42,6 @@ void* k_memdup(const void* p, size_t n); /* NULL for n == 0 */
 int64_t k_realtime_ns(void);
 int k_os_random(void* buf, size_t n); /* 0 ok */
 
-/* ---- the env handed to handlers ---- */
 struct kavach_env;
 typedef struct env_ops {
   int (*now)(struct kavach_env*, int64_t*);

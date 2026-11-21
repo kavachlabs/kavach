@@ -471,8 +471,6 @@ export class Recorder {
     });
   }
 
-  // Reads, used by RecordingEnv.
-
   /** @internal */
   _clock(): bigint {
     return this.clock();

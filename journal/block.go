@@ -50,7 +50,6 @@ func (h blockHeader) append(dst []byte) []byte {
 	return binary.LittleEndian.AppendUint32(dst, checksum(dst[start:]))
 }
 
-// parseBlockHeader decodes and validates the user data of a block frame.
 func parseBlockHeader(b []byte) (blockHeader, error) {
 	if len(b) != blockFrameLen {
 		return blockHeader{}, corrupt("block frame is %d bytes, want %d", len(b), blockFrameLen)
@@ -98,8 +97,6 @@ func encoderFor(level int) (*zstd.Encoder, error) {
 	return actual.(*zstd.Encoder), nil
 }
 
-// compressFrame encodes raw as one zstd frame that declares its content size and
-// carries a content checksum.
 func compressFrame(raw []byte, level int) ([]byte, error) {
 	e, err := encoderFor(level)
 	if err != nil {
@@ -171,8 +168,6 @@ func frameContentSize(frame []byte) (uint64, error) {
 	return n, nil
 }
 
-// decompressFrame decodes one data frame, checking its content size and
-// checksum, and returns the block's raw records.
 func decompressFrame(frame []byte, rawLen uint32) ([]byte, error) {
 	size, err := frameContentSize(frame)
 	if err != nil {
@@ -249,7 +244,6 @@ func xxh64(b []byte) uint64 {
 	return h
 }
 
-// appendBlock appends a block frame and its data frame holding raw to dst.
 func appendBlock(dst []byte, firstSeq uint64, count int, raw []byte, compression string, level int) ([]byte, error) {
 	if len(raw) > MaxBlockLen {
 		return nil, fmt.Errorf("journal: block holds %d bytes, limit is %d", len(raw), MaxBlockLen)

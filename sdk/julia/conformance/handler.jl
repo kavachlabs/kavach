@@ -39,7 +39,6 @@ mutable struct Conformance
 end
 Conformance() = Conformance(0)
 
-# A gateway registry in which every name is a remote gateway.
 AnyGateway(connection::Function=_ -> throw(Kavach.GatewayError("conformance host has no live connections"))) =
     _ -> Kavach.Gateway(connection)
 

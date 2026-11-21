@@ -22,7 +22,6 @@ import (
 	"github.com/kavachlabs/kavach/journal"
 )
 
-// Version and Name identify the recorder in the control stream and in headers.
 const (
 	Version = "0.2.0"
 	Name    = "kavach-recorder/" + Version
@@ -62,8 +61,6 @@ type TestFacts struct {
 	Facts      map[string]envfacts.JSONFact `json:"facts"`
 }
 
-// fatalError is a protocol violation or a failure to write: the recorder
-// reports it, finishes the journal and exits.
 type fatalError struct{ msg string }
 
 func (e *fatalError) Error() string { return e.msg }
@@ -75,8 +72,8 @@ type recorder struct {
 	log  *log.Logger
 	test *TestFacts
 
-	ctl   sync.Mutex // guards writes to Out
-	ctlOK bool       // false once Out has failed; the recorder keeps recording
+	ctl   sync.Mutex
+	ctlOK bool // false once Out has failed; the recorder keeps recording
 
 	open   recstream.Open
 	opened bool
@@ -87,9 +84,9 @@ type recorder struct {
 	work    chan sealResult // the background seal of the previous segment, nil if none
 	started bool
 	nextSeq uint64
-	lastSeq uint64 // seq of the last record written; meaningful once started
+	lastSeq uint64
 
-	env     map[string]journal.Fact // the environment as the journal holds it
+	env     map[string]journal.Fact
 	pending map[string]journal.Fact // facts from the SDK and the watcher, not yet in the journal
 	watcher *envfacts.Watcher
 
@@ -231,8 +228,6 @@ func (r *recorder) mapRing(o recstream.Open) (*recstream.Ring, error) {
 	return recstream.OpenRing(r.cfg.Ring, o.Ring)
 }
 
-// ringBell turns every byte on standard input into a wake-up, and its end into
-// the end of the service.
 func ringBell(in io.Reader, rr *recstream.RingReader) {
 	var b [64]byte
 	for {
@@ -293,7 +288,6 @@ func (r *recorder) eof() int {
 	return r.finish()
 }
 
-// finish writes what remains and makes it durable.
 func (r *recorder) finish() int {
 	err := r.settle()
 	if r.seg != nil {
@@ -334,7 +328,6 @@ func (r *recorder) warn(format string, args ...any) {
 
 func seqString(n uint64) string { return strconv.FormatUint(n, 10) }
 
-// handle processes one frame. It returns true once the recorder is done.
 func (r *recorder) handle(f recstream.Frame) (done bool, err error) {
 	if !r.opened {
 		if f.Kind != recstream.KindOpen {
@@ -419,7 +412,6 @@ func (r *recorder) handleOpen(payload []byte) error {
 	return nil
 }
 
-// newRun returns an identifier that is unique per process start.
 func newRun() string {
 	var b [4]byte
 	rand.Read(b[:])
@@ -490,7 +482,6 @@ func (r *recorder) handleRecord(payload []byte) error {
 	return fatalf("%s record between steps; only an input or a trigger or dropped marker may start here", ty)
 }
 
-// stepRecord is a record of the step in progress, as the SDK encoded it.
 type stepRecord struct {
 	ty      journal.Type
 	flags   uint8
@@ -504,8 +495,6 @@ func (r *recorder) addStepRecord(ty journal.Type, flags uint8, payload []byte, m
 	r.step = append(r.step, stepRecord{ty, flags, payload})
 }
 
-// ensureStarted writes the header and genesis environment of a genesis
-// journal when its first record arrives.
 func (r *recorder) ensureStarted() error {
 	if r.started {
 		return nil
@@ -513,7 +502,6 @@ func (r *recorder) ensureStarted() error {
 	return r.startJournal(nil)
 }
 
-// collect returns the environment this process starts with.
 func (r *recorder) collect() ([]journal.Fact, error) {
 	if r.test != nil {
 		return envfacts.FromJSON(r.test.Facts)
@@ -521,8 +509,6 @@ func (r *recorder) collect() ([]journal.Fact, error) {
 	return r.cfg.Collector.Facts(r.open.SecretKeys), nil
 }
 
-// mergePending moves the facts the SDK and the watcher reported into the
-// environment and returns those that differ from what it held.
 func (r *recorder) mergePending() []journal.Fact {
 	if r.watcher != nil {
 		for _, f := range r.watcher.Take() {
@@ -614,7 +600,6 @@ func (r *recorder) beginSegment(seg *segment, snapshot []byte) error {
 	return r.write(r.fullEnvironment())
 }
 
-// writeEncoded numbers a record the SDK encoded and adds it to the open block.
 func (r *recorder) writeEncoded(ty journal.Type, flags uint8, payload []byte) error {
 	if err := r.seg.w.WriteEncoded(r.nextSeq, ty, flags, payload); err != nil {
 		return fatalf("writing %s: %v", r.seg.path, err)
@@ -624,7 +609,6 @@ func (r *recorder) writeEncoded(ty journal.Type, flags uint8, payload []byte) er
 	return nil
 }
 
-// write numbers a record and adds it to the open block.
 func (r *recorder) write(rec journal.Record) error {
 	rec.Seq = r.nextSeq
 	if err := r.seg.w.Write(rec); err != nil {
@@ -635,10 +619,6 @@ func (r *recorder) write(rec journal.Record) error {
 	return nil
 }
 
-// endStep numbers and writes the buffered step, then does what a step boundary
-// calls for: a fixture after a failure, environment changes, a segment
-// request. final is set when the stream ended in the step, after which only
-// the failure is written.
 func (r *recorder) endStep(final bool) error {
 	step, marker := r.step, r.stepMarker
 	r.inStep, r.stepMarker = false, nil
@@ -695,8 +675,6 @@ func (r *recorder) maybeRequestSnapshot() error {
 	return nil
 }
 
-// handleSnapshot starts the journal (when start is "snapshot") or the next
-// segment (when the recorder asked for one).
 func (r *recorder) handleSnapshot(state []byte) error {
 	if state == nil {
 		state = []byte{}
@@ -731,8 +709,6 @@ func (r *recorder) handleSnapshot(state []byte) error {
 	return nil
 }
 
-// sealResult is what the background work of a rotation hands back: the
-// prepared standby segment, or the error that stopped it.
 type sealResult struct {
 	next *segment
 	err  error
@@ -763,8 +739,6 @@ func (r *recorder) seal(old, active *segment) {
 	}()
 }
 
-// reap takes the result of the background work: it waits for it if wait is
-// set, and otherwise only if it has finished.
 func (r *recorder) reap(wait bool) error {
 	if r.work == nil {
 		return nil
@@ -783,8 +757,6 @@ func (r *recorder) reap(wait bool) error {
 	return res.err
 }
 
-// settle waits for the background work and discards the standby segment, which
-// is not part of the journal.
 func (r *recorder) settle() error {
 	err := r.reap(true)
 	if s := r.standby; s != nil {

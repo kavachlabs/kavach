@@ -30,7 +30,7 @@ let rfc3339 ns =
     tm.tm_sec frac
 
 module Ledger : HANDLER = struct
-  type t = { balances : (string, int) Hashtbl.t; mutable net : int }  (* net: deposits minus withdrawals *)
+  type t = { balances : (string, int) Hashtbl.t; mutable net : int }
 
   let init () = { balances = Hashtbl.create 16; net = 0 }
   let balance st a = Option.value (Hashtbl.find_opt st.balances a) ~default:0
@@ -106,7 +106,6 @@ module Ledger : HANDLER = struct
 end
 
 let () =
-  (* Lets the kavach CLI use this binary to replay fixtures. *)
   Kavach.maybe_host (module Ledger);
   Printexc.record_backtrace true;
   let path = ref "events.jsonl" and dir = ref "fixtures" in

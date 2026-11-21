@@ -24,7 +24,6 @@ const value = (name: string) => {
 };
 const fixNullAmount = flag("--fixed");
 
-// Lets the kavach CLI use this program as a replay host.
 await maybeHost(() => new Ledger({ fixNullAmount }));
 
 const file = value("--in");
@@ -52,7 +51,6 @@ for (const [i, line] of lines.entries()) {
     data: new TextEncoder().encode(line),
   });
   if (result.outcome === "panic") {
-    // A panic stops the service (the fixture is on its way by then).
     console.error(`ledger: ${result.message}`);
     status = 1;
     break;

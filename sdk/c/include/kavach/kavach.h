@@ -82,7 +82,6 @@ extern "C" {
  * unit that uses it, so the C++ wrapper reports "cxx17-...". */
 #define KAVACH_RUNTIME KAVACH_LANG "-" KAVACH_COMPILER "-" KAVACH_COMPILER_VERSION
 
-/* ---- return codes ---- */
 enum {
   KAVACH_OK = 0,
   KAVACH_ERROR = 1,           /* handler error / generic failure */
@@ -192,7 +191,6 @@ KAVACH_API int kavach_aborted(const kavach_env* env);
 /* Releases a buffer returned by kavach (same as free). */
 KAVACH_API void kavach_free(void* p);
 
-/* ---- gateways, config, flags ---- */
 
 /* Executes a query. Return KAVACH_OK with *resp (malloc'd, ownership passes to
  * kavach) or non-zero with *err (malloc'd message, optional). */

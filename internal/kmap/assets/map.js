@@ -132,7 +132,6 @@
     );
   }
 
-  // Index lookups
   let groups = [];
   let nodes = [];
   let edges = [];
@@ -345,7 +344,6 @@
     render();
   }
 
-  // Orthogonal rounded-corner path helper (Floorplan architectural wire style)
   function buildOrthoPath(points, radius) {
     if (points.length < 2) return "";
     let d = "M " + points[0][0] + " " + points[0][1];
@@ -375,7 +373,6 @@
     return d;
   }
 
-  // Floorplan Map Canvas
   function buildMapCanvas(opts) {
     const CARD_W = 248;
     const COL_W = 340;

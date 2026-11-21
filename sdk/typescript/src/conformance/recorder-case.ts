@@ -37,7 +37,6 @@ const c = JSON.parse(readFileSync(casePath, "utf8")) as Case;
 const dir = mkdtempSync(join(tmpdir(), "kavach-case-"));
 const resultPath = join(dir, "result.json");
 
-// The answers of the step being run, served in order per kind.
 let answers: Answers = {};
 const next = <T>(kind: keyof Answers): T => {
   const q = answers[kind] as unknown[] | undefined;

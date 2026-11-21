@@ -206,7 +206,6 @@ func TestTrialSession(t *testing.T) {
 		t.Fatalf("keys remain after delete: %s", raw)
 	}
 
-	// An expired session is gone.
 	e.setKeys(c)
 	e.s.trial.mu.Lock()
 	for _, s := range e.s.trial.sessions {
@@ -304,7 +303,6 @@ func TestTrialRun(t *testing.T) {
 		t.Fatalf("owner %q, session %s", owner, raw)
 	}
 
-	// One live run per session.
 	if code, v := e.do(c, "POST", "/api/jobs", runBody); code != 429 {
 		t.Fatalf("second run: %d %v", code, v)
 	}
@@ -351,7 +349,6 @@ func TestTrialInviteLimits(t *testing.T) {
 		t.Errorf("config %s", b)
 	}
 
-	// The global cap.
 	c2 := e.visitor()
 	e.invite(c2)
 	if code, v := e.do(c2, "POST", "/api/jobs", runBody); code != 429 {
@@ -384,7 +381,6 @@ func TestTrialOwnership(t *testing.T) {
 		t.Errorf("stop without session: %d", code)
 	}
 
-	// The list holds the trial run and the showcase, nothing else.
 	_, raw, _ = e.raw(b, "GET", "/api/jobs", "")
 	var list []map[string]any
 	json.Unmarshal(raw, &list)
@@ -428,7 +424,6 @@ func TestTrialOwnership(t *testing.T) {
 		t.Errorf("status lacks Harbor's version: %s", raw)
 	}
 
-	// Ownership survives a restart; the list still shows the run.
 	s2 := New(e.cfg)
 	if !s2.trial.visible(id) || s2.trial.visible("nop-fail") {
 		t.Errorf("owners after restart")
@@ -582,7 +577,6 @@ func TestTrialRateLimit(t *testing.T) {
 	if code, _ := e.do(c, "POST", "/api/trial/invite", `{"code":"x"}`, "CF-Connecting-IP", "5.6.7.8"); code != 403 {
 		t.Errorf("another address: %d", code)
 	}
-	// Reads are not limited.
 	if code, _ := e.do(c, "GET", "/api/trial/session", "", "CF-Connecting-IP", "1.2.3.4"); code != 200 {
 		t.Errorf("read: %d", code)
 	}

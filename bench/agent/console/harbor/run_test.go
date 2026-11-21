@@ -188,7 +188,6 @@ echo '{"started_at": "2026-10-11T10:00:00Z", "finished_at": "2026-10-11T10:01:00
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	// The console has exited; a new one finds the run, then sees it finish.
 	later := &Runner{Harbor: runner.Harbor, JobsDir: runner.JobsDir}
 	reader := &Reader{Dir: runner.JobsDir, Runs: later}
 	if j, err := reader.Job("outlive"); err != nil || j.Status != JobRunning || !j.Stoppable {
@@ -332,7 +331,6 @@ while :; do sleep 0.05; done
 	if got := strings.TrimSpace(string(args)); got != "jobs resume -p "+filepath.Join(jobs, "demo") {
 		t.Errorf("args %q", got)
 	}
-	// A later console finds the resumed Harbor by its job folder.
 	later := &Reader{Dir: jobs, Runs: &Runner{Harbor: runner.Harbor, JobsDir: jobs}}
 	if j, _ := later.Job("demo"); j.Status != JobRunning || !j.Stoppable || j.Resumable {
 		t.Fatalf("resumed %+v", j)
@@ -418,7 +416,6 @@ while :; do sleep 0.05; done
 	if runner.Alive("demo") || !exists(filepath.Join(jobs, "demo", "demo__2")) {
 		t.Error("a queued retry ran after Stop")
 	}
-	// The retried run has no other jobs listed for it.
 	if js, _ := reader.Jobs(); len(js) != 1 {
 		t.Errorf("jobs %+v", js)
 	}

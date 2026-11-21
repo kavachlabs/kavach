@@ -11,7 +11,6 @@ import (
 	"github.com/kavachlabs/kavach/journal"
 )
 
-// mcpSession sends each message to a server and decodes every response.
 func mcpSession(t *testing.T, msgs ...string) []map[string]any {
 	t.Helper()
 	var out bytes.Buffer
@@ -165,7 +164,6 @@ func TestListCommand(t *testing.T) {
 func TestMCPMap(t *testing.T) {
 	dir := t.TempDir()
 
-	// Generate a minimal .kavach fixture with two inputs, an output, and a panic marker.
 	fxPath := filepath.Join(dir, "incident.kavach")
 	jf, err := journal.OpenFile(fxPath, journal.Meta{Service: "billing"}, journal.FileOptions{})
 	if err != nil {
@@ -187,7 +185,6 @@ func TestMCPMap(t *testing.T) {
 		t.Fatalf("close journal: %v", err)
 	}
 
-	// Write a minimal map.json spec matching the generated fixture.
 	specPath := filepath.Join(dir, "map.json")
 	specJSON := `{
 		"kavach_map": 1,
@@ -243,7 +240,6 @@ func TestMCPMap(t *testing.T) {
 		})),
 	)
 
-	// 1. Summary mode + HTML output
 	sc, text, isErr := toolOutput(t, resps[0])
 	if isErr {
 		t.Fatalf("kavach_map summary error: %s", text)
@@ -295,7 +291,6 @@ func TestMCPMap(t *testing.T) {
 		t.Fatalf("HTML output invalid: len=%d html_bytes=%v", len(htmlData), htmlBytes)
 	}
 
-	// 2. Full model mode
 	scFull, textFull, isErrFull := toolOutput(t, resps[1])
 	if isErrFull {
 		t.Fatalf("kavach_map include_model error: %s", textFull)
@@ -308,7 +303,6 @@ func TestMCPMap(t *testing.T) {
 		t.Fatalf("unexpected model: %v", model)
 	}
 
-	// 3-5. Validation errors
 	for i, want := range map[int]string{
 		2: "at least one of spec, fixtures, or overlays is required",
 		3: "new requires bin",

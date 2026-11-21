@@ -91,7 +91,6 @@ class Host:
         self._environment = environment
         self.aborted = False
 
-    # -- transport ------------------------------------------------------
 
     def send(self, msg: dict) -> None:
         line = json.dumps(msg, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
@@ -129,7 +128,6 @@ class Host:
             raise _Fatal(f"expected a {want!r} answer, got {ans['t']!r}")
         return ans
 
-    # -- loop -----------------------------------------------------------
 
     def run(self) -> int:
         """Serve the driver until `end` or EOF. Returns the exit status."""

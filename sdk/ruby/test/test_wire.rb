@@ -20,7 +20,7 @@ class TestWire < Minitest::Test
   def test_input_record_is_binary_safe
     f = W.input_record("s", "é", "\xff\x00".b)
     assert_equal Encoding::BINARY, f.encoding
-    assert_equal [0x01, 0x00], f.bytes[2, 2] # type input, flags 0
+    assert_equal [0x01, 0x00], f.bytes[2, 2]
     assert_equal "\x01s\x02\xc3\xa9\x02\xff\x00".b, f.byteslice(4..)
   end
 

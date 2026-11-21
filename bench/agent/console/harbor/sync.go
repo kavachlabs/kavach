@@ -57,7 +57,6 @@ func (c R2Config) Missing() []string {
 	return m
 }
 
-// Sync states of a job.
 const (
 	SyncOff     = "off"
 	SyncPending = "pending"

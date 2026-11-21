@@ -11,7 +11,7 @@ class Ledger
   def initialize(fix: false)
     @fix = fix
     @balances = Hash.new(0)
-    @net = 0 # deposits minus withdrawals
+    @net = 0
   end
 
   def handle(env, input)

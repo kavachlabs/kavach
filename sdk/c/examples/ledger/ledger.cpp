@@ -30,7 +30,6 @@ constexpr bool kFixNullAmount = false;
 
 namespace {
 
-// ---- a tiny parser for the flat events the ledger consumes ----
 
 struct Event {
   std::string id, type, account, to;
@@ -163,7 +162,7 @@ std::string hex(const kavach::Bytes& b) {
   return o;
 }
 
-}  // namespace
+}
 
 class Ledger : public kavach::Handler {
  public:
@@ -196,7 +195,6 @@ class Ledger : public kavach::Handler {
     }
   }
 
-  // Invariants are checked after every step, live and in replay.
   std::vector<kavach::Invariant> invariants() override {
     return {
         {"balances_non_negative",
@@ -255,7 +253,6 @@ class Ledger : public kavach::Handler {
 };
 
 int main(int argc, char** argv) {
-  // Lets the kavach CLI use this binary as a replay host.
   kavach::maybe_host(argc, argv, [] { return std::make_unique<Ledger>(); });
 
   std::string in, dir = "fixtures";

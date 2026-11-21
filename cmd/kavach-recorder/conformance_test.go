@@ -24,7 +24,6 @@ var update = flag.Bool("update", false, "regenerate spec/recorder/journal")
 
 const casesDir = "../../spec/recorder/journal"
 
-// jf is a frame as it appears in stream.json.
 type jf map[string]any
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
@@ -78,7 +77,6 @@ func fMarker(kind, msg, data string) jf {
 	return rec("marker", false, map[string]any{"kind": kind, "message": msg, "data": b64(data)})
 }
 
-// step is a complete, ordinary step.
 func step(pos, data string) []jf {
 	return []jf{fInput(pos, data), fClock(1_000 + int64(len(pos))), fOutput("sink", "out-"+data, "remote"), fStepEnd()}
 }
@@ -251,7 +249,6 @@ func cases() []testCase {
 	}
 }
 
-// frameJSON is the decoded form of a stream.json frame.
 type frameJSON struct {
 	Frame    string                       `json:"frame"`
 	Open     map[string]any               `json:"open"`
@@ -278,8 +275,6 @@ type frameJSON struct {
 	Payload  []byte                       `json:"payload"`
 }
 
-// encodeFrames turns stream.json into the bytes of a record stream, with the
-// open object's dir set to dir.
 func encodeFrames(t *testing.T, raw []byte, dir string) []byte {
 	t.Helper()
 	var s struct {

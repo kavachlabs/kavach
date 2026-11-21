@@ -97,7 +97,6 @@ struct kavach_recorder {
   struct kavach_env env;
 };
 
-/* ---------------- logging ---------------- */
 
 static void rec_logf(kavach_recorder* r, const char* fmt, ...) KAVACH_PRINTF(2, 3);
 static void rec_logf(kavach_recorder* r, const char* fmt, ...) {
@@ -119,7 +118,6 @@ static void stop_recording(kavach_recorder* r, const char* why) {
   pthread_mutex_unlock(&r->mu);
 }
 
-/* ---------------- writing to the pipe ---------------- */
 
 static int write_all(int fd, const uint8_t* p, size_t n) {
 #ifndef F_SETNOSIGPIPE
@@ -247,7 +245,6 @@ static void add_record(kavach_recorder* r, uint8_t type, uint8_t flags) {
   kb_put(&r->sb, r->tmp.p, r->tmp.len);
 }
 
-/* ---------------- env operations while recording ---------------- */
 
 static int op_now(kavach_env* e, int64_t* out) {
   kavach_recorder* r = e->ctx;
@@ -392,7 +389,6 @@ static void clear_outs(kavach_recorder* r) {
   r->n_outs = 0;
 }
 
-/* ---------------- control stream thread ---------------- */
 
 static void handle_control(kavach_recorder* r, const char* line, size_t n) {
   char err[96];
@@ -480,7 +476,6 @@ static void deadline(struct timespec* ts, int ms) {
   }
 }
 
-/* ---------------- starting the recorder ---------------- */
 
 /* Moves fd above 3, which the recorder's ring takes in the child. */
 static int fd_high(int fd) {
@@ -852,7 +847,6 @@ unavailable:
   return KAVACH_OK;
 }
 
-/* ---------------- steps ---------------- */
 
 static void snapshot_if_requested(kavach_recorder* r) {
   if (!atomic_exchange(&r->snap_req, 0)) return;
@@ -965,7 +959,6 @@ void kavach_result_clear(kavach_result* res) {
 
 int kavach_recorder_active(const kavach_recorder* r) { return r && atomic_load(&r->active); }
 
-/* ---------------- flush, close ---------------- */
 
 int kavach_recorder_flush(kavach_recorder* r, int durable) {
   if (!r || !atomic_load(&r->active)) return KAVACH_ERROR;

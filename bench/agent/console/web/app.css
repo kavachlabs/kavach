@@ -1,4 +1,3 @@
-/* kavach bench console */
 /* The site's type, vendored so the console has it offline too (SIL OFL 1.1,
    fonts/OFL.txt): Instrument Sans and Geist Mono, Latin, variable weight. */
 @font-face {
@@ -499,7 +498,6 @@ body.resizing * {
 .dot.bad { background: var(--bad); box-shadow: 0 0 8px color-mix(in srgb, var(--bad) 45%, transparent); }
 .dot.off { background: var(--faint); box-shadow: none; }
 
-/* Interactive Drag-to-Resize Sashes (.sash-left, .sash-right) */
 .sash {
   position: absolute;
   top: 0;
@@ -517,7 +515,6 @@ body.resizing * {
 .sash-left { right: 0; }
 .sash-right { left: 0; }
 
-/* Main layout & smooth left sidebar transition */
 .main {
   display: grid;
   grid-template-columns: var(--left-w, 256px) minmax(0, 1fr);
@@ -548,7 +545,6 @@ body.resizing .body {
   animation: fadeIn var(--dur-med) var(--ease-out);
 }
 
-/* Left Sidebar with sticky Antigravity-style bottom Settings bar & in-place Settings view */
 .side {
   position: relative;
   background: color-mix(in srgb, var(--bar) 60%, transparent);
@@ -634,7 +630,6 @@ body.resizing .body {
 }
 .side .none { color: var(--faint); padding: 4px 10px; font-size: 12.5px; }
 
-/* Antigravity-style Sidebar Footer */
 .side-foot {
   flex: 0 0 auto;
   border-top: 1px solid var(--edge);
@@ -743,7 +738,6 @@ body.resizing .body {
   color: var(--dim);
 }
 
-/* Split body for Matrix + Attempt inspector with smooth right-pane collapse */
 .body {
   display: grid;
   /* A length, not minmax(), so it transitions to and from 0px; it gives up
@@ -787,7 +781,6 @@ body.resizing .body {
 .h { font-size: 16px; font-weight: 600; letter-spacing: -0.015em; margin: 0; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
-/* Home / New Run layout with Antigravity Right Auxiliary Pane */
 /* The right pane gives up width before the middle drops below 420px, down to
    280px of its own. */
 .new-layout {
@@ -857,7 +850,6 @@ body.resizing .body {
   margin: 0;
 }
 
-/* Antigravity Right Auxiliary Pane (.right-side) */
 .right-side {
   position: relative;
   border-left: 1px solid var(--edge);
@@ -1021,7 +1013,6 @@ body.resizing .body {
   line-height: 1.45;
 }
 
-/* Config panel on New Run */
 .config-card {
   background: var(--panel);
   border: 1px solid var(--edge);
@@ -1069,7 +1060,6 @@ body.resizing .body {
   .meta .ic { display: none; }
 }
 
-/* Custom Select Item Menu (.cselect) */
 .cselect {
   position: relative;
   display: inline-flex;
@@ -1238,7 +1228,6 @@ body.resizing .body {
   white-space: nowrap;
 }
 
-/* Fallback native select styling */
 select {
   appearance: none;
   -webkit-appearance: none;
@@ -1256,7 +1245,6 @@ select {
 select:hover { border-color: var(--edge-hover); background-color: var(--panel3); }
 select option { background: var(--pop); color: var(--text); }
 
-/* Chips & Arm Controls */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
 /* A long model id ends in an ellipsis rather than leaving the card. */
 .meta .val .chip { max-width: 100%; min-width: 0; }
@@ -1335,7 +1323,6 @@ input.num {
 input.num:hover { border-color: var(--edge-hover); }
 input.num:focus { border-color: var(--peach); outline: none; }
 
-/* Task Card (.task-card) in Right Sidebar */
 .task-card {
   background: var(--panel);
   border: 1px solid var(--edge);
@@ -1444,7 +1431,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
   gap: 8px;
 }
 
-/* Experiment Arms List in Right Sidebar (.rside-arm-list) */
 .rside-arm-list {
   display: flex;
   flex-direction: column;
@@ -1525,7 +1511,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
   margin-top: 2px;
 }
 
-/* Model Cards in Right Sidebar (.rside-model-stack, .model-card) */
 .rside-model-stack {
   display: flex;
   flex-direction: column;
@@ -1666,7 +1651,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
   overflow: hidden;
 }
 
-/* Command bar / Prompt */
 .prompt {
   border: 1px solid var(--edge-strong);
   background: var(--panel);
@@ -1746,7 +1730,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
 }
 .go:disabled { opacity: 0.5; cursor: default; transform: none; }
 
-/* Slash command autocomplete popup */
 .cmds {
   position: absolute;
   left: 0;
@@ -1805,7 +1788,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
 .empty { color: var(--dim); padding: 40px 30px; max-width: 64ch; line-height: 1.6; }
 .empty b { color: var(--text); font-weight: 500; }
 
-/* OpenRouter Model Picker with live Model Card preview */
 .picker {
   border: 1px solid var(--edge-strong);
   background: var(--pop);
@@ -1898,7 +1880,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
   flex-wrap: wrap;
 }
 
-/* Arm Guide / Hint Bar on Matrix & Compare views */
 .arm-guide {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1941,7 +1922,6 @@ details.task-spec[open] > summary::before { transform: rotate(90deg); }
   line-height: 1.38;
 }
 
-/* Matrix and Compare Tables */
 .tablewrap {
   overflow-x: auto;
   background: var(--panel);
@@ -2082,7 +2062,6 @@ table.mx {
 }
 .side-run .st { --s: 13px; }
 
-/* Attempt & Compare Tiles (.kcard) */
 .pill {
   font-size: 11px;
   font-weight: 600;
@@ -2204,7 +2183,6 @@ details.err-more > pre {
   border-color: var(--peach);
 }
 
-/* Steps timeline in Attempt Inspector */
 .steps {
   display: flex;
   flex-direction: column;
@@ -2251,7 +2229,6 @@ details.err-more > pre {
   font-size: 12px;
 }
 
-/* Agent Markdown Message Step — fixed selectors matching app.js */
 .step.text {
   border: 1px solid var(--edge);
   border-left: 3px solid var(--edge-strong);
@@ -2338,7 +2315,6 @@ details.err-more > pre {
   pointer-events: none;
 }
 
-/* Markdown Typography inside .say and .task-spec-body */
 .md-h { font-size: 13.5px; font-weight: 600; color: var(--text); margin: 4px 0 0; }
 .md p, .md-p { margin: 0; white-space: pre-wrap; }
 .md-list, .md-ul, .md-ol {
@@ -2487,8 +2463,6 @@ details.patch[open] > summary::before { content: "▾ "; }
   flex-basis: 100%;
 }
 
-/* Results / Compare Cards Grid */
-/* Attempts board on the compare page: a column per stage. */
 .kanban {
   display: grid;
   grid-template-columns: repeat(4, minmax(260px, 1fr));
@@ -2584,7 +2558,6 @@ details.patch[open] > summary::before { content: "▾ "; }
 .kcard .links > details { min-width: 0; max-width: 100%; }
 .kcard details.oc[open], .kcard details.patch[open] { flex-basis: 100%; }
 
-/* Settings modal: a rail of tabs and one scrolling panel, after Antigravity's settings. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -3211,7 +3184,6 @@ details.patch[open] > summary::before { content: "▾ "; }
 .round.pass .round-v { color: var(--ok); }
 .round.fail .round-v, .round.trip .round-v { color: var(--bad-soft); }
 
-/* Invariant definitions */
 .inv-pages { display: flex; }
 .inv-d-doc { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); max-width: 68ch; }
 .inv-d-doc .link-btn { color: var(--blue); padding: 0 2px; }

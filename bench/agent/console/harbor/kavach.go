@@ -221,8 +221,6 @@ func (r *TrialReader) Invariants() []kavach.Invariant {
 	}
 }
 
-// reportLine is a line of the kavach CLI's report: its fixture, or its
-// verdict (replay prints it as result).
 var reportLine = regexp.MustCompile(`(?m)^(fixture|verdict|result)\s+(\S+)\s*$`)
 
 // reportVerdict is the verdict in the report of the CLI's replay or diff

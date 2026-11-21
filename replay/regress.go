@@ -20,8 +20,6 @@ const (
 
 var regressionKinds = []string{KindRegression}
 
-// regressionWords rewrites candidate descriptions, which speak of the failing
-// input, for a neighbour.
 var regressionWords = strings.NewReplacer("failing input", "input", "the failing one", "it")
 
 // RegressionVariants derives variants of the inputs before the failing one that
@@ -40,7 +38,6 @@ func RegressionVariants(j *journal.Journal, limit int) ([]*journal.Journal, erro
 	return vs, err
 }
 
-// regressionVariants also returns the number of neighbours.
 func regressionVariants(j *journal.Journal, limit int) ([]*journal.Journal, int, error) {
 	snap, env, steps, err := variantSource(j)
 	if err != nil {
@@ -146,7 +143,6 @@ func sameKeys(a []field, data []byte) bool {
 	return true
 }
 
-// leaves maps the path of every scalar in a JSON document to its compact value.
 func leaves(data []byte) map[string]string {
 	out := map[string]string{}
 	var v any

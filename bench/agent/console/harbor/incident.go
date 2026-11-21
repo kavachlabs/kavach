@@ -265,8 +265,6 @@ var (
 	divOutput      = regexp.MustCompile(`^output (\d+) `)
 )
 
-// diffFromLog reads the last kavach diff report a grader logged. It returns
-// nil when there is none.
 func diffFromLog(path string) *IncidentDiff {
 	f, err := os.Open(path)
 	if err != nil {

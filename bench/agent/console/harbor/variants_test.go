@@ -117,7 +117,6 @@ func TestTrialVariants(t *testing.T) {
 		t.Errorf("json %s", b)
 	}
 
-	// A trial without a collected contract has no variants, and says so.
 	os.MkdirAll(filepath.Join(r.Dir, "job", "bare"), 0o755)
 	os.WriteFile(filepath.Join(r.Dir, "job", "bare", "config.json"), []byte(`{}`), 0o644)
 	l, err = r.TrialVariants("job", "bare")
@@ -190,7 +189,6 @@ func TestTrialVariant(t *testing.T) {
 		}
 	}
 
-	// Without its result, new is null.
 	v, err = r.TrialVariant("job", "trial", 1, 3)
 	if err != nil || v.New != nil || len(v.Steps) != 1 {
 		t.Fatalf("%+v %v", v, err)

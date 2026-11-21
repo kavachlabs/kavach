@@ -51,7 +51,6 @@ public final class Main {
             }
         }
         final boolean fixed = fix;
-        // Lets the kavach CLI use this program to replay fixtures.
         Kavach.maybeHost(args, () -> new Ledger(fixed));
 
         Recorder rec = new Recorder(
@@ -68,8 +67,6 @@ public final class Main {
                 }
                 Recorder.StepResult result = rec.step(new Input(source, Integer.toString(n), line.getBytes(StandardCharsets.UTF_8)));
                 if (result.kind().equals("panic")) {
-                    // Stop the service, as the Go demo does. The recorder has
-                    // already marked the failure and cut a fixture.
                     System.err.println("ledger: line " + n + ": panic: " + result.message());
                     status = 1;
                     break;

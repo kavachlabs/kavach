@@ -55,7 +55,6 @@ func recordQuotes(t *testing.T, h kavach.Handler) *journal.Journal {
 	if err := r.Flush(true); err != nil {
 		t.Fatal(err)
 	}
-	// The incident's fixture when the last step failed, else the journal itself.
 	path := r.File()
 	if m, _ := filepath.Glob(filepath.Join(dir, "fixtures", "*.kavach")); len(m) == 1 {
 		path = m[0]
@@ -125,7 +124,6 @@ func TestLenientStepSynthesizesReads(t *testing.T) {
 		t.Fatalf("%v %v %+v", res, err, res.Steps[2])
 	}
 
-	// With no record left, a query fails.
 	st := replayStep(func(env kavach.Env) []byte {
 		a, _ := env.Query("fx", []byte("zzz"))
 		_, err := env.Query("fx", []byte("zzz"))

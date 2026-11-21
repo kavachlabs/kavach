@@ -13,7 +13,7 @@ import (
 // Each wraps the planted-bug ledger and guards some inputs before it.
 type guardedLedger struct {
 	*Ledger
-	guard func(Event) bool // true: reject the event as missing its amount
+	guard func(Event) bool
 }
 
 func (g guardedLedger) Handle(env kavach.Env, in kavach.Input) error {

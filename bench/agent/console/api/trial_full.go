@@ -40,7 +40,6 @@ const ownMaxTimeoutMin = 120
 // name ends up in the agent's command line and config, so it is not free text.
 var openRouterModel = regexp.MustCompile(`^openrouter/[A-Za-z0-9~][A-Za-z0-9._~+-]*/[A-Za-z0-9][A-Za-z0-9._+-]*(?::[A-Za-z0-9._-]+)?$`)
 
-// allTasks is every task arm in the tasks directory.
 func (t *trial) allTasks() []string {
 	all, _ := harbor.FindTasks(t.tasks)
 	var out []string
@@ -52,7 +51,6 @@ func (t *trial) allTasks() []string {
 	return out
 }
 
-// hasKeys reports whether the request's session holds its own keys.
 func (t *trial) hasKeys(r *http.Request) bool {
 	_, sess := t.lookup(r)
 	if sess == nil {
@@ -63,7 +61,6 @@ func (t *trial) hasKeys(r *http.Request) bool {
 	return sess.keys != nil
 }
 
-// postOwnJob starts a run for a session with its own keys.
 func (s *Server) postOwnJob(w http.ResponseWriter, r *http.Request, sess *session, id, invite string, rr harbor.RunRequest, token string) {
 	t := s.trial
 	t.mu.Lock()
@@ -225,7 +222,6 @@ func (s *Server) inviteRetrier(r *http.Request, id string) (*session, bool) {
 	return sess, invite != "" && t.ownedBy(viewer{owner: digest(sid)}, id) && t.inviteRun(id)
 }
 
-// inviteRun reports whether job id was started on an invite code.
 func (t *trial) inviteRun(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

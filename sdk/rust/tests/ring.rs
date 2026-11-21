@@ -93,7 +93,6 @@ fn killed_service_leaves_crash_fixture() {
         let st = cmd.status().unwrap();
         assert!(!st.success(), "the helper should have been killed");
 
-        // The recorder is no child of the test: it finishes on its own.
         let deadline = Instant::now() + Duration::from_secs(10);
         let fixture = loop {
             let found = std::fs::read_dir(dir.join("fixtures"))

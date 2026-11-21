@@ -12,7 +12,6 @@ const ARM_SUFFIX = /-(kavach-implement|workflow|control|kavach)$/;
 const base = (task) => task.replace(ARM_SUFFIX, "");
 const modelName = (m) => m.replace(/^openrouter\//, "");
 
-// send makes a request and returns the error text of a failure, or "".
 async function send(method, path, body) {
   try {
     const resp = await fetch("/api" + path, {
@@ -45,7 +44,6 @@ export function renderTrialView(view, name) {
 
 const link = (href, text) => h("a", { href, target: "_blank", rel: "noopener" }, text);
 
-// termsNote is the short version of the terms, on the forms that take keys.
 function termsNote(invited) {
   return h("div", { class: "tl-terms", role: "note" },
     h("ul", {},
@@ -76,7 +74,6 @@ function loadCompares(jobs) {
   }
 }
 
-// armTotals sums the graded attempts of one arm over some runs' compare rows.
 function armTotals(ids, arm) {
   let passes = 0, attempts = 0;
   for (const id of ids) for (const r of cmp.get(id) || []) if ((r.arm || "control") === arm) { passes += r.passes; attempts += r.attempts; }
@@ -109,7 +106,6 @@ function verdictCard(ids) {
     real);
 }
 
-// armLine is a run's pass count per arm, once its compare rows are loaded.
 function armLine(j) {
   const rows = cmp.get(j.id);
   if (!rows || !rows.length) return null;
@@ -183,7 +179,6 @@ function landing() {
       h("span", { class: "faint" }, "A free trial, provided as is.")));
 }
 
-// ownCaps states the caps of a session with its own keys, when it has them.
 function ownCaps() {
   const own = trial.session && trial.session.limits && trial.session.limits.own;
   return own ? `: up to ${own.max_attempts} attempts per task and model, ${own.max_concurrent} at once, ${own.max_trials} in a run` : "";
@@ -335,7 +330,6 @@ function inviteForm() {
     h("p", { class: "tl-alt" }, "No code? ", h("a", { href: "#/trial/keys" }, "Bring your own keys"), "."));
 }
 
-// The Turnstile token for the run form, which app.js draws.
 const run = { token: "" };
 let tsBox = null; // the Turnstile widget's element: kept so a redraw does not lose the token
 let tsLoading = null;

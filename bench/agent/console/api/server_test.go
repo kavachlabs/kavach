@@ -328,7 +328,6 @@ func TestEvents(t *testing.T) {
 		}
 	}
 
-	// The running nop trial finishes: its trial and its job change.
 	trial := filepath.Join(jobs, "nop-running", "hello-world-control__p3PHoHF")
 	result, err := os.ReadFile(filepath.Join(jobs, "nop-fail", "hello-world-control__p3PHoHF", "result.json"))
 	if err != nil {
@@ -391,7 +390,6 @@ func TestPauseAndResumeRun(t *testing.T) {
 	if code, v := post(t, url+"/run1/pause", "", ""); code != 409 {
 		t.Fatalf("second pause: %d %v", code, v)
 	}
-	// Paused before Harbor wrote the job folder, the run starts again.
 	if code, v := post(t, url+"/run1/resume", "", ""); code != 202 || v["status"] != "running" || v["stoppable"] != true {
 		t.Fatalf("resume: %d %v", code, v)
 	}
@@ -659,7 +657,6 @@ func TestInvariantRealSource(t *testing.T) {
 		t.Errorf("docker: applied %d started %d removed %d", len(fd.applied), fd.started, fd.removed)
 	}
 
-	// A second request is served from the cache, with the same note.
 	var again harbor.Invariants
 	get(t, ts.URL+trial+"/invariants", &again)
 	if fd.started != 1 || again.Source != "image" || again.SourceNote != inv.SourceNote {
@@ -749,13 +746,11 @@ func TestInvariantSourceImageOrder(t *testing.T) {
 		return inv, fd.asked
 	}
 
-	// Only the legacy local name exists: it is used, and the note says so.
 	inv, asked := run("kavach-bench/redis-10068:kavach")
 	if inv.Source != "image" || !strings.Contains(inv.SourceNote, "kavach-bench/redis-10068:kavach") || !slices.Equal(asked, []string{toml, "kavach-bench/redis-10068:kavach"}) {
 		t.Errorf("legacy: %q %q %q", inv.Source, inv.SourceNote, asked)
 	}
 
-	// An image Harbor recorded is tried first, and wins when it exists.
 	cfg := filepath.Join(trialDir, "config.json")
 	b, err := os.ReadFile(cfg)
 	if err != nil {
@@ -769,13 +764,11 @@ func TestInvariantSourceImageOrder(t *testing.T) {
 		t.Errorf("recorded: %q %q %q", inv.Source, inv.SourceNote, asked)
 	}
 
-	// The task.toml ref is next, with no remark in the note.
 	inv, asked = run(toml)
 	if inv.Source != "image" || strings.Contains(inv.SourceNote, "Read from") || !slices.Equal(asked, []string{"local/recorded:1", toml}) {
 		t.Errorf("toml: %q %q %q", inv.Source, inv.SourceNote, asked)
 	}
 
-	// None exists: the patch alone, naming the first image tried.
 	inv, _ = run()
 	if inv.Source != "patch" || !strings.Contains(inv.SourceNote, "local/recorded:1") {
 		t.Errorf("none: %q %q", inv.Source, inv.SourceNote)

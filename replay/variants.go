@@ -30,7 +30,6 @@ type candidate struct {
 	steps    []vstep
 }
 
-// The classes of mutation a variant belongs to, in Meta.Variant.Kind.
 const (
 	KindField     = "field"     // one field or array element of the input changed, removed or added
 	KindPair      = "pair"      // two fields or elements changed together
@@ -44,7 +43,6 @@ const (
 	KindRegression = "regression"
 )
 
-// kinds names the classes candidates returns, in its order.
 var kinds = []string{KindField, KindPair, KindMove, KindDrop, KindDuplicate, KindClock}
 
 // Variants derives perturbed versions of the incident recorded in j: the
@@ -91,7 +89,6 @@ func FeatureVariants(j *journal.Journal, features map[uint64]bool) ([]*journal.J
 	return interleave(j.Header.Meta, snap, env, each, "", kinds, MaxCandidates), nil
 }
 
-// variantSource splits j into what variants are built from.
 func variantSource(j *journal.Journal) (snap, env *journal.Record, steps []*step, err error) {
 	recs := j.Records
 	if j.Header.Meta.Start == journal.StartSnapshot {
@@ -107,8 +104,6 @@ func variantSource(j *journal.Journal) (snap, env *journal.Record, steps []*step
 	return snap, env, steps, err
 }
 
-// candidates are the mutations of the journal up to and including step k,
-// by class.
 func candidates(steps []*step, k int) [][]candidate {
 	base := make([]vstep, k+1)
 	for i, st := range steps[:k+1] {
@@ -210,7 +205,6 @@ func moves(base []vstep, k int) []candidate {
 	return out
 }
 
-// readsOf returns the clock and random reads of rs, or its other reads.
 func readsOf(rs []journal.Record, timeAndRand bool) []journal.Record {
 	var out []journal.Record
 	for _, r := range rs {
@@ -221,7 +215,6 @@ func readsOf(rs []journal.Record, timeAndRand bool) []journal.Record {
 	return out
 }
 
-// drops removes one earlier step, nearest first, and finally all of them.
 func drops(base []vstep, k int) []candidate {
 	var out []candidate
 	for i := k - 1; i >= 0; i-- {
@@ -234,7 +227,6 @@ func drops(base []vstep, k int) []candidate {
 	return out
 }
 
-// duplicates delivers one earlier input twice, as an at-least-once source can.
 func duplicates(base []vstep, k int) []candidate {
 	var out []candidate
 	for i := k - 1; i >= 0; i-- {
@@ -254,7 +246,6 @@ var clockOffsets = []struct {
 	{366 * 24 * time.Hour, "+366 days"},
 }
 
-// clockShifts moves every clock read by a fixed offset.
 func clockShifts(base []vstep) []candidate {
 	var out []candidate
 	for _, off := range clockOffsets {
@@ -360,8 +351,6 @@ func fieldMutations(base []vstep, k int) []candidate {
 	return buildFieldCandidates(base, k, interleaveMutations(perKey))
 }
 
-// pairMutations changes two fields, or two elements of an array field, of the
-// failing input at once, starting from the trailing fields and arguments.
 func pairMutations(base []vstep, k int) []candidate {
 	fields, ok := objectFields(base[k].input.Data)
 	if !ok {
@@ -572,7 +561,6 @@ func buildFieldCandidates(base []vstep, k int, ms []fieldMutation) []candidate {
 	return out
 }
 
-// arrayElements splits a compacted JSON array into its compacted elements.
 func arrayElements(v json.RawMessage) ([]json.RawMessage, bool) {
 	if len(v) == 0 || v[0] != '[' {
 		return nil, false
@@ -606,7 +594,6 @@ func containsRaw(vs []json.RawMessage, v json.RawMessage) bool {
 	return false
 }
 
-// nearby returns values close to v that a handler might treat differently.
 func nearby(v json.RawMessage) []json.RawMessage {
 	switch {
 	case len(v) == 0:

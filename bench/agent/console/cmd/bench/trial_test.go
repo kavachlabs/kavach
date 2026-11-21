@@ -57,7 +57,6 @@ func TestTrialCLIInvites(t *testing.T) {
 		t.Fatalf("a short code: %d %q", code, errs)
 	}
 
-	// Usage the server recorded shows in the list.
 	os.MkdirAll(filepath.Join(jobs, ".bench"), 0o755)
 	os.WriteFile(filepath.Join(jobs, ".bench", "invites-used.json"), []byte(`{"`+api.InviteDigest(m[1])+`":{"runs":3,"last":"2026-05-01T10:30:00Z","jobs":["run-a"]}}`), 0o600)
 	_, out, _ = run("invite", "list")

@@ -189,7 +189,6 @@ func TestTrialSessionRules(t *testing.T) {
 	e := newTrialServer(t, "", nil)
 	keys := `{"model_key":"` + modelKey + `","provider":"daytona","daytona_api_key":"` + daytonaKey + `"}`
 
-	// Entering keys always starts a new session; nothing is carried over.
 	c := e.visitor()
 	_, _, h := e.raw(c, "POST", "/api/trial/keys", keys)
 	first := h.Get("Set-Cookie")
@@ -208,7 +207,6 @@ func TestTrialSessionRules(t *testing.T) {
 		t.Errorf("%d sessions, want the new one only", n)
 	}
 
-	// Using the session refreshes its cookie; having none gets none.
 	_, _, h = e.raw(c, "GET", "/api/trial/session", "")
 	if sc := h.Get("Set-Cookie"); !strings.Contains(sc, "Max-Age=86400") {
 		t.Errorf("no refresh: %q", sc)
@@ -218,7 +216,6 @@ func TestTrialSessionRules(t *testing.T) {
 		t.Errorf("a visitor with no session got a cookie")
 	}
 
-	// One address holds at most sessionsPerIP sessions; the oldest goes.
 	e.s.trial.mu.Lock()
 	clear(e.s.trial.sessions)
 	e.s.trial.mu.Unlock()

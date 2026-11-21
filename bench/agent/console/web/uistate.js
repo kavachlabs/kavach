@@ -21,8 +21,6 @@ export function readPrefs(raw) {
   return prefs;
 }
 
-// prefsJSON is what is saved of the panes: their widths, whether each is
-// open, and which sidebar sections are folded.
 export function prefsJSON(ui) {
   return JSON.stringify({ leftW: ui.leftW, rightW: ui.rightW, side: ui.side, rightSide: ui.rightSide, folded: [...ui.folded] });
 }
@@ -40,13 +38,10 @@ export function initialPanes(prefs, narrow) {
   };
 }
 
-// sideOpen says whether the left sidebar shows.
 export function sideOpen(side, narrow) {
   return side != null ? side : !narrow;
 }
 
-// toggleSide, toggleRight and toggleFold are the panes' toggles: the menu
-// button and ⌘B, the right pane's button and ⌘J, and a section's heading.
 export function toggleSide(ui, narrow) {
   ui.side = !sideOpen(ui.side, narrow);
 }

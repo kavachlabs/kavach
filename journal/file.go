@@ -66,7 +66,6 @@ func (jf *File) init(meta Meta, wopts WriterOptions) error {
 		return nil
 	}
 
-	// Existing journal: find the end of the last complete block.
 	jr, err := NewReader(jf.f)
 	if err != nil {
 		return err

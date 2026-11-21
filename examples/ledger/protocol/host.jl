@@ -68,7 +68,6 @@ function step(h::Host, ledger::Ledger, m)
     return (t="done", outcome="ok")
 end
 
-# request sends one read and waits for its answer.
 function request(h::Host, msg, want::String)
     h.aborted && throw(Abort())
     send(h, msg)
@@ -81,7 +80,6 @@ function request(h::Host, msg, want::String)
     return ans
 end
 
-# The world, in replay: ask the driver.
 
 now_ns(h::Host) = parse(Int64, request(h, (t="clock",), "clock")["unix_nanos"])
 randbytes(h::Host, n::Integer) = base64decode(request(h, (t="rand", n=n), "rand")["data"])

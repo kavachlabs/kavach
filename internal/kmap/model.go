@@ -199,7 +199,6 @@ func Build(in Input) (*Model, error) {
 		m.Generator = "kavach " + in.Version
 	}
 
-	// 1. Load overlays first so any stage fixtures are discovered and deduplicated.
 	type loadedOverlay struct {
 		ov     *Overlay
 		absDir string
@@ -271,7 +270,6 @@ func Build(in Input) (*Model, error) {
 		loadedOverlays = append(loadedOverlays, loadedOverlay{ov: ov, absDir: ovDir})
 	}
 
-	// Assign unique IDs and Labels to fixtures.
 	baseCounts := map[string]int{}
 	for _, fr := range fixReqs {
 		baseCounts[filepath.Base(fr.absPath)]++
@@ -298,7 +296,6 @@ func Build(in Input) (*Model, error) {
 		}
 	}
 
-	// 2. Read fixtures, extract recorded steps, and run optional replays.
 	fixturesData := make([]*fixtureData, len(fixReqs))
 	for i, fr := range fixReqs {
 		j, err := journal.ReadFile(fr.absPath)
@@ -343,7 +340,6 @@ func Build(in Input) (*Model, error) {
 		fixturesData[i] = fd
 	}
 
-	// 3. Load and attach diff reports by fixture basename.
 	for _, dp := range in.Diffs {
 		ds, rawFix, err := LoadDiff(dp)
 		if err != nil {
@@ -364,7 +360,6 @@ func Build(in Input) (*Model, error) {
 		}
 	}
 
-	// 4. Populate spec nodes/edges/flows and synthesize auto/unmapped nodes & edges.
 	if spec != nil {
 		m.Groups = append(m.Groups, spec.Groups...)
 		m.Nodes = append(m.Nodes, spec.Nodes...)
@@ -374,23 +369,18 @@ func Build(in Input) (*Model, error) {
 		m.Summary = spec.Summary
 	}
 
-	// Evaluate hits on spec nodes first so we know what runtime entities are unmapped.
 	if spec != nil {
 		evalNodeRules(m.Nodes, fixturesData)
 	}
 
 	synthesizeUnmapped(m, spec == nil, fixturesData)
 
-	// Evaluate rules across all nodes (including newly synthesized nodes).
 	evalNodeRules(m.Nodes, fixturesData)
 
-	// Build auto edges involving synthesized nodes.
 	addAutoEdges(m, spec == nil, fixturesData)
 
-	// Compute invariant matrices, detection, and failure hits on invariant nodes.
 	computeInvariantsAndDetection(m.Nodes, fixturesData)
 
-	// Assemble final fixtures, stats, and overlays.
 	for _, n := range m.Nodes {
 		m.Stats[n.ID] = &NodeStats{}
 	}
@@ -407,7 +397,6 @@ func Build(in Input) (*Model, error) {
 
 	computeNodeStats(m)
 
-	// Link overlay stage Runs, validate stage Nodes, resolve Item.Sink, and merge by mode.
 	nodeSet := make(map[string]bool, len(m.Nodes))
 	for _, n := range m.Nodes {
 		nodeSet[n.ID] = true
@@ -465,7 +454,6 @@ func Build(in Input) (*Model, error) {
 		}
 	}
 
-	// Title and summary fallbacks.
 	if in.Title != "" {
 		m.Title = in.Title
 	}
@@ -814,7 +802,6 @@ func previewData(b []byte, maxData int) (text string, truncated bool, omitted bo
 		}
 		return out, trunc, false
 	}
-	// Binary / non-UTF-8: render as hex.
 	slice := b
 	if trunc {
 		slice = b[:maxData]
@@ -908,7 +895,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 		}
 	}
 
-	// Collect unmapped inputs per (source, position).
 	type srcPos struct{ source, position string }
 	type splitInfo struct {
 		field string
@@ -923,7 +909,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 	unmappedFailures := map[string]bool{}
 	var failOrder []string
 
-	// Also track distinct positions per source+position to check collisions.
 	distinctSourcesForPos := map[string]map[string]bool{}
 
 	for _, fd := range fixtures {
@@ -999,10 +984,8 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 	}
 
 	var synth []Node
-	// 1. Input nodes
 	for _, sp := range srcPosOrder {
 		splits := unmappedInputs[sp]
-		// Check if there are 2+ non-empty op/type values.
 		var nonEmpty []splitInfo
 		for k := range splits {
 			if k.val != "" {
@@ -1077,7 +1060,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 		}
 	}
 
-	// 2. Output / sink nodes
 	for _, sink := range sinkOrder {
 		id := uniqueNodeID("out:" + sink)
 		r := Rule{On: "output", Sink: sink}
@@ -1093,7 +1075,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 		})
 	}
 
-	// 3. Invariant nodes
 	for _, inv := range invOrder {
 		id := uniqueNodeID("inv:" + inv)
 		synth = append(synth, Node{
@@ -1107,7 +1088,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 		})
 	}
 
-	// 4. Failure nodes
 	for _, kind := range failOrder {
 		id := uniqueNodeID("fail:" + kind)
 		r := Rule{On: "failure", Kind: kind}
@@ -1127,7 +1107,6 @@ func synthesizeUnmapped(m *Model, noSpec bool, fixtures []*fixtureData) {
 		return
 	}
 
-	// Add missing groups needed by synthesized nodes.
 	existingGroups := map[string]bool{}
 	for _, g := range m.Groups {
 		existingGroups[g.ID] = true
@@ -1249,7 +1228,6 @@ func addAutoEdges(m *Model, noSpec bool, fixtures []*fixtureData) {
 }
 
 func computeInvariantsAndDetection(nodes []Node, fixtures []*fixtureData) {
-	// Spec invariant names (non-auto nodes first, then auto if any, deduplicated).
 	var specInvNames []string
 	seenSpecInv := map[string]bool{}
 	invNodesByName := map[string][]Node{}
@@ -1299,7 +1277,6 @@ func computeInvariantsAndDetection(nodes []Node, fixtures []*fixtureData) {
 			for si := range r.Steps {
 				st := &r.Steps[si]
 
-				// Add failure hit to invariant node(s) when step outcome is "invariant".
 				if st.Outcome == "invariant" && rd.failInvName != "" {
 					for _, invNode := range invNodesByName[rd.failInvName] {
 						hasFail := false

@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 )
 
-// Step kinds.
 const (
 	KindText   = "text"
 	KindShell  = "shell"
@@ -144,7 +143,6 @@ const maxText = 4000
 // A trial with none has no steps.
 func readSteps(dir string) ([]Step, error) { return stepsFrom(os.DirFS(dir)) }
 
-// stepsFrom reads steps from fsys, which holds a trial directory's files.
 func stepsFrom(fsys fs.FS) ([]Step, error) {
 	b, err := fs.ReadFile(fsys, "agent/trajectory.json")
 	if err == nil {
@@ -729,7 +727,6 @@ func agentDiff(steps []Step) string {
 	return v
 }
 
-// isDiff says whether s is a `kavach diff`, as a tool or on the command line.
 func isDiff(s Step) bool {
 	if s.Kind == KindShell {
 		m := kavachCommand(s.Title)
@@ -743,10 +740,8 @@ func str(v any) string {
 	return s
 }
 
-// clip cuts s to maxText bytes on a rune boundary.
 func clip(s string) string { return clipTo(s, maxText) }
 
-// clipTo cuts s to n bytes on a rune boundary.
 func clipTo(s string, n int) string {
 	if len(s) <= n {
 		return s

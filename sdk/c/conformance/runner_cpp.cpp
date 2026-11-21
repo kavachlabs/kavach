@@ -12,7 +12,7 @@ extern "C" {
 
 namespace {
 ans* pop(ans_list& l) { return l.next < l.n ? &l.v[l.next++] : nullptr; }
-}  // namespace
+}
 
 int main(int argc, char** argv) {
   if (argc != 4 && argc != 5) {

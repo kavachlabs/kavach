@@ -18,7 +18,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// page is what fills the screen between the header and the prompt.
 type page int
 
 const (
@@ -58,7 +57,7 @@ type Model struct {
 	events        chan event
 
 	input     textinput.Model
-	menu      int  // the highlighted suggestion
+	menu      int
 	focusList bool // keys go to the page's list, not the prompt
 
 	page   page
@@ -66,7 +65,7 @@ type Model struct {
 	note   string
 	noteOK bool // the note is good news, not an error
 	scroll int
-	filter string // /models filter
+	filter string
 
 	job     *harbor.Job // the job on the runs, results and compare pages
 	selKey  string      // the selected attempt: task|model|attempt
@@ -79,11 +78,9 @@ type Model struct {
 
 	confirm *confirm
 	frame   int
-	keep    bool // leave the server running after quitting
+	keep    bool
 }
 
-// confirm is a question at the bottom of the screen; each key runs its
-// choice.
 type confirm struct {
 	text    string
 	choices []choice
@@ -94,7 +91,6 @@ type choice struct {
 	run        func(m *Model) tea.Cmd
 }
 
-// picker chooses the models for /matrix.
 type picker struct {
 	filter string
 	cursor int
@@ -129,7 +125,6 @@ func New(ctx context.Context, base string, owned bool, setPath string) *Model {
 	}
 }
 
-// Messages from commands.
 type (
 	statusMsg struct {
 		s   api.Status
@@ -195,8 +190,6 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.loadStatus(), m.loadTasks(), m.loadJobs(), m.nextEvent(), tick())
 }
 
-// stream keeps /api/events flowing into m.events, reconnecting when the
-// stream breaks.
 func (m *Model) stream() {
 	for m.ctx.Err() == nil {
 		m.c.events(m.ctx, m.events)
@@ -371,8 +364,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// gotEvent applies a job or trial event and refetches what the screen
-// shows of it.
 func (m *Model) gotEvent(e event) tea.Cmd {
 	if e.job != nil {
 		m.upsertJob(*e.job)
@@ -403,7 +394,6 @@ func (m *Model) upsertJob(j harbor.Job) {
 	m.jobs = append([]harbor.Job{j}, m.jobs...)
 }
 
-// gotJob shows j, with its trials, and fetches what the page needs of it.
 func (m *Model) gotJob(j harbor.Job) tea.Cmd {
 	m.job = &j
 	var cmds []tea.Cmd
@@ -432,7 +422,6 @@ func (m *Model) gotJob(j harbor.Job) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// loadGrades fetches the grade of each graded attempt not fetched yet.
 func (m *Model) loadGrades() []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, t := range m.job.Trials {
@@ -446,7 +435,6 @@ func (m *Model) loadGrades() []tea.Cmd {
 
 func trialKey(t harbor.Trial) string { return fmt.Sprintf("%s|%s|%d", t.Task, t.Model, t.Attempt) }
 
-// order is the current job's attempts in grid order: model, arm, attempt.
 func (m *Model) order() []harbor.Trial {
 	if m.job == nil {
 		return nil
@@ -577,7 +565,6 @@ func (m *Model) showPage(p page, echo string) {
 	}
 }
 
-// runningHere are the jobs this server started that are still running.
 func (m *Model) runningHere() []harbor.Job {
 	var out []harbor.Job
 	for _, j := range m.jobs {
@@ -588,8 +575,6 @@ func (m *Model) runningHere() []harbor.Job {
 	return out
 }
 
-// quit leaves, first asking what to do with runs only this process can
-// stop.
 func (m *Model) quit() tea.Cmd {
 	running := m.runningHere()
 	if !m.owned || len(running) == 0 {
@@ -657,7 +642,6 @@ func (m *Model) openPrompt(text string) {
 	m.menu = 0
 }
 
-// listKey handles keys on a page's list while the prompt is closed.
 func (m *Model) listKey(k tea.KeyMsg) tea.Cmd {
 	if k.String() == "/" && m.page != pageMatrix {
 		m.openPrompt("/")
@@ -844,7 +828,6 @@ func (m *Model) askStop(j harbor.Job) tea.Cmd {
 	return nil
 }
 
-// promptKey handles keys while the prompt is open.
 func (m *Model) promptKey(k tea.KeyMsg) tea.Cmd {
 	sugg := m.suggestions()
 	switch k.String() {
@@ -936,7 +919,6 @@ func (m *Model) cycleArm() {
 	m.save()
 }
 
-// pickKey handles the /matrix model picker.
 func (m *Model) pickKey(k tea.KeyMsg) tea.Cmd {
 	items := m.pickItems()
 	switch k.Type {
@@ -980,8 +962,6 @@ func (m *Model) pickKey(k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// pickItems are the models the picker lists: those that support tools and
-// match the filter, chosen ones first.
 func (m *Model) pickItems() []api.Model {
 	var chosen, rest []api.Model
 	q := strings.ToLower(m.pick.filter)

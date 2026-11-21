@@ -55,7 +55,7 @@ type VariantCheck struct {
 	Old        string  `json:"old"`
 	New        string  `json:"new,omitempty"`
 	Passed     bool    `json:"passed"`
-	Seq        *uint64 `json:"seq,omitempty"` // where the new build went wrong
+	Seq        *uint64 `json:"seq,omitempty"`
 	Detail     string  `json:"detail,omitempty"`
 	// Journal is the variant itself.
 	Journal *journal.Journal `json:"-"`
@@ -73,7 +73,7 @@ type RegressionCheck struct {
 	Old     string  `json:"old"`
 	New     string  `json:"new,omitempty"`
 	Passed  bool    `json:"passed"`
-	Seq     *uint64 `json:"seq,omitempty"` // where the new build's outputs first differ
+	Seq     *uint64 `json:"seq,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
 	// Journal is the variant itself.
 	Journal *journal.Journal `json:"-"`
@@ -83,7 +83,7 @@ type RegressionCheck struct {
 type Verification struct {
 	Status  Status  `json:"status"`
 	Verdict string  `json:"verdict"`
-	Variant int     `json:"variant,omitempty"` // the first failing variant
+	Variant int     `json:"variant,omitempty"`
 	Seq     *uint64 `json:"seq,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
 	// Old and New are the two builds' replays of the recorded journal.
@@ -257,7 +257,6 @@ func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc) (Variant
 	return c, nil
 }
 
-// judge decides whether the new build handled a reproducing variant.
 func judge(c *VariantCheck, old, new *Result) {
 	if !new.Passed() {
 		c.Seq, c.Detail = new.Seq, new.String()
@@ -271,7 +270,7 @@ func judge(c *VariantCheck, old, new *Result) {
 			break
 		}
 		if i >= len(new.Steps) {
-			break // cannot happen: the new build ran every step
+			break
 		}
 		if d := diffBuilds(o.Outputs, new.Steps[i].Outputs); d != "" {
 			seq := o.Seq
@@ -288,7 +287,6 @@ func diffBuilds(old, new []kavach.Output) string {
 	return diffNamed(old, new, "old build", "new build")
 }
 
-// failureOf describes how a replay failed, in the form of journal.Variant.Failure.
 func failureOf(r *Result) string {
 	switch r.Status {
 	case StatusStillFailing:
@@ -318,8 +316,6 @@ func indexOf(cs []VariantCheck, id int) int {
 	return -1
 }
 
-// parallel runs fn(0..n-1), at most par at once, and returns the first error
-// by index.
 func parallel(n, par int, fn func(i int) error) error {
 	errs := make([]error, n)
 	sem := make(chan struct{}, max(par, 1))
@@ -367,7 +363,7 @@ func checkRegression(vj *journal.Journal, replayOld, replayNew ReplayFunc) (Regr
 	}
 	for i, ost := range o.Steps {
 		if i >= len(n.Steps) {
-			break // cannot happen: the new build ran every step
+			break
 		}
 		if d := diffBuilds(ost.Outputs, n.Steps[i].Outputs); d != "" {
 			seq := ost.Seq

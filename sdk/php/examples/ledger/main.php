@@ -63,8 +63,6 @@ while (($line = fgets($in)) !== false) {
     }
     $result = $rec->step(new Input('file:' . basename($path), (string) $n, $line));
     if ($result->kind === 'panic') {
-        // Stop the service, as the Go demo does. The recorder has already
-        // marked the failure and cut a fixture.
         $rec->close();
         fwrite(STDERR, "ledger: line $n: {$result->message}\n");
         exit(1);

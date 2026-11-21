@@ -48,7 +48,6 @@ export function savedVariants(t, gen) {
 
 export const isSaved = (sv, round, id) => sv.list.some((v) => v.round === round && v.id === id);
 
-// openReplay opens the scene on variant id of round.
 export function openReplay(t, round, id) {
   stop();
   state.replay = { job: t.job, trial: t.id, round, id, i: null };
@@ -103,8 +102,6 @@ function load(r) {
     });
 }
 
-// sceneData is what the scene draws for r: the response, or, for the
-// incident, the response seen as one build's replay of the recording.
 function sceneData(r) {
   const got = sceneCache.get(lkey(r));
   if (!r.incident || !got || got === "loading" || got.error) return got;
@@ -392,9 +389,6 @@ function reportFor(t, round) {
   return checksOf(state.steps).find((c) => (c.round || c.n) === round) || null;
 }
 
-// renderReplay is the job view's left pane while a variant is open: the
-// site hero's window, with the step strip and the controls on top, the step
-// and its verdict below, and the clock and the inputs to come beside them.
 export function renderReplay(t) {
   const r = state.replay;
   load(r);
@@ -435,8 +429,6 @@ function backBtn() {
   return h("button", { type: "button", class: "rp-back", "data-fid": "back", onclick: closeReplay, title: "Back to the run (Esc)" }, "← Run");
 }
 
-// head is the window's bar: what is replayed, with a dot in the replay's
-// colour, and for the recording a switch between the builds replaying it.
 function head(t, d, m, r) {
   const tone = !m.nw ? "none" : m.failing ? "bad" : "ok";
   let name, sub;
@@ -492,8 +484,6 @@ function verdict(d, m, i, ns) {
 
 const MARKS = { ok: "M3.5 8.5l3 3 6-7", bad: "M4.5 4.5l7 7m0-7l-7 7", run: "M6 4.5v7l5.5-3.5z", none: "M4.5 8h7" };
 
-// stage is the step: its input, env reads and outputs, then the verdict at
-// it and the invariants after it.
 function stage(d, m, r) {
   const i = r.i;
   const s = m.steps[i];
@@ -516,8 +506,6 @@ function stage(d, m, r) {
         : h("span", { class: "faint rp-nolamps" }, m.traffic ? `The ${m.bname} declares no invariants.` : m.incident ? "The recorded failure names no invariant." : "No invariants named for this round.")));
 }
 
-// io lists what the step read through env and what it emitted, the
-// journal's record against the build's when they differ.
 function io(m, i, s, ns) {
   const inp = decodeInput(s);
   const isFault = i === m.fault.i;
@@ -580,8 +568,6 @@ function line(text, cls) {
   return h("span", { class: `rp-clip ${expanded ? "full" : ""} ${cls}`, title: !expanded && text.length > 80 ? clip(text, 600) : null }, text || " ");
 }
 
-// side is the trail beside the step: the clock as the step read it, and the
-// input at hand with the ones after it.
 function side(m, r) {
   const i = r.i;
   const reads = m.steps[i].clock;
@@ -616,8 +602,6 @@ function side(m, r) {
     i + 1 >= m.n ? h("span", { class: "faint rp-q-end" }, "No more inputs.") : null);
 }
 
-// strip is the recording's inputs, one segment each: replayed so far,
-// the one at hand, feature steps, the fault, where the replay stopped.
 function strip(m, r) {
   return h("div", { class: `rp-strip ${m.n > 90 ? "dense" : ""}`, style: `--n:${m.n}`, "aria-hidden": "true" },
     m.steps.map((q, j) => h("i", {
@@ -653,8 +637,6 @@ function icon(d, fill, size = 12) {
   return svg;
 }
 
-// controls is the strip with the scrubber over it, its ends, and the
-// buttons; the scrubber is the one part update leaves in place.
 function controls(m, r) {
   const range = h("input", {
     id: "rp-scrub", class: "rp-range", type: "range", min: "0", max: String(m.n - 1), step: "1", value: String(r.i),

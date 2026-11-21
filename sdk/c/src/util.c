@@ -11,7 +11,6 @@
 #include <sys/random.h>
 #endif
 
-/* ---------------- kbuf ---------------- */
 
 void kb_free(kbuf* b) {
   free(b->p);
@@ -222,7 +221,6 @@ int k_b64_decode(const char* s, size_t n, uint8_t** out, size_t* outlen) {
   return 0;
 }
 
-/* ---------------- strings ---------------- */
 
 char* k_strndup(const char* s, size_t n) {
   char* d = malloc(n + 1);
@@ -243,7 +241,6 @@ void* k_memdup(const void* p, size_t n) {
 
 void kavach_free(void* p) { free(p); }
 
-/* ---------------- clock and randomness ---------------- */
 
 int64_t k_realtime_ns(void) {
   struct timespec ts;
@@ -285,7 +282,6 @@ int k_os_random(void* buf, size_t n) {
 #endif
 }
 
-/* ---------------- env: public wrappers and step boundary ---------------- */
 
 void k_env_init(struct kavach_env* e, const env_ops* ops, void* ctx, int nojump) {
   memset(e, 0, sizeof *e);

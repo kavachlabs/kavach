@@ -816,7 +816,6 @@ public final class Recorder implements AutoCloseable {
             try {
                 Runtime.getRuntime().removeShutdownHook(h);
             } catch (IllegalStateException ignored) {
-                // already shutting down
             }
         }
     }
@@ -863,7 +862,6 @@ public final class Recorder implements AutoCloseable {
         try {
             procIn.close();
         } catch (IOException ignored) {
-            // already gone
         }
         try {
             if (!proc.waitFor(2, TimeUnit.SECONDS)) {

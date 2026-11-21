@@ -8,7 +8,7 @@ import (
 
 // Mount is one line of /proc/self/mountinfo.
 type Mount struct {
-	Path    string // mount point
+	Path    string
 	FSType  string
 	Options string // per-mount options, e.g. "rw,nosuid,nodev"
 }
@@ -158,7 +158,6 @@ func ParseBusctlBool(out string) (string, bool) {
 	return parseBool(f[1])
 }
 
-// parseBool normalizes a systemd boolean to "yes" or "no".
 func parseBool(v string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "yes", "y", "true", "t", "on":

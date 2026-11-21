@@ -24,7 +24,6 @@ import (
 )
 
 func main() {
-	// Lets the kavach CLI use this binary to replay fixtures.
 	kavach.MaybeReplay(func() kavach.Handler { return NewLedger() })
 
 	in := flag.String("in", "", "JSON-lines file of wallet events")

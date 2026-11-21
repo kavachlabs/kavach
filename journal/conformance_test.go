@@ -20,7 +20,6 @@ var update = flag.Bool("update", false, "regenerate spec/testdata conformance fi
 
 const conformanceDir = "../spec/testdata"
 
-// expected is the JSON form of a decoded journal used by the conformance suite.
 type expected struct {
 	Major     uint16   `json:"major"`
 	Minor     uint16   `json:"minor"`
@@ -41,7 +40,6 @@ func header(t *testing.T, meta Meta) []byte {
 	return b
 }
 
-// frames encodes records back to back, without checking their order.
 func frames(t *testing.T, recs ...Record) []byte {
 	t.Helper()
 	var out []byte
@@ -55,7 +53,6 @@ func frames(t *testing.T, recs ...Record) []byte {
 	return out
 }
 
-// block encodes records as one block, without checking their order.
 func block(t *testing.T, comp string, recs ...Record) []byte {
 	t.Helper()
 	return blockOf(t, comp, recs[0].Seq, len(recs), frames(t, recs...))
@@ -70,7 +67,6 @@ func blockOf(t *testing.T, comp string, firstSeq uint64, count int, raw []byte) 
 	return b
 }
 
-// splitBlock returns the block frame and data frame of a one-block encoding.
 func splitBlock(b []byte) (bf, df []byte) { return b[:8+blockFrameLen], b[8+blockFrameLen:] }
 
 func cat(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
@@ -97,8 +93,6 @@ func streamedFrame(t *testing.T, raw []byte) []byte {
 
 func sha(s string) []byte { b := sha256.Sum256([]byte(s)); return b[:] }
 
-// conformanceCases returns the files of the suite. Names under valid/ must decode
-// to the paired JSON; names under invalid/ must be rejected.
 func conformanceCases(t *testing.T) map[string][]byte {
 	const z, n = CompressionZstd, CompressionNone
 	meta := Meta{Service: "conformance", Start: StartGenesis, Producer: "kavach-go/conformance"}
@@ -151,7 +145,6 @@ func conformanceCases(t *testing.T) map[string][]byte {
 		{Type: TypeMarker, Seq: 7, Kind: MarkerExit, Message: "process ended without closing the recorder"},
 	}
 
-	// Several blocks, with records of every kind.
 	multi := func(comp string) []byte {
 		return cat(header(t, Meta{Service: "conformance", Start: StartGenesis, Compression: comp}),
 			block(t, comp, all[0:3]...), block(t, comp, all[3:4]...), block(t, comp, all[4:]...))
@@ -185,7 +178,6 @@ func conformanceCases(t *testing.T) map[string][]byte {
 		return cat(hdr, h.append(nil), df)
 	}
 
-	// A record whose last bytes fall in the next block.
 	spanA := frames(t, env, Record{Type: TypeInput, Seq: 1, Source: "s", Data: []byte("0123456789")})
 	spanRaw := spanA[:len(spanA)-5]
 

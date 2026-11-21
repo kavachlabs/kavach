@@ -149,7 +149,6 @@ parseArgs = go (Args False Nothing "fixtures")
 main :: IO ()
 main = do
   args <- parseArgs <$> getArgs
-  -- Lets the kavach CLI use this binary to replay fixtures.
   maybeHost (ledgerHandler (fix args))
   path <- maybe (hPutStrLn stderr "ledger: pass --in FILE" >> exitFailure) pure (inFile args)
   events <- filter (not . BS.null) . map BC.strip . BC.lines <$> BS.readFile path

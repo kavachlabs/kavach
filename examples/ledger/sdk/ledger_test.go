@@ -88,7 +88,6 @@ func TestCLI(t *testing.T) {
 	build(newBin, "-tags", "ledgerfix", ".")
 	build(partialBin, "-tags", "ledgerpartialfix", ".")
 
-	// The buggy service crashes and leaves a fixture behind.
 	fx := filepath.Join(dir, "journal")
 	if err := exec.Command(oldBin, "-in", "../testdata/events.jsonl", "-fixtures", fx).Run(); err == nil {
 		t.Fatal("expected the buggy ledger to crash")
@@ -153,7 +152,6 @@ func TestCLI(t *testing.T) {
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--variants", "0"), "verdict   fixed")
 	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 47`)
 
-	// The same loop through the MCP server, as an agent drives it.
 	mcp := exec.Command(cli, "mcp")
 	mcp.Stdin = strings.NewReader(strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
@@ -191,7 +189,6 @@ func TestCLI(t *testing.T) {
 	}
 	mustContain(string(mcpOut), `\"seq\": 32`, `"passed":false`, `"passed":true`)
 
-	// Usage and environment errors.
 	run(2, "replay")
 	run(2, "diff", paths[0], "--old", oldBin)
 	run(2, "frobnicate")

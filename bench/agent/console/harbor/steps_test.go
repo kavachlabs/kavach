@@ -128,7 +128,6 @@ func TestStepsWhileRunning(t *testing.T) {
 	if last.Kind != KindError || last.Title != "APIError: Provider returned error: 429 rate limited" {
 		t.Fatalf("last step %+v", last)
 	}
-	// A trial without agent logs (nop) has no steps.
 	if steps, err := r.Steps("nop-running", "hello-world-control__p3PHoHF"); err != nil || steps == nil || len(steps) != 0 {
 		t.Fatalf("%v %v", steps, err)
 	}
@@ -151,7 +150,6 @@ func TestStepsFromSessionExport(t *testing.T) {
 	  ]}
 	]}`
 	fsys := fstest.MapFS{"agent/opencode-session.json": {Data: []byte(export)}}
-	// While the attempt is live, the running read is a step, marked running.
 	steps, err := stepsFrom(fsys)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +158,6 @@ func TestStepsFromSessionExport(t *testing.T) {
 		steps[3].TMs != 800 || steps[3].Exit != nil || steps[2].Running {
 		t.Fatalf("live steps %+v", steps)
 	}
-	// Once the agent finished, a call the export still shows as running is not.
 	fsys["agent/opencode-live.json"] = &fstest.MapFile{Data: []byte(`{"finished": "2026-10-19T10:00:00Z"}`)}
 	steps, err = stepsFrom(fsys)
 	if err != nil {
@@ -177,12 +174,10 @@ func TestStepsFromSessionExport(t *testing.T) {
 	if steps[0].TMs != 0 || steps[1].TMs != 0 || steps[2].TMs != 700 || steps[1].Cost == nil || *steps[1].Cost != 0.5 || steps[1].Tokens.Cached != 3 {
 		t.Fatalf("times or usage: %+v", steps)
 	}
-	// The event log, once Harbor has it, wins.
 	fsys["agent/opencode.txt"] = &fstest.MapFile{Data: []byte(`{"type":"text","timestamp":1,"part":{"text":"from the log"}}` + "\n")}
 	if steps, err := stepsFrom(fsys); err != nil || len(steps) != 1 || steps[0].Title != "from the log" {
 		t.Fatalf("%+v %v", steps, err)
 	}
-	// An export that does not parse is an error, not an empty attempt.
 	if _, err := stepsFrom(fstest.MapFS{"agent/opencode-session.json": {Data: []byte("{")}}); err == nil {
 		t.Fatal("a broken export read as no steps")
 	}

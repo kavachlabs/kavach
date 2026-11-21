@@ -119,7 +119,6 @@ function step!(r::Recorder, source::String, position::String, data::Vector{UInt8
     return result
 end
 
-# close! ends the journal and waits, bounded, for the recorder to finish it.
 function close!(r::Recorder)
     r.proc === nothing && return
     send!(r, frame!(IOBuffer(), FRAME_CLOSE, UInt8[]) |> take!)
@@ -128,7 +127,6 @@ function close!(r::Recorder)
     wait(r.proc)
 end
 
-# The world, live: do the real thing and record it.
 
 function now_ns(r::Recorder)
     tv = Libc.TimeVal()

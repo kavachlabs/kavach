@@ -98,7 +98,6 @@ function _string(s, i)
     end
 end
 
-# writejson writes compact JSON; NamedTuple keys keep their order.
 writejson(io::IO, v::AbstractString) = (print(io, '"'); foreach(c -> _char(io, c), v); print(io, '"'))
 writejson(io::IO, v::Union{Integer,AbstractFloat}) = print(io, v)
 writejson(io::IO, v::Bool) = print(io, v)

@@ -64,7 +64,6 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// conformanceHost builds the Go conformance host once and returns its path.
 func conformanceHost(t *testing.T) string {
 	t.Helper()
 	buildHost.Do(func() {
@@ -184,7 +183,6 @@ func TestReplayHostStatuses(t *testing.T) {
 	}
 }
 
-// script is a host command that is a shell script.
 func script(body string) string { return "sh -c '" + body + "'" }
 
 const ready = `echo "{\"t\":\"ready\",\"protocol\":1,\"invariants\":[],\"environment\":{}}"`
@@ -805,7 +803,6 @@ func TestHostPoolStartGenesisAndSnapshotResets(t *testing.T) {
 		t.Fatalf("expected 1 spawned process across genesis/snapshot resets, got %d: %v", len(pids), pids)
 	}
 
-	// Invalid snapshot returns an error cleanly and does not break later valid runs.
 	if _, err := pool.Run(snapshotJournal(nil, "not-an-int", opsInput(`{"op":"ok","n":1}`))); err == nil || !strings.Contains(err.Error(), "restoring snapshot") {
 		t.Fatalf("invalid snapshot: got %v, want restoring snapshot error", err)
 	}
@@ -814,7 +811,6 @@ func TestHostPoolStartGenesisAndSnapshotResets(t *testing.T) {
 		t.Fatalf("post-invalid-snapshot genesis: got %v, %v", res, err)
 	}
 
-	// Handler without Snapshotter fails cleanly on StartSnapshot reset.
 	noSnapPool, err := replay.NewHostPool(poolHostCmd(t, "no-snapshot"))
 	if err != nil {
 		t.Fatal(err)
@@ -1001,11 +997,9 @@ func TestHostPoolEnvKeyIsolationAndClose(t *testing.T) {
 	if err := pool.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Second Close is idempotent.
 	if err := pool.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Idle hosts have been shut down.
 	for _, s := range []string{runs[0], runs[1]} {
 		pid, err := strconv.Atoi(s)
 		if err != nil {

@@ -62,7 +62,6 @@ echo one > "$JOBS/demo/a.txt"; echo two > "$JOBS/demo/b.txt"
 	runner.Wait("demo")
 	waitFor(t, func() bool { return s.State("demo").State == SyncSynced })
 	before := fake.count()
-	// Changed files, so there is something to upload when the Harbor starts.
 	later := time.Now().Add(time.Minute)
 	for _, f := range []string{"a.txt", "b.txt"} {
 		p := filepath.Join(runner.JobsDir, "demo", f)

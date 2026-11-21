@@ -30,7 +30,6 @@ typedef struct host {
 
 static host H;
 
-/* ---------------- I/O ---------------- */
 
 static void write_line(host* h) {
   kb_putc(&h->out, '\n');
@@ -135,7 +134,6 @@ static int decode_field(host* h, const kj* m, const char* key, uint8_t** out, si
   return 1;
 }
 
-/* ---------------- env operations ---------------- */
 
 static int op_now(kavach_env* e, int64_t* out) {
   host* h = e->ctx;
@@ -240,7 +238,6 @@ static int op_emit(kavach_env* e, const char* sink, const void* data, size_t len
 
 static const env_ops HOST_OPS = {op_now, op_rand, op_query, op_config, op_emit};
 
-/* ---------------- ready.environment ---------------- */
 
 /* Runs `kavach-recorder facts`; returns its stdout, or NULL if unavailable. */
 static char* run_facts(size_t* outlen) {
@@ -327,7 +324,6 @@ static void build_environment(host* h) {
   h->environment = (char*)b.p;
 }
 
-/* ---------------- protocol ---------------- */
 
 static void drop_handler(host* h) {
   if (h->have_h && h->h.destroy) h->h.destroy(h->h.state);

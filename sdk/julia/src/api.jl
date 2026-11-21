@@ -105,7 +105,6 @@ to_bytes(s::AbstractString) = Vector{UInt8}(codeunits(s))
 
 runtime() = "julia-$(VERSION)"
 
-# What went wrong in a step, as the marker records it.
 struct Failure
     kind::String
     message::String

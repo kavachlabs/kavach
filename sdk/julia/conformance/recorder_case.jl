@@ -9,7 +9,6 @@ using .KavachConformance
 
 spec_dir() = get(ENV, "KAVACH_SPEC_DIR", normpath(joinpath(@__DIR__, "..", "..", "..", "spec")))
 
-# Serves one step's scripted answers, in order, per kind.
 mutable struct Answers
     q::Dict{String,Vector{Any}}
 end

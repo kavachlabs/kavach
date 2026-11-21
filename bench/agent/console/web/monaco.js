@@ -126,8 +126,6 @@ function defineTheme() {
   });
 }
 
-// retheme redefines the editors' theme from the console's colour tokens,
-// after the console switched between light and dark.
 export function retheme() {
   if (!monaco) return;
   defineTheme();
@@ -174,7 +172,6 @@ const LANG = {
   md: "markdown", html: "html", css: "css", xml: "xml", proto: "protobuf", diff: "diff", patch: "diff",
 };
 
-// languageOf names the Monaco language of a file, from its extension.
 export function languageOf(path) {
   const base = String(path || "").split("/").pop();
   if (/^Dockerfile/i.test(base)) return "dockerfile";
@@ -195,7 +192,6 @@ const viewStates = new Map();
 const models = new Map();
 let currentTrial = "";
 
-// useTrial disposes every editor and model that belongs to another trial.
 export function useTrial(trial) {
   if (trial === currentTrial) return;
   currentTrial = trial;
@@ -215,7 +211,6 @@ function drop(key, e, keepView = true) {
   cache.delete(key);
 }
 
-// After a render, dispose the editors it didn't re-attach.
 let sweepQueued = false;
 function sweep() {
   sweepQueued = false;
@@ -234,8 +229,6 @@ const observer = new MutationObserver((records) => {
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
-// reattach returns a cached editor's element for the new tree, keeping
-// focus on it when it had it.
 function reattach(e) {
   const had = e.ed && e.host.contains(document.activeElement);
   if (had) queueMicrotask(() => { if (e.host.isConnected) e.ed.focus(); });

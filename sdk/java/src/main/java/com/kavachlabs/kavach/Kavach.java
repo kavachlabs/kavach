@@ -60,7 +60,6 @@ public final class Kavach {
         try {
             proto.close();
         } catch (IOException ignored) {
-            // the driver is gone
         }
         System.err.flush();
         System.exit(code);

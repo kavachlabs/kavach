@@ -141,7 +141,7 @@ class FrameLevel(unittest.TestCase):
         recs = [p for k, p in frames if k == wire.RECORD]
         gws = [p for p in recs if p[0] == wire.GATEWAY]
         self.assertEqual(len(gws), 2)
-        self.assertEqual(gws[0][-1], 1)  # local
+        self.assertEqual(gws[0][-1], 1)
         self.assertIn(b"down", gws[1])
         self.assertTrue(results[0].ok)
 
