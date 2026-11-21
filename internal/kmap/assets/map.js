@@ -246,11 +246,74 @@
     replayFixtureId: fixtures[0] ? fixtures[0].id : null,
     replayRunId: null,
     replaySeq: null,
+    compareMode: false,
+    replayPlaying: false,
+    replaySpeed: 1,
+    rawInspectorOpen: false,
+    compExpanded: false,
+    sourceLinksExpanded: false,
+    piiXrayView: "stacked",
     invFixtureId: fixtures[0] ? fixtures[0].id : null,
     overlayMode: overlays[0] ? overlays[0].mode : null,
     overlayLaneId: null,
     overlayStageId: null,
   };
+
+  function getCompareRuns(f) {
+    if (!f || !f.runs || !f.runs.length) return { oldRun: null, newRun: null, hasCompare: false };
+    const oldRun = f.runs.find((r) => r.build === "old") || f.runs.find((r) => r.id === "old") || null;
+    const newRun = f.runs.find((r) => r.build === "new") || f.runs.find((r) => r.id === "new") || null;
+    return { oldRun, newRun, hasCompare: Boolean(oldRun && newRun) };
+  }
+
+  function isCompareActive(f) {
+    const { hasCompare } = getCompareRuns(f);
+    return Boolean(hasCompare && state.compareMode);
+  }
+
+  function getAlignedSeqs(f) {
+    if (!f) return [];
+    const { oldRun, newRun, hasCompare } = getCompareRuns(f);
+    if (hasCompare && isCompareActive(f)) {
+      const seqSet = new Set();
+      for (const st of oldRun.steps || []) seqSet.add(st.seq);
+      for (const st of newRun.steps || []) seqSet.add(st.seq);
+      return Array.from(seqSet).sort((a, b) => a - b);
+    }
+    const r = (f.runs || []).find((x) => x.id === state.replayRunId) || defaultRunForFixture(f);
+    return r && r.steps ? r.steps.map((st) => st.seq) : [];
+  }
+
+  function isBadOutcome(outcome) {
+    return ["panic", "error", "invariant", "crash", "timeout", "diverged"].includes(outcome);
+  }
+
+  function outputsSig(step) {
+    if (!step || !step.outputs || !step.outputs.length) return "";
+    return step.outputs.map((o) => (o.sink || "") + ":" + (o.data || "")).join("|");
+  }
+
+  function firstDivergenceSeqForFixture(f, activeRun) {
+    if (!f) return null;
+    const { oldRun, newRun, hasCompare } = getCompareRuns(f);
+    if (hasCompare) {
+      if (newRun && newRun.divergence && newRun.divergence.seq !== undefined && newRun.divergence.seq !== null) {
+        return newRun.divergence.seq;
+      }
+      const oldBySeq = new Map((oldRun.steps || []).map((st) => [st.seq, st]));
+      const newBySeq = new Map((newRun.steps || []).map((st) => [st.seq, st]));
+      const seqs = Array.from(new Set([...oldBySeq.keys(), ...newBySeq.keys()])).sort((a, b) => a - b);
+      for (const seq of seqs) {
+        const os = oldBySeq.get(seq);
+        const ns = newBySeq.get(seq);
+        if (!os || !ns) return seq;
+        if (isBadOutcome(os.outcome) || (os.detected && os.detected.length)) return seq;
+        if (os.outcome !== ns.outcome || outputsSig(os) !== outputsSig(ns)) return seq;
+      }
+      if (oldRun.seq !== undefined && oldRun.seq !== null) return oldRun.seq;
+    }
+    return failingSeqForRun(f, activeRun || defaultRunForFixture(f));
+  }
 
   function ensureReplaySelection() {
     if (!fixtures.length) return;
@@ -259,9 +322,15 @@
     const runs = f.runs || [];
     const r = runs.find((x) => x.id === state.replayRunId) || defaultRunForFixture(f);
     state.replayRunId = r ? r.id : null;
-    if (r && r.steps && r.steps.length) {
-      if (!r.steps.some((st) => st.seq === state.replaySeq)) {
-        state.replaySeq = failingSeqForRun(f, r);
+    const { hasCompare } = getCompareRuns(f);
+    if (!hasCompare) {
+      state.compareMode = false;
+    }
+    const seqs = getAlignedSeqs(f);
+    if (seqs.length) {
+      if (!seqs.includes(state.replaySeq)) {
+        const defSeq = firstDivergenceSeqForFixture(f, r);
+        state.replaySeq = seqs.includes(defSeq) ? defSeq : seqs[0];
       }
     } else {
       state.replaySeq = null;
@@ -292,7 +361,8 @@
     if (state.tab === "map") {
       setHash("#map");
     } else if (state.tab === "replay" && state.replayFixtureId) {
-      const r = state.replayRunId || "recorded";
+      const f = fixtureMap.get(state.replayFixtureId);
+      const r = isCompareActive(f) ? "compare" : (state.replayRunId || "recorded");
       const s = state.replaySeq !== null && state.replaySeq !== undefined ? state.replaySeq : 0;
       setHash("#replay/" + encodeURIComponent(state.replayFixtureId) + "/" + encodeURIComponent(r) + "/" + encodeURIComponent(s));
     } else if (state.tab === "invariants" && state.invFixtureId) {
@@ -313,7 +383,16 @@
     if (parts[0] === "replay" && fixtures.length) {
       state.tab = "replay";
       if (parts[1] && fixtureMap.has(parts[1])) state.replayFixtureId = parts[1];
-      if (parts[2]) state.replayRunId = parts[2];
+      if (parts[2] === "compare") {
+        state.compareMode = true;
+        state.replayRunId = null;
+      } else if (parts[2]) {
+        state.compareMode = false;
+        state.replayRunId = parts[2];
+      } else {
+        state.compareMode = false;
+        state.replayRunId = null;
+      }
       if (parts[3] !== undefined && parts[3] !== "") {
         const num = Number(parts[3]);
         if (!Number.isNaN(num)) state.replaySeq = num;
@@ -334,12 +413,25 @@
 
   function jumpToReplay(fixtureId, runId, seq) {
     if (!fixtureMap.has(fixtureId)) return;
+    stopReplayPlayback();
     state.tab = "replay";
     state.selectedNodeId = null;
     state.showFlowsMenu = false;
     state.replayFixtureId = fixtureId;
-    state.replayRunId = runId || null;
+    if (runId === "compare") {
+      state.compareMode = true;
+      state.replayRunId = null;
+    } else if (runId) {
+      state.compareMode = false;
+      state.replayRunId = runId;
+    } else {
+      state.compareMode = false;
+      state.replayRunId = null;
+    }
     state.replaySeq = seq !== undefined && seq !== null ? Number(seq) : null;
+    replayRuntime.lastAnimatedKey = null;
+    replayRuntime.needsCameraFocus = true;
+    replayRuntime.userOverrodeCamera = false;
     ensureReplaySelection();
     syncHash();
     render();
@@ -438,10 +530,15 @@
         if (opts.selectedNodeId === n.id) cls.push("selected");
         if (dimmed) cls.push("dimmed");
         if (opts.flowActiveNodeId === n.id) cls.push("flow-active");
-        if (opts.hitRoles && opts.hitRoles.has(n.id)) {
-          cls.push("hit-" + opts.hitRoles.get(n.id));
-        } else if (opts.highlightNodes && opts.highlightNodes.has(n.id)) {
-          cls.push("path-active");
+        if (!opts.replayMode) {
+          if (opts.hitRoles && opts.hitRoles.has(n.id)) {
+            cls.push("hit-" + opts.hitRoles.get(n.id));
+          } else if (opts.highlightNodes && opts.highlightNodes.has(n.id)) {
+            cls.push("path-active");
+          }
+        }
+        if (opts.extraCardClasses && opts.extraCardClasses.has(n.id)) {
+          for (const ec of opts.extraCardClasses.get(n.id)) cls.push(ec);
         }
 
         const firstLink = n.links && n.links.length ? n.links[0] : null;
@@ -503,8 +600,8 @@
       }
       const vw = wrap.clientWidth || 960;
       const vh = wrap.clientHeight || 640;
-      const topPad = opts.caption ? 76 : 16;
-      const bottomPad = opts.caption ? 168 : 28;
+      const topPad = opts.topPad !== undefined ? opts.topPad : (opts.caption ? 76 : 16);
+      const bottomPad = opts.bottomPad !== undefined ? opts.bottomPad : (opts.caption ? 168 : 28);
       const sx = (vw - 32) / ww;
       const sy = (vh - topPad - bottomPad) / wh;
       view.scale = Math.max(0.28, Math.min(1.05, Math.min(sx, sy)));
@@ -525,6 +622,7 @@
           title: "Zoom out",
           on: {
             click: () => {
+              if (opts.onUserInteract) opts.onUserInteract("zoom");
               view.scale = Math.max(0.22, view.scale * 0.85);
               applyTransform();
             },
@@ -537,12 +635,24 @@
           title: "Zoom in",
           on: {
             click: () => {
+              if (opts.onUserInteract) opts.onUserInteract("zoom");
               view.scale = Math.min(2.2, view.scale * 1.18);
               applyTransform();
             },
           },
         }),
-        el("button", { className: "btn", style: "height:26px;border-radius:999px;padding:0 9px;border:none;", text: "Fit", title: "Fit to view", on: { click: fitToView } })
+        el("button", {
+          className: "btn",
+          style: "height:26px;border-radius:999px;padding:0 9px;border:none;",
+          text: "Fit",
+          title: "Fit to view",
+          on: {
+            click: () => {
+              if (opts.onUserInteract) opts.onUserInteract("fit");
+              fitToView();
+            },
+          },
+        })
       )
     );
 
@@ -554,7 +664,14 @@
     let startTy = 0;
 
     wrap.addEventListener("pointerdown", (e) => {
-      if (e.target.closest(".card") || e.target.closest(".zoom-bar") || e.target.closest(".walkthrough-bar") || e.target.closest(".inspector") || e.target.closest(".flows-popover")) return;
+      if (
+        e.target.closest(".card") ||
+        e.target.closest(".zoom-bar") ||
+        e.target.closest(".walkthrough-bar") ||
+        e.target.closest(".inspector") ||
+        e.target.closest(".flows-popover")
+      ) return;
+      if (opts.onUserInteract) opts.onUserInteract("pan");
       dragging = true;
       moved = false;
       dragStartX = e.clientX;
@@ -588,6 +705,7 @@
       (e) => {
         if (!e.ctrlKey && !e.metaKey) return;
         e.preventDefault();
+        if (opts.onUserInteract) opts.onUserInteract("wheel");
         const rect = wrap.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
@@ -602,8 +720,13 @@
       { passive: false }
     );
 
+    const edgePathMap = new Map();
+    const cardGeom = new Map();
+
     function drawEdges() {
       while (svg.firstChild) svg.removeChild(svg.firstChild);
+      edgePathMap.clear();
+      cardGeom.clear();
 
       let maxW = groups.length * COL_W + PAD_X * 2;
       let maxH = 420;
@@ -616,6 +739,16 @@
       svg.setAttribute("width", String(maxW));
       svg.setAttribute("height", String(maxH));
       svg.setAttribute("viewBox", "0 0 " + maxW + " " + maxH);
+
+      for (const [nid, info] of cardEls.entries()) {
+        const col = info.el.offsetParent;
+        if (!col) continue;
+        const x = col.offsetLeft + info.el.offsetLeft;
+        const y = col.offsetTop + info.el.offsetTop;
+        const w = info.el.offsetWidth || CARD_W;
+        const h = info.el.offsetHeight || 72;
+        cardGeom.set(nid, { x, y, w, h, cx: x + w / 2, cy: y + h / 2, el: info.el });
+      }
 
       const hasEdgeHL = opts.highlightEdges && opts.highlightEdges.size > 0;
       const hasNodeHL = opts.highlightNodes && opts.highlightNodes.size > 0;
@@ -633,7 +766,7 @@
       ordered.sort((a, b) => Number(a.isHL) - Number(b.isHL));
 
       for (const item of ordered) {
-        const { e, isHL } = item;
+        const { e, idx, isHL } = item;
         const src = cardEls.get(e.from);
         const dst = cardEls.get(e.to);
         if (!src || !dst) continue;
@@ -700,20 +833,26 @@
         const kind = e.kind || "flows";
         const isDim = (hasEdgeHL || hasNodeHL) && !isHL;
         const pathCls = ["edge-path", "kind-" + kind];
-        if (isHL) pathCls.push("highlighted");
+        if (isHL && !opts.replayMode) pathCls.push("highlighted");
         if (isDim) pathCls.push("dimmed");
+        if (opts.extraEdgeClasses && opts.extraEdgeClasses.has(idx)) {
+          for (const ec of opts.extraEdgeClasses.get(idx)) pathCls.push(ec);
+        }
 
-        svg.appendChild(svgEl("path", { class: pathCls.join(" "), d: buildOrthoPath(pts, 10) }));
+        const pathD = buildOrthoPath(pts, 10);
+        const pathEl = svgEl("path", { class: pathCls.join(" "), d: pathD });
+        svg.appendChild(pathEl);
+        edgePathMap.set(idx, { pathEl, pts, d: pathD, e, labelX, labelY });
 
         const portCls = ["edge-port", "kind-" + kind];
-        if (isHL) portCls.push("highlighted");
+        if (isHL && !opts.replayMode) portCls.push("highlighted");
         if (isDim) portCls.push("dimmed");
         svg.appendChild(svgEl("circle", { class: portCls.join(" "), cx: pts[0][0], cy: pts[0][1], r: isHL ? "3.2" : "2.4" }));
         const lastPt = pts[pts.length - 1];
         svg.appendChild(svgEl("circle", { class: portCls.join(" "), cx: lastPt[0], cy: lastPt[1], r: isHL ? "3.2" : "2.4" }));
 
         const labelText = e.label || (e.auto && e.count > 0 ? kind + " ×" + e.count : "");
-        if (labelText && isHL) {
+        if (labelText && isHL && !opts.suppressEdgeLabels) {
           const lblCls = ["edge-label", "highlighted"];
           const approxW = Math.min(168, labelText.length * 6 + 12);
           svg.appendChild(svgEl("rect", { class: "edge-label-bg", x: labelX - approxW / 2, y: labelY - 9, width: approxW, height: 16, rx: 4 }));
@@ -724,8 +863,14 @@
 
     requestAnimationFrame(() => {
       drawEdges();
-      if (!view.initialized) fitToView();
-      else applyTransform();
+      if (!view.initialized) {
+        if (!opts.skipInitialFit) fitToView();
+      } else {
+        applyTransform();
+      }
+      if (opts.onAfterDraw) {
+        opts.onAfterDraw({ svg, world, wrap, cardEls, cardGeom, edgePathMap, view, applyTransform, fitToView });
+      }
     });
 
     return wrap;
@@ -744,9 +889,15 @@
           text: label,
           on: {
             click: () => {
+              stopReplayPlayback();
               state.tab = id;
               state.showFlowsMenu = false;
-              if (id === "replay") ensureReplaySelection();
+              if (id === "replay") {
+                replayRuntime.needsCameraFocus = true;
+                replayRuntime.userOverrodeCamera = false;
+                replayRuntime.lastAnimatedKey = null;
+                ensureReplaySelection();
+              }
               if (id.startsWith("mode:")) ensureOverlaySelection(id.slice(5));
               syncHash();
               render();
@@ -1186,26 +1337,442 @@
     return canvas;
   }
 
-  function computeReplayHighlight(step) {
+  const replayRuntime = {
+    playTimer: null,
+    animRaf: null,
+    zoomRaf: null,
+    hopTimers: [],
+    animToken: 0,
+    activeCanvasCtx: null,
+    lastAnimatedKey: null,
+    needsCameraFocus: true,
+    userOverrodeCamera: false,
+  };
+
+  function prefersReducedMotion() {
+    return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  function clearHopTimers() {
+    for (const id of replayRuntime.hopTimers) clearTimeout(id);
+    replayRuntime.hopTimers = [];
+  }
+
+  function stopReplayAnim() {
+    replayRuntime.animToken += 1;
+    clearHopTimers();
+    if (replayRuntime.animRaf !== null) {
+      cancelAnimationFrame(replayRuntime.animRaf);
+      replayRuntime.animRaf = null;
+    }
+  }
+
+  function stopZoomAnim() {
+    if (replayRuntime.zoomRaf !== null) {
+      cancelAnimationFrame(replayRuntime.zoomRaf);
+      replayRuntime.zoomRaf = null;
+    }
+  }
+
+  function stopReplayPlayback() {
+    if (replayRuntime.playTimer !== null) {
+      clearTimeout(replayRuntime.playTimer);
+      replayRuntime.playTimer = null;
+    }
+    state.replayPlaying = false;
+  }
+
+  function parseJsonSafe(s) {
+    if (!s || typeof s !== "string") return null;
+    try {
+      return JSON.parse(s);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function formatTruncatedJson(s) {
+    const t = String(s || "").trim();
+    if (!t || (t[0] !== "{" && t[0] !== "[")) return s;
+    let out = "";
+    let indent = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (inStr) {
+        out += ch;
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = true;
+        out += ch;
+      } else if (ch === "{" || ch === "[") {
+        const next = t[i + 1];
+        if ((ch === "{" && next === "}") || (ch === "[" && next === "]")) {
+          out += ch + next;
+          i++;
+        } else {
+          indent++;
+          out += ch + "\n" + "  ".repeat(indent);
+        }
+      } else if (ch === "}" || ch === "]") {
+        indent = Math.max(0, indent - 1);
+        out += "\n" + "  ".repeat(indent) + ch;
+      } else if (ch === ",") {
+        out += ",\n" + "  ".repeat(indent);
+      } else if (ch === ":") {
+        out += ": ";
+      } else if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") {
+        // strip raw whitespace outside strings
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  function prettyJson(s) {
+    if (!s) return "";
+    const obj = parseJsonSafe(s);
+    if (obj !== null) return JSON.stringify(obj, null, 2);
+    return formatTruncatedJson(s);
+  }
+
+  function sourceFileIconSVG() {
+    return svgEl(
+      "svg",
+      {
+        class: "sb-source-file-icon",
+        width: "12",
+        height: "12",
+        viewBox: "0 0 16 16",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "1.5",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        "aria-hidden": "true",
+      },
+      svgEl("path", { d: "M9.5 2H4.5A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V5.5L9.5 2z" }),
+      svgEl("path", { d: "M9.5 2v3.5H13" })
+    );
+  }
+
+  function parseSourceLinkRef(rawText) {
+    const text = String(rawText || "").trim();
+    let pathPart = text;
+    let linePart = "";
+    const colonIdx = text.lastIndexOf(":");
+    if (colonIdx > 0 && colonIdx < text.length - 1) {
+      const suffix = text.slice(colonIdx + 1);
+      if (/^\d+(-\d+)?$/.test(suffix)) {
+        pathPart = text.slice(0, colonIdx);
+        linePart = ":" + suffix;
+      }
+    }
+    const slashIdx = pathPart.lastIndexOf("/");
+    const dirPart = slashIdx >= 0 ? pathPart.slice(0, slashIdx + 1) : "";
+    const filePart = slashIdx >= 0 ? pathPart.slice(slashIdx + 1) : pathPart;
+    return { full: text, dir: dirPart, file: filePart, lines: linePart };
+  }
+
+  function buildSourceLinkRow(lk) {
+    const parsed = parseSourceLinkRef(lk.text || lk.url);
+    const isExt = typeof lk.url === "string" && /^https?:\/\//i.test(lk.url);
+    const pathEl = el(
+      "span",
+      { className: "sb-source-path" },
+      parsed.dir ? el("span", { className: "sb-source-dir", text: parsed.dir }) : null,
+      el("span", { className: "sb-source-file", text: parsed.file || parsed.full })
+    );
+    const lineEl = parsed.lines ? el("span", { className: "sb-source-lines", text: parsed.lines }) : null;
+
+    if (isExt) {
+      const a = el(
+        "a",
+        {
+          className: "sb-source-row is-external",
+          title: parsed.full || lk.url,
+        },
+        sourceFileIconSVG(),
+        pathEl,
+        lineEl,
+        el("span", { className: "sb-source-ext", text: "↗", attrs: { "aria-hidden": "true" } })
+      );
+      a.setAttribute("href", lk.url);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener");
+      a.addEventListener("click", (e) => e.stopPropagation());
+      return a;
+    }
+
+    return el(
+      "div",
+      {
+        className: "sb-source-row is-local",
+        title: parsed.full,
+      },
+      sourceFileIconSVG(),
+      pathEl,
+      lineEl
+    );
+  }
+
+  function formatStepOutputText(o) {
+    const body = prettyJson(decodeMaybeB64((o && o.data) || "(empty)"));
+    if (!o || !o.sink) return body;
+    return body.includes("\n") ? "[" + o.sink + "]\n" + body : "[" + o.sink + "] " + body;
+  }
+
+  function decodeMaybeB64(s) {
+    if (!s) return "";
+    try {
+      const raw = atob(s);
+      if (/^[\x20-\x7e\r\n\t]+$/.test(raw)) return raw;
+    } catch (_) {}
+    return s;
+  }
+
+  function findTokenizedPair(f) {
+    if (!f) return null;
+    if (f.id.endsWith(".tokenized")) {
+      const rawId = f.id.slice(0, -".tokenized".length);
+      const rawFx = fixtureMap.get(rawId);
+      return rawFx ? { rawFixture: rawFx, tokenizedFixture: f, isViewingTokenized: true } : null;
+    }
+    const tokFx = fixtureMap.get(f.id + ".tokenized");
+    return tokFx ? { rawFixture: f, tokenizedFixture: tokFx, isViewingTokenized: false } : null;
+  }
+
+  function findStepInFixture(fx, seq, preferredBuild) {
+    if (!fx || !fx.runs) return null;
+    const run =
+      (preferredBuild && fx.runs.find((r) => r.build === preferredBuild || r.id === preferredBuild)) ||
+      fx.runs.find((r) => r.build === "old") ||
+      fx.runs[0];
+    if (!run || !run.steps) return null;
+    return run.steps.find((st) => st.seq === seq) || null;
+  }
+
+  function findOverlayLaneForFixture(fx) {
+    if (!fx || !overlays.length) return null;
+    const baseId = fx.id.replace(/\.tokenized$/, "");
+    const preferredOv = overlayMap.get("shadow") || overlays[0];
+    if (!preferredOv) return null;
+    for (const lane of preferredOv.lanes || []) {
+      if (lane.id === fx.id || lane.id === baseId) return { overlay: preferredOv, lane };
+      for (const st of lane.stages || []) {
+        if ((st.runs || []).some((rid) => rid === fx.id || rid === baseId)) {
+          return { overlay: preferredOv, lane };
+        }
+      }
+    }
+    return preferredOv.lanes && preferredOv.lanes.length ? { overlay: preferredOv, lane: preferredOv.lanes[0] } : null;
+  }
+
+  function findCompensateItems(fx) {
+    const match = findOverlayLaneForFixture(fx);
+    if (!match || !match.lane || !match.lane.stages) return [];
+    const compStage = match.lane.stages.find((st) => st.id === "compensate");
+    return compStage && compStage.items ? compStage.items : [];
+  }
+
+  function formatMoney(amount, currency) {
+    if (amount === undefined || amount === null) return "";
+    const cur = String(currency || "").toUpperCase();
+    if (!cur || cur === "USD") return "$" + amount;
+    if (cur === "EUR") return "€" + amount;
+    return amount + " " + cur;
+  }
+
+  function formatStepTitle(step) {
+    if (!step) return "Step";
+    const pos = String(step.position || "");
+    const obj = parseJsonSafe(step.input);
+    const omMatch = pos.match(/^([A-Z]+)\s+\/api\/v\d+\/openmeter\/(.+)$/i);
+    if (omMatch) {
+      return omMatch[1].toUpperCase() + " /openmeter/" + omMatch[2];
+    }
+    const fmMatch = pos.match(/^([A-Z]+)\s+\/v\d+\/ledgers\/[^/]+\/apply$/i);
+    if (fmMatch) {
+      let opName = obj && obj.op ? String(obj.op) : "apply";
+      if (opName === "create_tx" && obj && Array.isArray(obj.orders) && obj.orders[0] && obj.orders[0].op === "revert_tx") {
+        opName = "revert_tx";
+      }
+      return fmMatch[1].toUpperCase() + " /ledgers/apply · " + opName;
+    }
+    return pos || step.source || "Step";
+  }
+
+  function formatStepSubtitle(step, isFailure) {
+    if (!step) return "";
+    if (isFailure) {
+      const reason = step.message || (step.detected && step.detected.length ? step.detected.join(", ") : step.outcome);
+      return "Failed: " + reason;
+    }
+    const obj = parseJsonSafe(step.input);
+    if (obj && typeof obj === "object") {
+      if (obj.op === "transaction" && obj.transaction) {
+        const t = obj.transaction;
+        const kind = t.inflight ? "hold" : t.source ? "transfer" : "credit";
+        const amt = formatMoney(t.amount, t.currency);
+        const tail = t.description || (t.source && t.destination ? t.source + " → " + t.destination : t.destination || "");
+        return [kind, amt, tail].filter(Boolean).join(" · ");
+      }
+      if (obj.op === "inflight_commit") {
+        return "capture · " + (obj.description || obj.parent_reference || obj.reference || "");
+      }
+      if (obj.op === "inflight_void") {
+        return "release hold · " + (obj.description || obj.parent_reference || obj.reference || "");
+      }
+      if (obj.bulk && Array.isArray(obj.bulk.transactions)) {
+        const txs = obj.bulk.transactions;
+        const firstDesc = txs[0] && txs[0].description ? " — " + txs[0].description : "";
+        return txs.length + " bulk tx" + firstDesc;
+      }
+      if (Array.isArray(obj.transactions)) {
+        return obj.transactions.length + " transactions";
+      }
+      if (obj.owner_key) {
+        if (obj.op === "create_grant" && obj.amount !== undefined) {
+          return obj.owner_key + " · +" + obj.amount + " credits" + (obj.recurrence_interval ? " (recurring)" : "");
+        }
+        if (obj.op === "ingest_usage" && obj.usage !== undefined) {
+          return obj.owner_key + " · -" + obj.usage + " usage";
+        }
+        if (obj.op === "init_entitlement") {
+          return obj.owner_key + (obj.period_interval ? " · " + String(obj.period_interval).toLowerCase() : "");
+        }
+        if (obj.op === "reset_usage") {
+          return obj.owner_key + " · reset period";
+        }
+        if (obj.op === "verify_balance" || obj.op === "verify_history") {
+          return obj.owner_key + " · verify " + (obj.op === "verify_history" ? "history" : "balance");
+        }
+        return String(obj.owner_key);
+      }
+      if (obj.op === "set_cluster_policy" && obj.policy) {
+        return "max_command_bytes=" + (obj.policy.max_command_bytes !== undefined ? obj.policy.max_command_bytes : "?");
+      }
+      if (obj.op === "create_ledger" && obj.ledger) {
+        return "ledger: " + obj.ledger;
+      }
+      if (Array.isArray(obj.orders) && obj.orders.length) {
+        const o = obj.orders[0];
+        if (o.op === "revert_tx") {
+          return "revert tx #" + (o.tx_id !== undefined ? o.tx_id : "?") + (obj.orders.length > 1 ? " (+" + (obj.orders.length - 1) + ")" : "");
+        }
+        if (Array.isArray(o.postings) && o.postings[0]) {
+          const p = o.postings[0];
+          return (p.source || "?") + " → " + (p.destination || "?") + " (" + p.amount + " " + (p.asset || "") + ")";
+        }
+        if (o.reference) return String(o.reference);
+      }
+      if (obj.op) return String(obj.op);
+    }
+    return step.source || "";
+  }
+
+  function buildStepExplanation(f, primaryStep, oldStep, newStep, compareOn, isDivStep, stepNum, totalSteps, activeRun) {
+    const titlePrefix = "Step " + stepNum + " of " + totalSteps + " · What happened";
+    const refStep = primaryStep || oldStep || newStep;
+    if (!refStep) {
+      return { tone: "is-ok", title: titlePrefix, text: "No step selected." };
+    }
+    const opDesc = formatStepTitle(refStep) + (formatStepSubtitle(refStep, false) ? " (" + formatStepSubtitle(refStep, false) + ")" : "");
+    const oldBad = Boolean(oldStep && (isBadOutcome(oldStep.outcome) || (oldStep.detected && oldStep.detected.length)));
+    const newBad = Boolean(newStep && (isBadOutcome(newStep.outcome) || (newStep.detected && newStep.detected.length)));
+
+    if (compareOn && isDivStep && oldStep && newStep) {
+      const oldReason = oldStep.message || (oldStep.detected && oldStep.detected.length ? oldStep.detected.join(", ") : oldStep.outcome);
+      const newInvVals = Object.values(newStep.invariants || {});
+      const passCount = newInvVals.filter((v) => v === "pass").length;
+      if (oldBad && !newBad) {
+        return {
+          tone: "is-warn",
+          title: titlePrefix,
+          text:
+            opDesc +
+            " diverged between builds. Unpatched failed (" +
+            oldReason +
+            "), whereas Patched completed cleanly" +
+            (passCount ? " with " + passCount + "/" + newInvVals.length + " invariants passing." : "."),
+        };
+      }
+      return {
+        tone: "is-warn",
+        title: titlePrefix,
+        text: opDesc + " produced different outputs between Unpatched (" + oldStep.outcome + ") and Patched (" + newStep.outcome + ").",
+      };
+    }
+
+    const isBad = isBadOutcome(refStep.outcome) || (refStep.detected && refStep.detected.length > 0);
+    const invEntries = Object.entries(refStep.invariants || {});
+    const failedInvs = invEntries.filter(([, v]) => v === "fail").map(([k]) => k);
+    const passCount = invEntries.filter(([, v]) => v === "pass").length;
+
+    if (isBad) {
+      const reason = refStep.message || (refStep.detected && refStep.detected.length ? refStep.detected.join(", ") : refStep.outcome);
+      const invNote = failedInvs.length ? " Violated invariant: " + failedInvs.join(", ") + "." : "";
+      return {
+        tone: "is-fail",
+        title: titlePrefix,
+        text: opDesc + " failed: " + reason + "." + invNote,
+      };
+    }
+
+    const isFixedStep = Boolean(activeRun && activeRun.build === "new" && oldStep && oldBad);
+    if (isFixedStep) {
+      return {
+        tone: "is-ok",
+        title: titlePrefix,
+        text:
+          "Fixed in Patched: " +
+          opDesc +
+          " succeeded cleanly" +
+          (invEntries.length ? " and " + passCount + "/" + invEntries.length + " invariants passed." : "."),
+      };
+    }
+
+    return {
+      tone: "is-ok",
+      title: titlePrefix,
+      text:
+        opDesc +
+        " completed normally" +
+        (invEntries.length ? " with " + passCount + "/" + invEntries.length + " invariants passing." : "."),
+    };
+  }
+
+  function buildCausalPlan(step) {
     const hlNodes = new Set();
     const hlEdges = new Set();
     const hitRoles = new Map();
-    if (!step) return { hlNodes, hlEdges, hitRoles };
-
+    const bugNodes = new Set();
+    const passNodes = new Set();
+    const stageByEdge = new Map();
     const inputs = [];
+    if (!step) return { hlNodes, hlEdges, hitRoles, bugNodes, passNodes, inputs, stageByEdge, maxStage: -1 };
+
     const targets = [];
     for (const h of step.hits || []) {
       hlNodes.add(h.node);
       const prev = hitRoles.get(h.node);
       if (h.role === "failure" || !prev) hitRoles.set(h.node, h.role);
-      if (h.role === "input") inputs.push(h.node);
+      if (h.role === "input" && !inputs.includes(h.node)) inputs.push(h.node);
       if (h.role === "output" || h.role === "failure") targets.push(h.node);
+      if (h.role === "failure") bugNodes.add(h.node);
     }
     for (const invName of step.detected || []) {
       for (const n of nodes) {
         if (n.kind === "invariant" && n.invariant === invName) {
           hlNodes.add(n.id);
           hitRoles.set(n.id, "failure");
+          bugNodes.add(n.id);
           targets.push(n.id);
         }
       }
@@ -1237,16 +1804,576 @@
         }
       }
     }
-    return { hlNodes, hlEdges, hitRoles };
+
+    if (bugNodes.size > 0) {
+      edges.forEach((e, idx) => {
+        if (e.kind === "breaks" && hlNodes.has(e.from) && hlNodes.has(e.to)) {
+          hlEdges.add(idx);
+        }
+      });
+    }
+
+    if (step.invariants) {
+      edges.forEach((e, idx) => {
+        if (e.kind !== "checks" || !hlNodes.has(e.from)) return;
+        const dstNode = nodeMap.get(e.to);
+        if (!dstNode || dstNode.kind !== "invariant") return;
+        const stVal = step.invariants[dstNode.invariant];
+        if (stVal === "pass" || stVal === "fail") {
+          hlNodes.add(e.to);
+          hlEdges.add(idx);
+          if (stVal === "pass") passNodes.add(e.to);
+          if (stVal === "fail") {
+            bugNodes.add(e.to);
+            hitRoles.set(e.to, "failure");
+          }
+        }
+      });
+    }
+
+    const dist = new Map();
+    const q = [];
+    for (const src of inputs) {
+      dist.set(src, 0);
+      q.push(src);
+    }
+    let head = 0;
+    while (head < q.length) {
+      const cur = q[head++];
+      const d = dist.get(cur);
+      for (const edgeRef of adjOut.get(cur) || []) {
+        if (!hlEdges.has(edgeRef.edgeIdx)) continue;
+        if (!dist.has(edgeRef.to)) {
+          dist.set(edgeRef.to, d + 1);
+          q.push(edgeRef.to);
+        }
+      }
+    }
+
+    let maxNonCheckStage = -1;
+    for (const eIdx of hlEdges) {
+      const e = edges[eIdx];
+      if (e.kind === "checks") continue;
+      const stg = dist.has(e.from) ? dist.get(e.from) : 0;
+      stageByEdge.set(eIdx, stg);
+      if (stg > maxNonCheckStage) maxNonCheckStage = stg;
+    }
+
+    let maxStage = maxNonCheckStage;
+    const checkStage = maxNonCheckStage >= 0 ? maxNonCheckStage + 1 : 0;
+    for (const eIdx of hlEdges) {
+      const e = edges[eIdx];
+      if (e.kind !== "checks") continue;
+      const stg = Math.max(dist.has(e.from) ? dist.get(e.from) : 0, checkStage);
+      stageByEdge.set(eIdx, stg);
+      if (stg > maxStage) maxStage = stg;
+    }
+
+    return { hlNodes, hlEdges, hitRoles, bugNodes, passNodes, inputs, stageByEdge, maxStage };
   }
 
-  function decodeMaybeB64(s) {
-    if (!s) return "";
-    try {
-      const raw = atob(s);
-      if (/^[\x20-\x7e\r\n\t]+$/.test(raw)) return raw;
-    } catch (_) {}
-    return s;
+  function animateViewTransform(ctx, targetTx, targetTy, targetScale, durationMs) {
+    stopZoomAnim();
+    if (!ctx || !ctx.view || !ctx.applyTransform) return;
+    if (prefersReducedMotion() || durationMs <= 0) {
+      ctx.view.tx = targetTx;
+      ctx.view.ty = targetTy;
+      ctx.view.scale = targetScale;
+      ctx.view.initialized = true;
+      ctx.applyTransform();
+      return;
+    }
+    const startTx = ctx.view.tx;
+    const startTy = ctx.view.ty;
+    const startScale = ctx.view.scale;
+    ctx.view.initialized = true;
+    const t0 = performance.now();
+    function tick(now) {
+      const u = Math.min(1, (now - t0) / durationMs);
+      const ease = 1 - Math.pow(1 - u, 3);
+      ctx.view.tx = startTx + (targetTx - startTx) * ease;
+      ctx.view.ty = startTy + (targetTy - startTy) * ease;
+      ctx.view.scale = startScale + (targetScale - startScale) * ease;
+      ctx.applyTransform();
+      if (u < 1) replayRuntime.zoomRaf = requestAnimationFrame(tick);
+      else replayRuntime.zoomRaf = null;
+    }
+    replayRuntime.zoomRaf = requestAnimationFrame(tick);
+  }
+
+  function focusNodesFitSmooth(ctx, nodeIds, immediate) {
+    if (!ctx || !ctx.cardGeom || !ctx.wrap) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let count = 0;
+    for (const nid of nodeIds) {
+      const g = ctx.cardGeom.get(nid);
+      if (!g) continue;
+      minX = Math.min(minX, g.x);
+      minY = Math.min(minY, g.y);
+      maxX = Math.max(maxX, g.x + g.w);
+      maxY = Math.max(maxY, g.y + g.h);
+      count++;
+    }
+    if (!count) {
+      if (!ctx.view.initialized && ctx.fitToView) ctx.fitToView();
+      return;
+    }
+    const vw = ctx.wrap.clientWidth || 960;
+    const vh = ctx.wrap.clientHeight || 640;
+    const padX = 28;
+    const padY = 40;
+    const boxW = Math.max(248, maxX - minX) + padX * 2;
+    const boxH = Math.max(96, maxY - minY) + padY * 2;
+    const rawScale = Math.min((vw - 32) / boxW, (vh - 32) / boxH);
+    const targetScale = Math.max(0.62, Math.min(1.15, rawScale));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const targetTx = vw / 2 - cx * targetScale;
+    const targetTy = vh / 2 - cy * targetScale;
+    animateViewTransform(ctx, targetTx, targetTy, targetScale, immediate ? 0 : 360);
+  }
+
+  function scheduleHopTimeout(token, fn, ms) {
+    const id = setTimeout(() => {
+      replayRuntime.hopTimers = replayRuntime.hopTimers.filter((x) => x !== id);
+      if (replayRuntime.animToken !== token) return;
+      fn();
+    }, ms);
+    replayRuntime.hopTimers.push(id);
+    return id;
+  }
+
+  function runSequentialHopAnimation(ctx, config, onDone) {
+    stopReplayAnim();
+    const myToken = replayRuntime.animToken;
+    if (!ctx || !ctx.svg || !ctx.edgePathMap || !ctx.cardGeom) {
+      if (onDone) onDone(myToken);
+      return;
+    }
+
+    const { isSplitCompare, oldPlan, newPlan, singlePlan, singleBad, animatePackets } = config;
+    const fxLayer = svgEl("g", { class: "kmap-fx-layer" });
+    ctx.svg.appendChild(fxLayer);
+    const overlayEdgesLayer = svgEl("g", { class: "kmap-hop-edges-layer" });
+    ctx.svg.insertBefore(overlayEdgesLayer, fxLayer);
+
+    const speed = state.replaySpeed || 1;
+    const hopMs = Math.max(200, Math.round(420 / speed));
+
+    function cardEl(nid) {
+      const g = ctx.cardGeom.get(nid);
+      return g ? g.el : null;
+    }
+
+    function spawnRipple(nid, isBug) {
+      if (prefersReducedMotion()) return;
+      const g = ctx.cardGeom.get(nid);
+      if (!g) return;
+      fxLayer.appendChild(
+        svgEl("circle", {
+          class: isBug ? "fx-shockwave" : "fx-pass-ripple",
+          cx: g.cx,
+          cy: g.cy,
+          r: isBug ? "24" : "22",
+        })
+      );
+    }
+
+    function addOverlayPath(edgeIdx, clsName, splitOffset) {
+      const info = ctx.edgePathMap.get(edgeIdx);
+      if (!info) return null;
+      const pts = splitOffset ? info.pts.map(([x, y]) => [x, y + splitOffset]) : info.pts;
+      const p = svgEl("path", { class: "edge-path " + clsName, d: buildOrthoPath(pts, 10) });
+      overlayEdgesLayer.appendChild(p);
+      return p;
+    }
+
+    function buildStages(plan, modeKind, useSplitOffsets) {
+      const byStage = new Map();
+      for (const eIdx of plan.hlEdges) {
+        const stg = plan.stageByEdge.get(eIdx) || 0;
+        if (!byStage.has(stg)) byStage.set(stg, []);
+        const e = edges[eIdx];
+        const info = ctx.edgePathMap.get(eIdx);
+        if (!info || !info.pathEl) continue;
+
+        let pathEl = info.pathEl;
+        let isOverlay = false;
+        if (useSplitOffsets) {
+          const sharedBoth = oldPlan && newPlan && oldPlan.hlEdges.has(eIdx) && newPlan.hlEdges.has(eIdx);
+          const dstNode = nodeMap.get(e.to);
+          const needsSplit = sharedBoth && dstNode && (dstNode.kind === "sink" || dstNode.kind === "invariant");
+          const offset = needsSplit ? (modeKind === "old" ? 3.5 : -3.5) : 0;
+          pathEl = addOverlayPath(eIdx, modeKind === "old" ? "hop-edge-old" : "hop-edge-new", offset) || info.pathEl;
+          pathEl.style.opacity = "0";
+          isOverlay = true;
+        }
+
+        let edgeTone = "healthy";
+        if (modeKind === "old") edgeTone = "old";
+        else if (modeKind === "new") edgeTone = "new";
+        else if (e.kind === "breaks" || plan.bugNodes.has(e.to) || (singleBad && (e.kind === "emits" || plan.bugNodes.has(e.from)))) edgeTone = "bug";
+        else if (e.kind === "checks" && plan.passNodes.has(e.to)) edgeTone = "pass";
+
+        byStage.get(stg).push({ edgeIdx: eIdx, e, pathEl, isOverlay, edgeTone });
+      }
+      const keys = Array.from(byStage.keys()).sort((a, b) => a - b);
+      return keys.map((k) => byStage.get(k));
+    }
+
+    function applyFinalStatic() {
+      if (isSplitCompare && oldPlan && newPlan) {
+        for (const nid of oldPlan.hlNodes) {
+          const elNode = cardEl(nid);
+          if (!elNode) continue;
+          if (oldPlan.bugNodes.has(nid)) elNode.classList.add("hop-bug");
+          else if (!newPlan.hlNodes.has(nid)) elNode.classList.add("hop-visited", "hop-old");
+        }
+        for (const nid of newPlan.hlNodes) {
+          const elNode = cardEl(nid);
+          if (!elNode) continue;
+          if (newPlan.passNodes.has(nid)) elNode.classList.add("hop-active", "hop-pass");
+          else elNode.classList.add("hop-visited", "hop-new");
+        }
+        for (const eIdx of oldPlan.hlEdges) {
+          const info = ctx.edgePathMap.get(eIdx);
+          if (!info) continue;
+          const e = edges[eIdx];
+          const inNew = newPlan.hlEdges.has(eIdx);
+          const dstNode = nodeMap.get(e.to);
+          const isSplit = inNew && dstNode && (dstNode.kind === "sink" || dstNode.kind === "invariant");
+          if (!inNew) {
+            info.pathEl.classList.add("hop-edge-old");
+          } else if (isSplit) {
+            addOverlayPath(eIdx, "hop-edge-old", 3.5);
+          }
+        }
+        for (const eIdx of newPlan.hlEdges) {
+          const info = ctx.edgePathMap.get(eIdx);
+          if (!info) continue;
+          const e = edges[eIdx];
+          const inOld = oldPlan.hlEdges.has(eIdx);
+          const dstNode = nodeMap.get(e.to);
+          const isSplit = inOld && dstNode && (dstNode.kind === "sink" || dstNode.kind === "invariant");
+          if (isSplit) {
+            addOverlayPath(eIdx, "hop-edge-new", -3.5);
+          } else {
+            info.pathEl.classList.add("hop-edge-new");
+          }
+        }
+      } else if (singlePlan) {
+        const outIds = new Set();
+        for (const eIdx of singlePlan.hlEdges) outIds.add(edges[eIdx].from);
+        for (const nid of singlePlan.hlNodes) {
+          const elNode = cardEl(nid);
+          if (!elNode) continue;
+          if (singlePlan.bugNodes.has(nid)) {
+            elNode.classList.add("hop-bug");
+          } else if (singlePlan.passNodes.has(nid)) {
+            elNode.classList.add("hop-active", "hop-pass");
+          } else if (!outIds.has(nid)) {
+            elNode.classList.add("hop-active");
+          } else {
+            elNode.classList.add("hop-visited");
+          }
+        }
+        for (const eIdx of singlePlan.hlEdges) {
+          const info = ctx.edgePathMap.get(eIdx);
+          if (!info) continue;
+          const e = edges[eIdx];
+          info.pathEl.classList.add("hop-edge-visited");
+          if (e.kind === "breaks" || singlePlan.bugNodes.has(e.to) || (singleBad && e.kind === "emits")) {
+            info.pathEl.classList.add("hop-bug");
+          } else if (e.kind === "checks" && singlePlan.passNodes.has(e.to)) {
+            info.pathEl.classList.add("hop-pass");
+          }
+        }
+      }
+    }
+
+    if (!animatePackets || prefersReducedMotion()) {
+      applyFinalStatic();
+      if (onDone) onDone(myToken);
+      return;
+    }
+
+    function animatePlanHops(plan, modeKind, useSplitOverlays, onPlanDone) {
+      const stages = buildStages(plan, modeKind, useSplitOverlays);
+      let activeNodes = new Set();
+
+      // Hop 0: light up entry node(s)
+      const entryIds = plan.inputs && plan.inputs.length ? plan.inputs : Array.from(plan.hlNodes).slice(0, 1);
+      for (const nid of entryIds) {
+        const elNode = cardEl(nid);
+        if (!elNode) continue;
+        elNode.classList.add("hop-active");
+        if (modeKind === "new") elNode.classList.add("hop-pass");
+        activeNodes.add(nid);
+      }
+
+      if (!stages.length) {
+        for (const nid of plan.hlNodes) {
+          const elNode = cardEl(nid);
+          if (!elNode) continue;
+          if (plan.bugNodes.has(nid)) {
+            elNode.classList.add("hop-bug");
+            spawnRipple(nid, true);
+          } else if (plan.passNodes.has(nid)) {
+            elNode.classList.add("hop-active", "hop-pass");
+            spawnRipple(nid, false);
+          } else {
+            elNode.classList.add("hop-active");
+          }
+        }
+        scheduleHopTimeout(myToken, onPlanDone, hopMs);
+        return;
+      }
+
+      function runStage(sIdx) {
+        if (replayRuntime.animToken !== myToken) return;
+        if (sIdx >= stages.length) {
+          onPlanDone();
+          return;
+        }
+
+        // Transition previous stage active nodes to visited
+        for (const nid of activeNodes) {
+          const elNode = cardEl(nid);
+          if (!elNode) continue;
+          if (!elNode.classList.contains("hop-bug")) {
+            elNode.classList.remove("hop-active");
+            elNode.classList.add("hop-visited");
+            if (modeKind === "old") elNode.classList.add("hop-old");
+            else if (modeKind === "new") elNode.classList.add("hop-new");
+          }
+        }
+        activeNodes = new Set();
+
+        const stageEdges = stages[sIdx];
+        const stageItems = stageEdges.map((item) => {
+          if (item.isOverlay) {
+            item.pathEl.style.opacity = "";
+          } else {
+            item.pathEl.classList.add("hop-edge-active");
+            if (item.edgeTone === "bug" || item.edgeTone === "old") item.pathEl.classList.add("hop-bug");
+            else if (item.edgeTone === "pass" || item.edgeTone === "new") item.pathEl.classList.add("hop-pass");
+          }
+
+          let totalLen = 0;
+          try {
+            totalLen = item.pathEl.getTotalLength();
+          } catch (_) {}
+          const fxCls =
+            item.edgeTone === "bug" || item.edgeTone === "old"
+              ? "fx-bug"
+              : item.edgeTone === "pass" || item.edgeTone === "new"
+                ? "fx-pass"
+                : "fx-healthy";
+          const trail = svgEl("path", { class: "flow-trail " + fxCls, d: item.pathEl.getAttribute("d") || "" });
+          if (totalLen > 0) {
+            trail.style.strokeDasharray = totalLen + " " + totalLen;
+            trail.style.strokeDashoffset = String(totalLen);
+          }
+          const halo = svgEl("circle", { class: "flow-packet-halo " + fxCls, r: "8", cx: "-999", cy: "-999" });
+          const pkt = svgEl("circle", { class: "flow-packet " + fxCls, r: "4", cx: "-999", cy: "-999" });
+          fxLayer.appendChild(trail);
+          fxLayer.appendChild(halo);
+          fxLayer.appendChild(pkt);
+          return { ...item, totalLen, trail, halo, pkt };
+        });
+
+        const t0 = performance.now();
+        function frame(now) {
+          if (replayRuntime.animToken !== myToken) return;
+          const u = Math.min(1, (now - t0) / hopMs);
+
+          for (const it of stageItems) {
+            if (it.totalLen > 0) {
+              const pt = it.pathEl.getPointAtLength(u * it.totalLen);
+              it.pkt.setAttribute("cx", String(pt.x));
+              it.pkt.setAttribute("cy", String(pt.y));
+              it.halo.setAttribute("cx", String(pt.x));
+              it.halo.setAttribute("cy", String(pt.y));
+              const seg = Math.min(it.totalLen * 0.32, 46);
+              const curLen = u * it.totalLen;
+              it.trail.style.strokeDasharray = seg + " " + it.totalLen;
+              it.trail.style.strokeDashoffset = String(-(curLen - seg));
+            }
+          }
+
+          if (u < 1) {
+            replayRuntime.animRaf = requestAnimationFrame(frame);
+          } else {
+            replayRuntime.animRaf = null;
+            for (const it of stageItems) {
+              if (it.trail.parentNode) it.trail.parentNode.removeChild(it.trail);
+              if (it.halo.parentNode) it.halo.parentNode.removeChild(it.halo);
+              if (it.pkt.parentNode) it.pkt.parentNode.removeChild(it.pkt);
+
+              if (!it.isOverlay) {
+                it.pathEl.classList.remove("hop-edge-active");
+                if (modeKind === "old") it.pathEl.classList.add("hop-edge-old");
+                else if (modeKind === "new") it.pathEl.classList.add("hop-edge-new");
+                else it.pathEl.classList.add("hop-edge-visited");
+              }
+
+              const dst = it.e.to;
+              const dstEl = cardEl(dst);
+              if (dstEl) {
+                if (plan.bugNodes.has(dst)) {
+                  dstEl.classList.remove("hop-active", "hop-visited");
+                  dstEl.classList.add("hop-bug");
+                  spawnRipple(dst, true);
+                } else if (plan.passNodes.has(dst)) {
+                  dstEl.classList.remove("hop-visited");
+                  dstEl.classList.add("hop-active", "hop-pass");
+                  spawnRipple(dst, false);
+                } else {
+                  dstEl.classList.remove("hop-visited");
+                  dstEl.classList.add("hop-active");
+                  if (modeKind === "new") dstEl.classList.add("hop-new");
+                  activeNodes.add(dst);
+                }
+              }
+            }
+            runStage(sIdx + 1);
+          }
+        }
+
+        replayRuntime.animRaf = requestAnimationFrame(frame);
+      }
+
+      scheduleHopTimeout(myToken, () => runStage(0), Math.round(hopMs * 0.35));
+    }
+
+    if (isSplitCompare && oldPlan && newPlan) {
+      animatePlanHops(oldPlan, "old", true, () => {
+        const pauseMs = Math.max(240, Math.round(500 / speed));
+        scheduleHopTimeout(myToken, () => {
+          animatePlanHops(newPlan, "new", true, () => {
+            if (onDone) onDone(myToken);
+          });
+        }, pauseMs);
+      });
+    } else if (singlePlan) {
+      animatePlanHops(singlePlan, "single", false, () => {
+        if (onDone) onDone(myToken);
+      });
+    } else if (onDone) {
+      onDone(myToken);
+    }
+  }
+
+  function switchReplayMode(targetMode) {
+    const f = fixtureMap.get(state.replayFixtureId);
+    if (!f) return;
+    const { oldRun, newRun, hasCompare } = getCompareRuns(f);
+    if (targetMode === "compare") {
+      if (!hasCompare) return;
+      state.compareMode = true;
+    } else if (targetMode === "new") {
+      if (!newRun) return;
+      state.compareMode = false;
+      state.replayRunId = newRun.id;
+    } else {
+      const unpatched = oldRun || (f.runs || []).find((r) => r.mode === "recorded") || (f.runs || [])[0];
+      if (!unpatched) return;
+      state.compareMode = false;
+      state.replayRunId = unpatched.id;
+    }
+    stopReplayPlayback();
+    replayRuntime.lastAnimatedKey = null;
+    replayRuntime.needsCameraFocus = true;
+    replayRuntime.userOverrodeCamera = false;
+    ensureReplaySelection();
+    syncHash();
+    render();
+  }
+
+  function stepReplayBy(delta) {
+    const f = fixtureMap.get(state.replayFixtureId);
+    const seqs = getAlignedSeqs(f);
+    if (!seqs.length) return;
+    const idx = seqs.indexOf(state.replaySeq);
+    const cur = idx < 0 ? 0 : idx;
+    const nextIdx = Math.max(0, Math.min(seqs.length - 1, cur + delta));
+    if (nextIdx !== cur) {
+      state.replaySeq = seqs[nextIdx];
+      replayRuntime.needsCameraFocus = true;
+      replayRuntime.userOverrodeCamera = false;
+      syncHash();
+      render();
+    }
+  }
+
+  function jumpToFirstDivergence() {
+    const f = fixtureMap.get(state.replayFixtureId);
+    if (!f) return;
+    const r = (f.runs || []).find((x) => x.id === state.replayRunId) || defaultRunForFixture(f);
+    const targetSeq = firstDivergenceSeqForFixture(f, r);
+    if (targetSeq !== null && targetSeq !== undefined) {
+      state.replaySeq = targetSeq;
+      replayRuntime.lastAnimatedKey = null;
+      replayRuntime.needsCameraFocus = true;
+      replayRuntime.userOverrodeCamera = false;
+      syncHash();
+      render();
+    }
+  }
+
+  function scheduleAdvanceAfterStep(token, hitBug) {
+    if (!state.replayPlaying || state.tab !== "replay" || replayRuntime.animToken !== token) return;
+    const f = fixtureMap.get(state.replayFixtureId);
+    const seqs = getAlignedSeqs(f);
+    if (!seqs.length) {
+      stopReplayPlayback();
+      return;
+    }
+    const idx = seqs.indexOf(state.replaySeq);
+    const speed = state.replaySpeed || 1;
+    const dwellMs = prefersReducedMotion()
+      ? Math.round(900 / speed)
+      : Math.round((hitBug ? 680 : 340) / speed);
+
+    replayRuntime.playTimer = setTimeout(() => {
+      replayRuntime.playTimer = null;
+      if (!state.replayPlaying || state.tab !== "replay") return;
+      if (idx >= seqs.length - 1) {
+        state.replayPlaying = false;
+        render();
+        return;
+      }
+      state.replaySeq = seqs[Math.max(0, idx) + 1];
+      replayRuntime.needsCameraFocus = true;
+      replayRuntime.userOverrodeCamera = false;
+      syncHash();
+      render();
+    }, dwellMs);
+  }
+
+  function toggleReplayPlayback() {
+    if (state.tab !== "replay") return;
+    if (state.replayPlaying) {
+      stopReplayPlayback();
+      render();
+      return;
+    }
+    const f = fixtureMap.get(state.replayFixtureId);
+    const seqs = getAlignedSeqs(f);
+    if (!seqs.length) return;
+    const idx = seqs.indexOf(state.replaySeq);
+    if (idx === seqs.length - 1) {
+      state.replaySeq = seqs[0];
+    }
+    state.replayPlaying = true;
+    replayRuntime.lastAnimatedKey = null;
+    replayRuntime.needsCameraFocus = true;
+    replayRuntime.userOverrodeCamera = false;
+    syncHash();
+    render();
   }
 
   function renderReplayTab() {
@@ -1254,183 +2381,747 @@
     if (!fixtures.length) return el("div", { className: "empty-state", text: "No fixtures loaded." });
 
     const f = fixtureMap.get(state.replayFixtureId);
-    const r = (f.runs || []).find((x) => x.id === state.replayRunId) || (f.runs || [])[0];
-    const step = r && r.steps ? r.steps.find((st) => st.seq === state.replaySeq) || r.steps[0] : null;
-    if (step) state.replaySeq = step.seq;
+    const { oldRun, newRun, hasCompare } = getCompareRuns(f);
+    const unpatchedRun = oldRun || (f.runs || []).find((r) => r.mode === "recorded") || (f.runs || [])[0] || null;
+    const compareOn = isCompareActive(f);
+    const activeRun = (f.runs || []).find((x) => x.id === state.replayRunId) || unpatchedRun;
+    const seqs = getAlignedSeqs(f);
+    if (seqs.length && !seqs.includes(state.replaySeq)) {
+      state.replaySeq = seqs[0];
+    }
+    const activeSeq = state.replaySeq;
+    const curIdx = Math.max(0, seqs.indexOf(activeSeq));
+    const firstDivSeq = firstDivergenceSeqForFixture(f, activeRun);
 
-    const left = el("div", { className: "replay-left" });
-    left.appendChild(
+    const oldStepBySeq = new Map(((oldRun && oldRun.steps) || []).map((st) => [st.seq, st]));
+    const newStepBySeq = new Map(((newRun && newRun.steps) || []).map((st) => [st.seq, st]));
+    const activeStepBySeq = new Map(((activeRun && activeRun.steps) || []).map((st) => [st.seq, st]));
+
+    const oldStep = oldStepBySeq.get(activeSeq) || null;
+    const newStep = newStepBySeq.get(activeSeq) || null;
+    const singleStep = activeStepBySeq.get(activeSeq) || (activeRun && activeRun.steps && activeRun.steps[0]) || null;
+    const primaryStep = compareOn ? newStep || oldStep : singleStep;
+
+    const isDivStep = Boolean(
+      (firstDivSeq !== null && activeSeq === firstDivSeq) ||
+        (oldStep && (isBadOutcome(oldStep.outcome) || (oldStep.detected && oldStep.detected.length))) ||
+        (oldStep && newStep && (oldStep.outcome !== newStep.outcome || outputsSig(oldStep) !== outputsSig(newStep)))
+    );
+
+    // Build causal highlight & sequential hop plan
+    const hlNodes = new Set();
+    const hlEdges = new Set();
+    const hitRoles = new Map();
+    let oldPlan = null;
+    let newPlan = null;
+    let singlePlan = null;
+    const isSplitCompare = Boolean(compareOn && isDivStep && (oldStep || newStep));
+
+    if (isSplitCompare) {
+      oldPlan = buildCausalPlan(oldStep);
+      newPlan = buildCausalPlan(newStep);
+      for (const n of oldPlan.hlNodes) hlNodes.add(n);
+      for (const n of newPlan.hlNodes) hlNodes.add(n);
+      for (const e of oldPlan.hlEdges) hlEdges.add(e);
+      for (const e of newPlan.hlEdges) hlEdges.add(e);
+      for (const [n, r] of newPlan.hitRoles.entries()) hitRoles.set(n, r);
+      for (const [n, r] of oldPlan.hitRoles.entries()) {
+        if (r === "failure" || !hitRoles.has(n)) hitRoles.set(n, r);
+      }
+    } else if (primaryStep) {
+      singlePlan = buildCausalPlan(primaryStep);
+      for (const n of singlePlan.hlNodes) hlNodes.add(n);
+      for (const e of singlePlan.hlEdges) hlEdges.add(e);
+      for (const [n, r] of singlePlan.hitRoles.entries()) hitRoles.set(n, r);
+    }
+
+    const animKey = f.id + "|" + (compareOn ? "compare" : activeRun ? activeRun.id : "") + "|" + activeSeq;
+    const shouldAnimatePackets = replayRuntime.lastAnimatedKey !== animKey || state.replayPlaying;
+    replayRuntime.lastAnimatedKey = animKey;
+
+    const singleBad = Boolean(
+      primaryStep &&
+        (isBadOutcome(primaryStep.outcome) ||
+          (primaryStep.detected && primaryStep.detected.length) ||
+          (singlePlan && singlePlan.bugNodes.size > 0))
+    );
+
+    // 1. Left Storyboard Header (.sb-header)
+    const isUnpatchedActive = !compareOn && activeRun && unpatchedRun && activeRun.id === unpatchedRun.id;
+    const isPatchedActive = !compareOn && activeRun && newRun && activeRun.id === newRun.id;
+
+    const sbHeader = el(
+      "div",
+      { className: "sb-header" },
       el(
-        "div",
-        null,
-        el("div", { className: "field-label", text: "Fixture" }),
-        el(
-          "select",
-          {
-            className: "select-field",
-            on: {
-              change: (e) => {
-                state.replayFixtureId = e.target.value;
-                state.replayRunId = null;
-                state.replaySeq = null;
-                ensureReplaySelection();
-                syncHash();
-                render();
-              },
+        "select",
+        {
+          className: "sb-fixture-select",
+          attrs: { "aria-label": "Replay fixture" },
+          on: {
+            change: (e) => {
+              stopReplayPlayback();
+              state.replayFixtureId = e.target.value;
+              state.replayRunId = null;
+              state.replaySeq = null;
+              state.compareMode = false;
+              state.compExpanded = false;
+              state.sourceLinksExpanded = false;
+              replayRuntime.lastAnimatedKey = null;
+              replayRuntime.needsCameraFocus = true;
+              replayRuntime.userOverrodeCamera = false;
+              replayMapViewState.initialized = false;
+              ensureReplaySelection();
+              syncHash();
+              render();
             },
           },
-          fixtures.map((fx) =>
-            el("option", {
-              value: fx.id,
-              text: fx.label + (fx.recorded ? " (" + fx.recorded.kind + "@" + fx.recorded.seq + ")" : " (ok)"),
-              selected: fx.id === f.id,
-            })
-          )
+        },
+        fixtures.map((fx) =>
+          el("option", {
+            value: fx.id,
+            text: fx.label + (fx.recorded ? " (" + fx.recorded.kind + ")" : ""),
+            selected: fx.id === f.id,
+          })
         )
+      ),
+      el(
+        "div",
+        { className: "sb-mode-switch" },
+        el("button", {
+          className: "sb-mode-btn mode-old" + (isUnpatchedActive ? " active" : ""),
+          text: "Unpatched",
+          title: "View unpatched run (1)",
+          on: { click: () => switchReplayMode("old") },
+        }),
+        el("button", {
+          className: "sb-mode-btn mode-new" + (isPatchedActive ? " active" : ""),
+          text: "Patched",
+          title: newRun ? "View patched run (2)" : "No patched run available",
+          disabled: !newRun,
+          on: { click: () => switchReplayMode("new") },
+        }),
+        el("button", {
+          className: "sb-mode-btn mode-compare" + (compareOn ? " active" : ""),
+          text: "Compare",
+          title: hasCompare ? "Compare old vs new (3 / C)" : "Compare requires both old and new runs",
+          disabled: !hasCompare,
+          on: { click: () => switchReplayMode("compare") },
+        })
       )
     );
 
-    for (const run of f.runs || []) {
-      const titleParts = [run.mode === "recorded" ? "Recorded" : "Replay (" + (run.build || run.id) + ")"];
-      if (run.bin) titleParts.push(run.bin);
+    // 2. Playback Controls (.sb-controls)
+    const pct = seqs.length ? Math.round(((curIdx + 1) / seqs.length) * 100) : 0;
+    const progressFillCls = ["sb-progress-fill"];
+    if (singleBad && !compareOn) progressFillCls.push("is-fail");
+    else if (!singleBad && activeRun && activeRun.build === "new" && isDivStep) progressFillCls.push("is-pass");
 
-      const rc = el("div", { className: "run-card" });
-      rc.appendChild(
+    const sbControls = el(
+      "div",
+      { className: "sb-controls" },
+      el(
+        "div",
+        { className: "sb-controls-row" },
+        el("button", {
+          className: "sb-btn",
+          text: "◀",
+          title: "Previous step (←)",
+          disabled: curIdx <= 0,
+          on: {
+            click: () => {
+              stopReplayPlayback();
+              stepReplayBy(-1);
+            },
+          },
+        }),
+        el("button", {
+          className: "sb-btn sb-play" + (state.replayPlaying ? " is-playing" : ""),
+          text: state.replayPlaying ? "⏸ Pause" : "▶ Play",
+          title: "Play / Pause (Space)",
+          disabled: !seqs.length,
+          on: { click: toggleReplayPlayback },
+        }),
+        el("button", {
+          className: "sb-btn",
+          text: "▶",
+          title: "Next step (→)",
+          disabled: curIdx >= seqs.length - 1,
+          on: {
+            click: () => {
+              stopReplayPlayback();
+              stepReplayBy(1);
+            },
+          },
+        }),
+        el("button", {
+          className: "sb-btn sb-bug-btn",
+          text: "⚡ Bug",
+          title: "Jump to first failing / diverging step (F)",
+          disabled: firstDivSeq === null || firstDivSeq === undefined,
+          on: {
+            click: () => {
+              stopReplayPlayback();
+              jumpToFirstDivergence();
+            },
+          },
+        }),
         el(
           "div",
-          { className: "run-card-head" },
-          el("span", { className: "run-title", text: titleParts.join(" · ") }),
-          el("span", { className: "pill " + statusPillClass(run.status) + " mono", text: run.verdict || run.status })
-        )
-      );
-
-      if (run.error) {
-        rc.appendChild(el("div", { className: "pill fail", text: run.error }));
-      } else if (run.steps && run.steps.length) {
-        const strip = el("div", { className: "step-strip" });
-        for (const st of run.steps) {
-          const isActive = r && run.id === r.id && step && st.seq === step.seq;
-          strip.appendChild(
+          { className: "sb-speed-group", title: "Playback speed" },
+          [0.5, 1, 2].map((spd) =>
             el("button", {
-              className: "step-seg outcome-" + st.outcome + (isActive ? " active" : ""),
-              text: String(st.seq),
-              title: "seq " + st.seq + ": " + st.outcome + (st.message ? " — " + st.message : ""),
+              className: "sb-speed-btn" + (state.replaySpeed === spd ? " active" : ""),
+              text: spd + "×",
               on: {
                 click: () => {
-                  state.replayRunId = run.id;
-                  state.replaySeq = st.seq;
-                  syncHash();
+                  state.replaySpeed = spd;
                   render();
                 },
               },
             })
-          );
+          )
+        ),
+        el("span", { className: "sb-step-counter", text: seqs.length ? "Step " + (curIdx + 1) + " / " + seqs.length : "0 / 0" })
+      ),
+      el("div", { className: "sb-progress" }, el("div", { className: progressFillCls.join(" "), style: "width:" + pct + "%" }))
+    );
+
+    // 3. Plain-English Numbered Step List (.sb-steps)
+    const sbSteps = el("div", { className: "sb-steps" });
+    let activeStepBtn = null;
+    seqs.forEach((seq, idx) => {
+      const os = oldStepBySeq.get(seq) || null;
+      const ns = newStepBySeq.get(seq) || null;
+      const st = compareOn ? ns || os : activeStepBySeq.get(seq) || null;
+      const isAct = seq === activeSeq;
+      const isPast = idx < curIdx;
+
+      let outCls = "outcome-ok";
+      let badgeText = "OK";
+      let isFailSub = false;
+
+      if (compareOn) {
+        const osBad = Boolean(os && (isBadOutcome(os.outcome) || (os.detected && os.detected.length)));
+        const nsBad = Boolean(ns && (isBadOutcome(ns.outcome) || (ns.detected && ns.detected.length)));
+        const diffOut = Boolean(os && ns && (os.outcome !== ns.outcome || outputsSig(os) !== outputsSig(ns)));
+        const divHere = (firstDivSeq !== null && seq === firstDivSeq) || osBad || diffOut || !os || !ns;
+        if (nsBad) {
+          outCls = "outcome-fail";
+          badgeText = "Failed";
+          isFailSub = true;
+        } else if (divHere && osBad) {
+          outCls = "outcome-warn";
+          badgeText = "Fixed";
+        } else if (divHere) {
+          outCls = "outcome-warn";
+          badgeText = "Diff";
         }
-        rc.appendChild(strip);
+      } else if (!st) {
+        outCls = "outcome-skip";
+        badgeText = "Skipped";
+      } else if (isBadOutcome(st.outcome) || (st.detected && st.detected.length)) {
+        outCls = "outcome-fail";
+        badgeText = "Failed";
+        isFailSub = true;
+      } else if (activeRun && activeRun.build === "new" && firstDivSeq !== null && seq === firstDivSeq) {
+        outCls = "outcome-ok";
+        badgeText = "Fixed";
       }
 
-      if (run.divergence) {
-        const d = run.divergence;
-        rc.appendChild(
+      const stepCls = ["sb-step", outCls];
+      if (isAct) stepCls.push("is-active");
+      else if (isPast) stepCls.push("is-past");
+
+      const title = formatStepTitle(st);
+      const sub = formatStepSubtitle(st, isFailSub);
+
+      const btn = el(
+        "button",
+        {
+          className: stepCls.join(" "),
+          on: {
+            click: () => {
+              stopReplayPlayback();
+              state.replaySeq = seq;
+              replayRuntime.lastAnimatedKey = null;
+              replayRuntime.needsCameraFocus = true;
+              replayRuntime.userOverrodeCamera = false;
+              syncHash();
+              render();
+            },
+          },
+        },
+        el("span", { className: "sb-step-num", text: String(idx + 1) }),
+        el(
+          "div",
+          { className: "sb-step-body" },
+          el("div", { className: "sb-step-title", text: title, title: title }),
+          sub ? el("div", { className: "sb-step-sub", text: sub, title: sub }) : null
+        ),
+        el("span", { className: "sb-step-status", text: badgeText })
+      );
+      if (isAct) activeStepBtn = btn;
+      sbSteps.appendChild(btn);
+    });
+
+    if (activeStepBtn) {
+      requestAnimationFrame(() => {
+        try {
+          activeStepBtn.scrollIntoView({ block: "nearest", behavior: "auto" });
+        } catch (_) {}
+      });
+    }
+
+    // 4. Docked Step Detail & Diff (.sb-detail)
+    const sbDetail = el("div", { className: "sb-detail" });
+
+    // 4a. What happened box
+    const explain = buildStepExplanation(f, primaryStep, oldStep, newStep, compareOn, isDivStep, curIdx + 1, seqs.length, activeRun);
+    sbDetail.appendChild(
+      el(
+        "div",
+        { className: "sb-explain " + explain.tone },
+        el("div", { className: "sb-explain-title", text: explain.title }),
+        el("div", { className: "sb-explain-text", text: explain.text })
+      )
+    );
+
+    // 4b. Invariants pills
+    const invNames =
+      (newRun && newRun.invariants && newRun.invariants.length && newRun.invariants) ||
+      (oldRun && oldRun.invariants && oldRun.invariants.length && oldRun.invariants) ||
+      (activeRun && activeRun.invariants) ||
+      [];
+    if (invNames.length && primaryStep) {
+      const invPills = invNames.map((invName) => {
+        let stVal = (primaryStep.invariants && primaryStep.invariants[invName]) || "unknown";
+        let labelTxt;
+        if (compareOn && oldStep && newStep && oldStep.invariants && newStep.invariants) {
+          const ov = oldStep.invariants[invName] || "unknown";
+          const nv = newStep.invariants[invName] || "unknown";
+          stVal = nv;
+          if (ov !== nv) {
+            labelTxt = invName + ": " + ov + " → " + nv;
+          } else {
+            const sym = nv === "pass" ? "✓" : nv === "fail" ? "✗" : nv === "skipped" ? "–" : nv === "not_reached" ? "·" : "?";
+            labelTxt = sym + " " + invName;
+          }
+        } else {
+          const sym = stVal === "pass" ? "✓" : stVal === "fail" ? "✗" : stVal === "skipped" ? "–" : stVal === "not_reached" ? "·" : "?";
+          labelTxt = sym + " " + invName;
+        }
+        return el("span", { className: "sb-inv-pill st-" + stVal, title: invName + ": " + stVal, text: labelTxt });
+      });
+      sbDetail.appendChild(el("div", { className: "sb-invariants" }, invPills));
+    }
+
+    // 4c. Old vs New Output Diff & Compensation Plan (when on failing/diverging step or in Compare mode)
+    const divObj = newRun && newRun.divergence ? newRun.divergence : null;
+    const compItems = findCompensateItems(f);
+    const hasOldNewOutputs = Boolean(
+      hasCompare &&
+        ((divObj && (activeSeq === divObj.seq || activeSeq === firstDivSeq)) ||
+          (isDivStep && oldStep && newStep))
+    );
+    const showDiffBox = Boolean(
+      (compareOn && isDivStep && (hasOldNewOutputs || compItems.length)) ||
+        ((isDivStep || singleBad) && (hasOldNewOutputs || compItems.length))
+    );
+
+    if (showDiffBox) {
+      const diffChildren = [];
+      diffChildren.push(
+        el(
+          "div",
+          { className: "sb-diff-head" },
+          el("span", { className: "sb-diff-title", text: hasOldNewOutputs ? "Old vs New Output Diff" : "Compensation Plan" }),
+          oldRun && newRun
+            ? el("span", {
+                className: "pill pass mono",
+                text: (oldRun.verdict || oldRun.status) + " → " + (newRun.verdict || newRun.status),
+              })
+            : null
+        )
+      );
+
+      if (hasOldNewOutputs) {
+        const oldDataText =
+          divObj && divObj.old
+            ? "(" + divObj.old.sink + ") " + decodeMaybeB64(divObj.old.data)
+            : oldStep && oldStep.outputs && oldStep.outputs.length
+              ? oldStep.outputs.map((o) => "(" + o.sink + ") " + decodeMaybeB64(o.data || "(empty)")).join("\n")
+              : oldStep && oldStep.message
+                ? oldStep.message
+                : "(no output)";
+        const newDataText =
+          divObj && divObj.new
+            ? "(" + divObj.new.sink + ") " + decodeMaybeB64(divObj.new.data)
+            : newStep && newStep.outputs && newStep.outputs.length
+              ? newStep.outputs.map((o) => "(" + o.sink + ") " + decodeMaybeB64(o.data || "(empty)")).join("\n")
+              : "(no output)";
+
+        diffChildren.push(
           el(
             "div",
-            { className: "div-box" },
-            el("strong", { text: "First divergence at seq " + d.seq + ": " + d.detail }),
-            d.old ? el("div", { className: "code-block", text: "old (" + d.old.sink + "): " + decodeMaybeB64(d.old.data) }) : null,
-            d.new ? el("div", { className: "code-block", text: "new (" + d.new.sink + "): " + decodeMaybeB64(d.new.data) }) : null
+            { className: "sb-diff-row old" },
+            el("div", { className: "sb-diff-label", text: "Unpatched" }),
+            el("div", { className: "sb-diff-code", text: oldDataText })
+          ),
+          el(
+            "div",
+            { className: "sb-diff-row new" },
+            el("div", { className: "sb-diff-label", text: "Patched" }),
+            el("div", { className: "sb-diff-code", text: newDataText })
           )
         );
       }
 
-      left.appendChild(rc);
-    }
-
-    if (step) {
-      const det = el("div", { className: "panel" });
-      det.appendChild(
-        el(
-          "div",
-          { style: "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;" },
-          el("h3", { style: "margin:0;", text: "Step seq " + step.seq + " (" + r.id + ")" }),
-          el("span", { className: "pill " + statusPillClass(step.outcome) + " mono", text: step.outcome })
-        )
-      );
-      if (step.message) {
-        det.appendChild(el("div", { className: "pill fail", style: "margin-bottom:8px;white-space:normal;", text: step.message }));
-      }
-      det.appendChild(
-        el("div", {
-          className: "sub-text",
-          style: "margin-bottom:6px;",
-          text: (step.source || "-") + " @ " + (step.position || "-") + (step.omitted ? " (omitted)" : step.input_truncated ? " (truncated)" : ""),
-        })
-      );
-      if (step.input) det.appendChild(el("div", { className: "code-block", text: step.input }));
-
-      if (step.reads && Object.keys(step.reads).length) {
-        const rRow = el("div", { className: "inv-pills", style: "margin-top:8px;" });
-        for (const [k, v] of Object.entries(step.reads)) {
-          rRow.appendChild(el("span", { className: "pill mono", text: k + ": " + v }));
+      if (compItems.length) {
+        let visibleItems = compItems;
+        if (!state.compExpanded && compItems.length > 2) {
+          const firstUndo = compItems.find((it) => String(it.label).toLowerCase() === "undo");
+          const firstApply = compItems.find((it) => String(it.label).toLowerCase() !== "undo");
+          visibleItems = [firstUndo, firstApply].filter(Boolean);
+          if (!visibleItems.length) visibleItems = compItems.slice(0, 2);
         }
-        det.appendChild(rRow);
-      }
-
-      if (step.outputs && step.outputs.length) {
-        det.appendChild(el("div", { className: "field-label", style: "margin-top:10px;", text: "Outputs (" + step.outputs.length + ")" }));
-        for (const o of step.outputs) {
-          det.appendChild(
+        diffChildren.push(
+          el(
+            "div",
+            { className: "sb-comp-list" },
             el(
               "div",
-              { style: "margin-bottom:6px;" },
-              el("span", { className: "pill mono", text: o.sink + (o.truncated ? " (truncated)" : "") }),
-              el("div", { className: "code-block", style: "margin-top:4px;", text: o.data || "(empty)" })
+              { style: "display:flex;align-items:center;justify-content:space-between;gap:8px;" },
+              el("span", { className: "sb-raw-label", text: "Compensation Plan (" + compItems.length + ")" }),
+              compItems.length > 2
+                ? el("button", {
+                    className: "sb-comp-toggle",
+                    text: state.compExpanded ? "Show less" : "Show all (" + compItems.length + ")",
+                    on: {
+                      click: () => {
+                        state.compExpanded = !state.compExpanded;
+                        render();
+                      },
+                    },
+                  })
+                : null
+            ),
+            visibleItems.map((it) =>
+              el(
+                "div",
+                { className: "sb-comp-row" },
+                el("span", {
+                  className: "sb-comp-badge " + (String(it.label).toLowerCase() === "undo" ? "comp-undo" : "comp-apply"),
+                  text: it.label || "step",
+                }),
+                el("div", {
+                  className: "sb-comp-text",
+                  text: (it.sink ? it.sink + ": " : "") + (it.text || ""),
+                })
+              )
+            )
+          )
+        );
+      }
+
+      sbDetail.appendChild(el("div", { className: "sb-diff-box" }, diffChildren));
+    }
+
+    // 4d. Collapsible Inspect Raw JSON & PII X-Ray (collapsed by default!)
+    const tokPair = findTokenizedPair(f);
+    const rawBody = el("div", { className: "sb-raw-body" });
+    if (primaryStep) {
+      // 1. PII Scrub X-Ray (first when a .tokenized fixture exists)
+      if (tokPair) {
+        const rawStep = findStepInFixture(tokPair.rawFixture, activeSeq, activeRun ? activeRun.build : null);
+        const tokStep = findStepInFixture(tokPair.tokenizedFixture, activeSeq, activeRun ? activeRun.build : null);
+        const xraySection = el("div", { className: "sb-raw-section sb-xray-section" });
+        const renderXraySection = () => {
+          while (xraySection.firstChild) xraySection.removeChild(xraySection.firstChild);
+          const view = state.piiXrayView || "stacked";
+          xraySection.appendChild(
+            el(
+              "div",
+              { className: "sb-raw-head" },
+              el("span", { className: "sb-raw-label", text: "PII Scrub X-Ray" }),
+              el(
+                "div",
+                { className: "sb-xray-tabs", attrs: { role: "tablist", "aria-label": "PII X-Ray view" } },
+                [
+                  { id: "stacked", label: "Stacked" },
+                  { id: "raw", label: "Raw" },
+                  { id: "tokenized", label: "Tokenized" },
+                ].map((opt) =>
+                  el("button", {
+                    className: "sb-xray-tab" + (view === opt.id ? " active" : ""),
+                    text: opt.label,
+                    attrs: { type: "button", "aria-selected": view === opt.id ? "true" : "false" },
+                    on: {
+                      click: () => {
+                        state.piiXrayView = opt.id;
+                        renderXraySection();
+                      },
+                    },
+                  })
+                )
+              )
+            )
+          );
+
+          const cards = el("div", { className: "pii-xray-cards" + (view !== "stacked" ? " is-single" : "") });
+          if (view !== "tokenized") {
+            cards.appendChild(
+              el(
+                "div",
+                { className: "pii-pane pii-raw" },
+                el("span", { className: "pii-badge", text: "Raw PII" }),
+                el("div", {
+                  className: "code-block sb-raw-code",
+                  text: rawStep && rawStep.input ? prettyJson(rawStep.input) : "(unavailable)",
+                })
+              )
+            );
+          }
+          if (view !== "raw") {
+            cards.appendChild(
+              el(
+                "div",
+                { className: "pii-pane pii-tokenized" },
+                el("span", { className: "pii-badge", text: "HMAC Tokenized" }),
+                el("div", {
+                  className: "code-block sb-raw-code",
+                  text: tokStep && tokStep.input ? prettyJson(tokStep.input) : "(unavailable)",
+                })
+              )
+            );
+          }
+          xraySection.appendChild(cards);
+        };
+        renderXraySection();
+        rawBody.appendChild(xraySection);
+      }
+
+      // 2. Input & Outputs (pretty-printed JSON when parseable, compact 11px monospace)
+      if (primaryStep.input) {
+        rawBody.appendChild(
+          el(
+            "div",
+            { className: "sb-raw-section" },
+            el("div", {
+              className: "sb-raw-label",
+              text: "Input JSON (seq " + activeSeq + ")" + (primaryStep.omitted ? " (omitted)" : primaryStep.input_truncated ? " (truncated)" : ""),
+            }),
+            el("div", { className: "code-block sb-raw-code", text: prettyJson(primaryStep.input) })
+          )
+        );
+      }
+
+      if (primaryStep.reads && Object.keys(primaryStep.reads).length) {
+        rawBody.appendChild(
+          el(
+            "div",
+            { className: "sb-raw-section" },
+            el("div", { className: "sb-raw-label", text: "Reads" }),
+            el(
+              "div",
+              { className: "inv-pills" },
+              Object.entries(primaryStep.reads).map(([k, v]) => el("span", { className: "pill mono", text: k + ": " + v }))
+            )
+          )
+        );
+      }
+
+      if (compareOn && isDivStep && oldStep && newStep) {
+        const oldOuts = (oldStep.outputs || []).map(formatStepOutputText).join("\n\n");
+        const newOuts = (newStep.outputs || []).map(formatStepOutputText).join("\n\n");
+        rawBody.appendChild(
+          el(
+            "div",
+            { className: "sb-raw-section" },
+            el("div", { className: "sb-raw-label", text: "Outputs (Unpatched vs Patched)" }),
+            el(
+              "div",
+              { className: "pii-xray-cards" },
+              el(
+                "div",
+                { className: "pii-pane pii-raw" },
+                el("span", { className: "pii-badge", text: "Unpatched" }),
+                el("div", { className: "code-block sb-raw-code", text: oldOuts || "(none)" })
+              ),
+              el(
+                "div",
+                { className: "pii-pane pii-tokenized" },
+                el("span", { className: "pii-badge", text: "Patched" }),
+                el("div", { className: "code-block sb-raw-code", text: newOuts || "(none)" })
+              )
+            )
+          )
+        );
+      } else if (primaryStep.outputs && primaryStep.outputs.length) {
+        const outsSection = el(
+          "div",
+          { className: "sb-raw-section" },
+          el("div", { className: "sb-raw-label", text: "Outputs (" + primaryStep.outputs.length + ")" })
+        );
+        for (const o of primaryStep.outputs) {
+          outsSection.appendChild(
+            el(
+              "div",
+              { className: "sb-raw-output-item" },
+              el("span", { className: "pill mono sb-raw-sink-pill", text: o.sink + (o.truncated ? " (truncated)" : "") }),
+              el("div", { className: "code-block sb-raw-code", text: prettyJson(decodeMaybeB64(o.data || "(empty)")) })
             )
           );
         }
+        rawBody.appendChild(outsSection);
       }
 
-      if (r.invariants && r.invariants.length && step.invariants) {
-        det.appendChild(el("div", { className: "field-label", style: "margin-top:10px;", text: "Invariants" }));
-        const pills = el("div", { className: "inv-pills" });
-        const detSet = new Set(step.detected || []);
-        for (const name of r.invariants) {
-          const stVal = step.invariants[name] || "unknown";
-          const cls = stVal === "pass" ? "pass" : stVal === "fail" ? "fail" : stVal === "skipped" ? "warn" : stVal === "not_reached" ? "skip" : "";
-          pills.appendChild(el("span", { className: "pill mono " + cls, text: name + ": " + stVal + (detSet.has(name) ? " (detected)" : "") }));
+      // 3. Source Links (at bottom — deduplicated, prioritized external GitHub links first, compact single-line chips)
+      const linkByKey = new Map();
+      for (const nid of hlNodes) {
+        const nd = nodeMap.get(nid);
+        if (!nd || !nd.links) continue;
+        for (const lk of nd.links) {
+          const text = String(lk.text || "").trim();
+          const url = String(lk.url || "").trim();
+          if (!text && !url) continue;
+          const dedupKey = text || url;
+          const prev = linkByKey.get(dedupKey);
+          if (!prev || (!/^https?:\/\//i.test(prev.url) && /^https?:\/\//i.test(url))) {
+            linkByKey.set(dedupKey, { url, text });
+          }
         }
-        det.appendChild(pills);
       }
-      left.appendChild(det);
+      const sourceLinks = Array.from(linkByKey.values()).sort((a, b) => {
+        const aExt = /^https?:\/\//i.test(a.url) ? 0 : 1;
+        const bExt = /^https?:\/\//i.test(b.url) ? 0 : 1;
+        return aExt - bExt;
+      });
+      if (sourceLinks.length) {
+        const srcSection = el("div", { className: "sb-raw-section sb-source-section" });
+        const renderSourceLinksSection = () => {
+          while (srcSection.firstChild) srcSection.removeChild(srcSection.firstChild);
+          const visibleLinks =
+            !state.sourceLinksExpanded && sourceLinks.length > 5
+              ? sourceLinks.slice(0, 5)
+              : sourceLinks;
+          srcSection.appendChild(
+            el(
+              "div",
+              { className: "sb-raw-head" },
+              el("span", { className: "sb-raw-label", text: "Source Links" }),
+              el("span", { className: "sb-raw-count", text: String(sourceLinks.length) })
+            )
+          );
+          srcSection.appendChild(
+            el("div", { className: "sb-source-list" }, visibleLinks.map(buildSourceLinkRow))
+          );
+          if (sourceLinks.length > 5) {
+            srcSection.appendChild(
+              el("button", {
+                className: "sb-comp-toggle sb-source-toggle",
+                attrs: { type: "button" },
+                text: state.sourceLinksExpanded ? "Show fewer" : "Show all (" + sourceLinks.length + ")",
+                on: {
+                  click: () => {
+                    state.sourceLinksExpanded = !state.sourceLinksExpanded;
+                    renderSourceLinksSection();
+                  },
+                },
+              })
+            );
+          }
+        };
+        renderSourceLinksSection();
+        rawBody.appendChild(srcSection);
+      }
+    } else {
+      rawBody.appendChild(el("div", { className: "sub-text", text: "No step data available." }));
     }
 
-    const hl = computeReplayHighlight(step);
-    const right = el(
-      "div",
-      { className: "replay-right" },
-      buildMapCanvas({
-        highlightNodes: hl.hlNodes,
-        highlightEdges: hl.hlEdges,
-        hitRoles: hl.hitRoles,
-        selectedNodeId: state.selectedNodeId,
-        viewState: replayMapViewState,
-        onSelectNode: (nid) => {
-          state.selectedNodeId = state.selectedNodeId === nid ? null : nid;
-          render();
+    const rawDetails = el(
+      "details",
+      {
+        className: "sb-raw-details",
+        on: {
+          toggle: (e) => {
+            const wasOpen = state.rawInspectorOpen;
+            state.rawInspectorOpen = Boolean(e.target.open);
+            if (state.rawInspectorOpen && !wasOpen) {
+              requestAnimationFrame(() => {
+                try {
+                  e.target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                } catch (_) {}
+              });
+            }
+          },
         },
-        onBackgroundClick: () => {
-          if (state.selectedNodeId) {
-            state.selectedNodeId = null;
-            render();
-          }
-        },
-      })
+      },
+      el("summary", { text: "Inspect Raw JSON" + (tokPair ? " & PII X-Ray" : "") }),
+      rawBody
     );
+    if (state.rawInspectorOpen) rawDetails.open = true;
+    sbDetail.appendChild(rawDetails);
+
+    const sidebarEl = el("aside", { className: "replay-sidebar" }, sbHeader, sbControls, sbSteps, sbDetail);
+
+    // 5. Right Focused Canvas (.replay-canvas) — ZERO floating HUDs, ZERO diff cards, ZERO edge callouts!
+    const wasViewInitialized = replayMapViewState.initialized;
+    const canvas = buildMapCanvas({
+      highlightNodes: hlNodes,
+      highlightEdges: hlEdges,
+      hitRoles: hitRoles,
+      replayMode: true,
+      skipInitialFit: true,
+      suppressEdgeLabels: true,
+      selectedNodeId: state.selectedNodeId,
+      viewState: replayMapViewState,
+      onUserInteract: () => {
+        replayRuntime.userOverrodeCamera = true;
+        replayRuntime.needsCameraFocus = false;
+      },
+      onSelectNode: (nid) => {
+        state.selectedNodeId = state.selectedNodeId === nid ? null : nid;
+        render();
+      },
+      onBackgroundClick: () => {
+        if (state.selectedNodeId) {
+          state.selectedNodeId = null;
+          render();
+        }
+      },
+      onAfterDraw: (ctx) => {
+        replayRuntime.activeCanvasCtx = ctx;
+        if (!wasViewInitialized || (replayRuntime.needsCameraFocus && !replayRuntime.userOverrodeCamera)) {
+          replayRuntime.needsCameraFocus = false;
+          focusNodesFitSmooth(ctx, hlNodes, !wasViewInitialized);
+        }
+        runSequentialHopAnimation(
+          ctx,
+          {
+            isSplitCompare,
+            oldPlan,
+            newPlan,
+            singlePlan,
+            singleBad,
+            animatePackets: shouldAnimatePackets,
+          },
+          (doneToken) => {
+            if (state.replayPlaying) {
+              scheduleAdvanceAfterStep(doneToken, singleBad || (isSplitCompare && Boolean(oldPlan && oldPlan.bugNodes.size)));
+            }
+          }
+        );
+      },
+    });
+
+    const replayCanvasEl = el("div", { className: "replay-canvas" }, canvas);
     if (state.selectedNodeId) {
       const insp = renderNodeInspector(state.selectedNodeId);
-      if (insp) right.appendChild(insp);
+      if (insp) replayCanvasEl.appendChild(insp);
     }
 
-    return el("div", { className: "replay-layout" }, left, right);
+    return el("div", { className: "replay-layout" }, sidebarEl, replayCanvasEl);
   }
 
   function renderInvariantsTab() {
@@ -1616,26 +3307,25 @@
           if (summaryRun) runBadges.push(el("span", { className: "pill " + statusPillClass(summaryRun.status) + " mono", text: summaryRun.verdict }));
         }
 
-        chain.appendChild(
-          el(
-            "button",
-            {
-              className: "stage-card st-" + st.status + (isSel ? " selected" : ""),
-              on: {
-                click: () => {
-                  state.overlayLaneId = lane.id;
-                  state.overlayStageId = st.id;
-                  syncHash();
-                  render();
-                },
+        const btn = el(
+          "button",
+          {
+            className: "stage-card st-" + st.status + (isSel ? " selected" : ""),
+            on: {
+              click: () => {
+                state.overlayLaneId = lane.id;
+                state.overlayStageId = st.id;
+                syncHash();
+                render();
               },
             },
-            el("div", { className: "stage-head" }, el("span", { className: "stage-title", text: st.title || st.id }), el("span", { className: "pill " + st.status, text: st.status })),
-            st.verdict ? el("div", { className: "stage-verdict", text: st.verdict, title: st.verdict }) : null,
-            metricChips.length ? el("div", { className: "stage-metrics" }, metricChips) : null,
-            runBadges.length ? el("div", { className: "stage-metrics" }, runBadges) : null
-          )
+          },
+          el("div", { className: "stage-head" }, el("span", { className: "stage-title", text: st.title || st.id }), el("span", { className: "pill " + st.status, text: st.status })),
+          st.verdict ? el("div", { className: "stage-verdict", text: st.verdict, title: st.verdict }) : null,
+          metricChips.length ? el("div", { className: "stage-metrics" }, metricChips) : null,
+          runBadges.length ? el("div", { className: "stage-metrics" }, runBadges) : null
         );
+        chain.appendChild(btn);
       });
       strip.appendChild(el("div", { className: "lane-row" }, el("div", { className: "lane-title", text: lane.title || lane.id }), chain));
     }
@@ -1734,6 +3424,8 @@
   }
 
   function render() {
+    stopReplayAnim();
+    replayRuntime.activeCanvasCtx = null;
     while (appEl.firstChild) appEl.removeChild(appEl.firstChild);
 
     const shell = el("div", { className: "app-shell" });
@@ -1761,6 +3453,7 @@
   }
 
   window.addEventListener("hashchange", () => {
+    stopReplayPlayback();
     applyHash();
     render();
   });
@@ -1779,26 +3472,52 @@
     }
 
     if (e.key === "Escape") {
+      let changed = false;
+      if (state.replayPlaying) {
+        stopReplayPlayback();
+        changed = true;
+      }
       if (state.selectedNodeId || state.showFlowsMenu) {
         state.selectedNodeId = null;
         state.showFlowsMenu = false;
-        render();
+        changed = true;
       }
+      if (changed) render();
       return;
     }
 
-    if (state.tab === "replay" && !inField && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-      const f = fixtureMap.get(state.replayFixtureId);
-      const r = f ? (f.runs || []).find((x) => x.id === state.replayRunId) : null;
-      if (!r || !r.steps || !r.steps.length) return;
-      const idx = r.steps.findIndex((st) => st.seq === state.replaySeq);
-      if (idx < 0) return;
-      const nextIdx = e.key === "ArrowLeft" ? Math.max(0, idx - 1) : Math.min(r.steps.length - 1, idx + 1);
-      if (nextIdx !== idx) {
+    if (state.tab === "replay" && !inField) {
+      if (e.code === "Space" || e.key === " ") {
         e.preventDefault();
-        state.replaySeq = r.steps[nextIdx].seq;
-        syncHash();
-        render();
+        toggleReplayPlayback();
+        return;
+      }
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        stopReplayPlayback();
+        jumpToFirstDivergence();
+        return;
+      }
+      if (e.key === "c" || e.key === "C") {
+        const f = fixtureMap.get(state.replayFixtureId);
+        const { hasCompare } = getCompareRuns(f);
+        if (hasCompare) {
+          e.preventDefault();
+          switchReplayMode(isCompareActive(f) ? "old" : "compare");
+        }
+        return;
+      }
+      if (e.key === "1" || e.key === "2" || e.key === "3") {
+        e.preventDefault();
+        if (e.key === "1") switchReplayMode("old");
+        else if (e.key === "2") switchReplayMode("new");
+        else if (e.key === "3") switchReplayMode("compare");
+        return;
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        stopReplayPlayback();
+        stepReplayBy(e.key === "ArrowLeft" ? -1 : 1);
       }
     }
   });
