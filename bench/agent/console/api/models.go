@@ -14,7 +14,6 @@ import (
 
 const openRouterModels = "https://openrouter.ai/api/v1/models"
 
-// modelsTTL is how long OpenRouter's model list is kept.
 const modelsTTL = time.Hour
 
 // Model is one OpenRouter model. Prices are USD per million tokens, null

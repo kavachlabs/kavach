@@ -28,7 +28,6 @@ func newClient(base string) *client {
 	return &client{base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// errNotFound is a 404 from the API.
 var errNotFound = errors.New("not found")
 
 func (c *client) get(ctx context.Context, path string, v any) error {
@@ -150,8 +149,6 @@ func (c *client) resume(ctx context.Context, id string) error {
 	return c.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/resume", struct{}{}, nil)
 }
 
-// event is one Server-Sent Event from /api/events: a job (without trials)
-// or a trial.
 type event struct {
 	job   *harbor.Job
 	trial *harbor.Trial

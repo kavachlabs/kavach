@@ -62,7 +62,6 @@ test("an abort the handler swallows still ends the step as aborted, with no furt
   assert.deepEqual(await d.recv(), { t: "clock" });
   d.send({ t: "abort", detail: "nondeterminism" });
   assert.deepEqual(await d.recv(), { t: "done", outcome: "aborted" });
-  // The next step is a fresh one.
   d.step(1);
   assert.deepEqual(await d.recv(), { t: "clock" });
   d.send({ t: "clock", unix_nanos: "5" });

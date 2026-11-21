@@ -75,7 +75,7 @@ impl Handler for Ledger {
             .map_err(|e| format!("decode event at {}: {e}", input.position))?;
         let text = |k: &str| ev.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let (id, kind, account, to) = (text("id"), text("type"), text("account"), text("to"));
-        let amount = ev.get("amount").and_then(Value::as_i64); // None when null or missing
+        let amount = ev.get("amount").and_then(Value::as_i64);
 
         if self.fixed && amount.is_none() {
             return reject(env, &id, "missing amount");

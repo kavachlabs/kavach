@@ -133,7 +133,6 @@ class Host {
   private readonly ch = new Channel();
   private handler!: Handler;
 
-  // Per-step state.
   private aborted = false;
   private abortDetail = "";
 
@@ -225,8 +224,6 @@ class Host {
     if (failure.detail) done.detail = failure.detail;
     this.ch.send(done);
   }
-
-  // Used by HostEnv.
 
   /** @internal Sends a request and waits for its answer. */
   request(msg: Msg, expect: string): Msg {

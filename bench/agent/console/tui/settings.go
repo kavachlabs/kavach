@@ -24,7 +24,6 @@ func defaultSettings() settings {
 	return settings{Agent: "opencode", Arm: "kavach", Model: "z-ai/glm-5.3", Name: "GLM 5.3", Runs: 1, Retries: 1}
 }
 
-// settingsPath is <user config dir>/kavach/bench.json.
 func settingsPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {

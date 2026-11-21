@@ -111,7 +111,7 @@ module Kavach
         msg = begin
           recv
         rescue DriverGone
-          return 0 # between steps: the driver left
+          return 0
         end
         case msg["t"]
         when "hello" then handler = hello(msg)

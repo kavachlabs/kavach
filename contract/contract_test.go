@@ -107,7 +107,6 @@ var (
 	regressing = build(func(s *store) { s.incr, s.newNil = true, true })
 )
 
-// record runs the traffic on the base build and returns the journal's path.
 func record(t *testing.T) string {
 	t.Helper()
 	n := int64(1_700_000_000_000_000_000)

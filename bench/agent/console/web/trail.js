@@ -75,7 +75,6 @@ function failureWords(inc, t) {
   return [at != null ? `input @${at} ${what}` : what, ""];
 }
 
-// verdictWords says what a verdict means for this attempt: [tone, words].
 function verdictWords(verdict, inc, t) {
   const st = statusOf(verdict);
   const at = seqOf(verdict);
@@ -123,8 +122,6 @@ function isContract(verdict, t) {
   return Boolean((t.kavach && t.kavach.features) || /^(pass|unreached|regression|missing_invariant|baseline_mismatch|unapproved|stale_lock)/.test(verdict || ""));
 }
 
-// renderHeadline is the attempt's verdict in plain words, or null before
-// there is anything to say.
 export function renderHeadline(t) {
   const inc = incidentFor(t);
   const verdict = (t.kavach && t.kavach.verdict) || (ok(inc) && inc.diff && inc.diff.verdict) || "";
@@ -158,8 +155,6 @@ const probeKind = (mut) => (/\bmoved \d+ inputs? earlier/.test(mut) ? "moved ear
 
 const selCol = new Map(); // trial key -> selected column of the strip
 
-// renderProbe draws the recording as an axis with every variant diff tried
-// on it. It returns null when there is no recording.
 export function renderProbe(t) {
   const inc = incidentFor(t);
   if (!ok(inc) || !inc.steps.length) {
@@ -321,7 +316,6 @@ function nearest(steps, seq) {
   return best;
 }
 
-// probeRow is one variant: ✓ or ✗ for each build, and the mutation.
 function probeRow(p, traffic) {
   const reg = p.set === "regression";
   // A variant counts when the old build fails it the same way; a regression
@@ -344,7 +338,6 @@ function probeRow(p, traffic) {
 const CHECK = /^kavach (diff|replay|contract_check|contract check)\b/;
 const isCheck = (s) => s.kavach && (CHECK.test(s.title) || /kavach(?:\s+--[\w-]+)*\s+(diff|replay|contract\s+check)\b/.test(s.title));
 
-// trailRows reads the rows from the shown steps.
 export function trailRows(shown) {
   const rows = [];
   let edits = [];
@@ -371,7 +364,6 @@ export function trailRows(shown) {
 const firstLine = (s) => String(s || "").split("\n").find((l) => l.trim() && !l.trim().startsWith("#")) || "";
 const short = (cmd) => firstLine(cmd).replace(/(^|\s)\/[\w./-]*\/(kavach\b)/, "$1$2").replace(/\s+/g, " ").trim();
 
-// renderTrail is the trail as a table. onPick shows a row's step.
 export function renderTrail(shown, onPick, clockOf) {
   const rows = trailRows(shown);
   if (!rows.length) return h("div", { class: "dim trail-empty" }, "The agent made no Kavach calls.");
@@ -434,7 +426,6 @@ function readText(shown, i, clockOf) {
   return `step ${i + 1} of ${shown.length} · ${clockOf(s.t_ms / 1000)} · ${what}`;
 }
 
-// showStep scrolls the steps list to step i and marks it.
 export function showStep(i) {
   const box = document.querySelector(".steps");
   if (!box) return;

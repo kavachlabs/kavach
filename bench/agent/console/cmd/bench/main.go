@@ -11,7 +11,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// command is one bench subcommand.
 type command struct {
 	name    string
 	summary string

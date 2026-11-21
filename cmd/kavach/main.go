@@ -22,7 +22,6 @@ import (
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
 
-// Exit codes.
 const (
 	exitPass  = 0 // replay ok or fixed
 	exitFail  = 1 // replay ran but did not pass
@@ -133,7 +132,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return exitUsage
 }
 
-// parse parses flags that may appear before or after positional arguments.
 func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for {
@@ -262,8 +260,6 @@ func describeRecord(r journal.Record, limit int) string {
 	return fmt.Sprintf("%d bytes", len(r.Data))
 }
 
-// describeFacts summarizes an environment record: a count, and with --full
-// (limit < 0) every fact, one per line.
 func describeFacts(facts []journal.Fact, limit int) string {
 	s := fmt.Sprintf("%d facts", len(facts))
 	if limit >= 0 {
@@ -350,7 +346,6 @@ func (o *optionalUint64) Set(s string) error {
 	return nil
 }
 
-// replayWith replays the fixture at path through the host command bin.
 func replayWith(bin, fixture string) (*replay.Result, time.Duration, error) {
 	return replayWithOpts(bin, fixture, replay.Options{})
 }
@@ -632,20 +627,15 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	return exitFail
 }
 
-// diffOutcome is a verified fix, as kavach diff and the MCP server report it.
 type diffOutcome struct {
-	fixture string
-	v       *replay.Verification
-	saved   map[int]string // failing variants written to disk, by ID
-	// savedRegressions are the failing regression variants, by ID.
+	fixture          string
+	v                *replay.Verification
+	saved            map[int]string
 	savedRegressions map[int]string
 	divergence       *replay.Divergence
 	wall             time.Duration
 }
 
-// verifyFix checks the fix in newBin against the incident in fixture.
-// minVariants 0 checks only the recorded journal; regressions 0 skips
-// regression variants.
 func verifyFix(fixture, oldBin, newBin string, minVariants, regressions int, keep string) (*diffOutcome, error) {
 	j, err := journal.ReadFile(fixture)
 	if err != nil {
@@ -682,7 +672,6 @@ func verifyFix(fixture, oldBin, newBin string, minVariants, regressions int, kee
 	return &diffOutcome{fixture, v, saved, savedRegressions, replay.Compare(v.Old, v.New), wall}, nil
 }
 
-// report is the JSON form of a diff outcome.
 func (o *diffOutcome) report() map[string]any {
 	v := o.v
 	checks := make([]map[string]any, len(v.Variants))
@@ -730,9 +719,6 @@ func (o *diffOutcome) report() map[string]any {
 	}
 }
 
-// saveFailingVariants writes the variants and regression variants the new
-// build failed to dir (a new temporary directory if empty) and returns their
-// paths by ID.
 func saveFailingVariants(v *replay.Verification, fixture, dir string) (variants, regressions map[int]string, err error) {
 	variants, regressions = map[int]string{}, map[int]string{}
 	base := strings.TrimSuffix(filepath.Base(fixture), ".kavach")

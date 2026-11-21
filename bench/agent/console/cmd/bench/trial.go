@@ -44,7 +44,6 @@ One asked for while the run goes on starts when the run ends.
 
 const defaultAdminSocket = "/var/lib/kavach/admin.sock"
 
-// trialOpts are the flags every bench trial verb shares.
 type trialOpts struct {
 	config, jobs, root, tasks, envFile, site string
 }

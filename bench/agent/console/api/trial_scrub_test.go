@@ -92,14 +92,12 @@ func TestTrialKeepsOwnershipWhenKeysAreEnteredAgain(t *testing.T) {
 	if string(owner) != hex.EncodeToString(sum[:]) {
 		t.Errorf("owner file %q does not follow the new session", owner)
 	}
-	// Still one live run per session.
 	if code, _ := e.do(c, "POST", "/api/jobs", runBody); code != 429 {
 		t.Errorf("second run: %d", code)
 	}
 	if code, _ := e.do(c, "POST", "/api/jobs/"+id+"/stop", ""); code != 202 {
 		t.Errorf("stop: %d", code)
 	}
-	// Another visitor's session does not get it.
 	d := e.visitor()
 	e.setKeys(d)
 	if code, _ := e.do(d, "POST", "/api/jobs/"+id+"/stop", ""); code != 403 {

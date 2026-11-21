@@ -11,7 +11,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// command is one slash command.
 type command struct {
 	name, args, desc string
 	needsArg         bool
@@ -47,7 +46,6 @@ func init() {
 	}
 }
 
-// suggestion is one line of the pop-up under the prompt.
 type suggestion struct {
 	value, label, desc string
 	needsArg           bool
@@ -141,7 +139,6 @@ func (m *Model) suggestions() []suggestion {
 	return vals
 }
 
-// exec runs one prompt line.
 func (m *Model) exec(line string) tea.Cmd {
 	if line == "" {
 		return nil
@@ -268,7 +265,6 @@ func (m *Model) startMatrix(ids []string) tea.Cmd {
 	return m.start(tasks, ids)
 }
 
-// wantModels fetches the model list unless it is here.
 func (m *Model) wantModels() tea.Cmd {
 	if m.models != nil {
 		return nil
@@ -330,7 +326,6 @@ func (m *Model) cmdEnv(arg string) tea.Cmd {
 	return nil
 }
 
-// local is whether env runs in Docker on this machine.
 func (m *Model) local(env string) bool { return env == "" || env == "docker" }
 
 // envProblem is why a run on env cannot start, from the server's status.
@@ -406,7 +401,6 @@ func (m *Model) cmdJobs(string) tea.Cmd {
 	return m.loadJobs()
 }
 
-// currentJob is the job on screen, or the newest one.
 func (m *Model) currentJob() string {
 	if m.job != nil {
 		return m.job.ID

@@ -193,7 +193,7 @@ type Reader struct {
 	CacheDir string
 
 	mu    sync.Mutex
-	cache map[string]cachedTrial // by trial directory
+	cache map[string]cachedTrial
 }
 
 type cachedTrial struct {
@@ -619,7 +619,6 @@ func (r *Reader) readTrial(job, dir string) Trial {
 
 func loadTrial(job, dir string) Trial { return trialFrom(job, dir, os.DirFS(dir)) }
 
-// trialFrom reads the trial in dir from fsys, which holds dir's files.
 func trialFrom(job, dir string, fsys fs.FS) Trial {
 	name := filepath.Base(dir)
 	t := Trial{ID: name, Job: job, Status: Running}
@@ -737,7 +736,6 @@ func trialFrom(job, dir string, fsys fs.FS) Trial {
 	return t
 }
 
-// lastLogLine is the last line of OpenCode's JSON log of the run.
 func lastLogLine(fsys fs.FS) string {
 	f, err := fsys.Open("agent/opencode.txt")
 	if err != nil {

@@ -39,7 +39,6 @@ func TestTrialAdminRetry(t *testing.T) {
 	e.stop(c, id)
 	e.attempts(id, "hello-world-kavach__aB3", "x__dup", "y__dup")
 
-	// The public listener has no operator routes.
 	if code, _, _ := e.raw(c, "POST", "/retry", `{"job":"`+id+`","trials":["aB3"]}`, "Content-Type", "application/json"); code == http.StatusOK {
 		t.Fatalf("the public server serves /retry")
 	}
@@ -66,7 +65,6 @@ func TestTrialAdminRetry(t *testing.T) {
 	if env := e.call(2); !strings.Contains(env, "sk-or-v1-server-secret-9999") || !strings.Contains(env, "jobs resume") {
 		t.Errorf("retry env:\n%s", env)
 	}
-	// Asked again while that retry runs, it waits for it.
 	code, out, raw = e.admin(`{"job":"` + id + `","trials":["dup","x__dup"]}`)
 	if code != 200 || out[1].Error != "" || !out[1].Queued {
 		t.Errorf("queued: %d %s", code, raw)

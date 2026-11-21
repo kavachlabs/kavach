@@ -46,6 +46,6 @@ test("gateway and config records are critical, others are not", () => {
 test("facts frame", () => {
   const f = factsFrame(new Map([["host.runtime", u("node-22")]]));
   assert.equal(f[1], 0x04);
-  assert.equal(f[2], 1); // one fact
+  assert.equal(f[2], 1);
   assert.equal(f[3], "host.runtime".length);
 });

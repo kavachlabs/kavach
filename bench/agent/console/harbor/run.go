@@ -144,7 +144,7 @@ func ReadEnv(path string) (vals map[string]string, ok bool) {
 // Harbor), <id>.log (Harbor's output) and <id>.pid, so a later console can
 // tell whether Harbor is still running and stop it.
 type Runner struct {
-	Harbor   string // the harbor command
+	Harbor   string
 	JobsDir  string // absolute: Harbor mounts trial folders into containers
 	TasksDir string
 	EnvFile  string // given to Harbor as --env-file if it exists; read only to tell which provider keys are set, never returned
@@ -648,7 +648,6 @@ func isDone(rn *run) bool {
 	}
 }
 
-// note appends a line to the job's Harbor log.
 func (r *Runner) note(id, format string, args ...any) {
 	if f, err := os.OpenFile(r.file(id, ".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
 		fmt.Fprintf(f, "\nbench: "+format+"\n", args...)
@@ -743,7 +742,6 @@ func prepareResume(dir, id string) error {
 	return nil
 }
 
-// alive reports whether a Harbor for the job is running.
 func (r *Runner) alive(id string) bool {
 	if !r.launched(id) {
 		return false
@@ -783,13 +781,10 @@ func (r *Runner) get(id string) *run {
 	return r.runs[id]
 }
 
-// file is the path of a run's file in <jobs>/.bench/; with id "", the
-// directory itself.
 func (r *Runner) file(id, ext string) string {
 	return filepath.Join(r.JobsDir, ".bench", id+ext)
 }
 
-// ids lists the runs bench started.
 func (r *Runner) ids() []string {
 	if r == nil {
 		return nil
@@ -806,8 +801,6 @@ func (r *Runner) launched(id string) bool {
 	return r != nil && validName(id) && exists(r.file(id, ".json"))
 }
 
-// state says whether bench started the job and whether its Harbor is still
-// running, with the end of Harbor's output.
 func (r *Runner) state(id string) (launched, alive bool, out string) {
 	if !r.launched(id) {
 		return false, false, ""
@@ -931,7 +924,6 @@ func (r *Runner) planned(id string) (tasks []string, agent string, models []stri
 	return tasks, agent, models, len(cfg.Tasks) * len(cfg.Agents) * cfg.Attempts
 }
 
-// tailSize is how much of Harbor's output a stopped job reports.
 const tailSize = 4096
 
 func tailOf(path string) string {

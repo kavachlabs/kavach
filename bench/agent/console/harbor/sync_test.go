@@ -67,7 +67,6 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.types[path] = r.Header.Get("Content-Type")
 }
 
-// authorization recomputes the header from the request as the server got it.
 func authorization(r *http.Request) string {
 	amz := r.Header.Get("x-amz-date")
 	date := amz[:8]
@@ -98,8 +97,6 @@ func (f *fakeS3) count() int {
 	return f.puts
 }
 
-// syncFixture is a runner whose env file holds the R2 credentials and an
-// OpenRouter key, and a syncer for a fake S3.
 func syncFixture(t *testing.T) (*Syncer, *fakeS3) {
 	t.Helper()
 	runner, dir := fakeHarbor(t, "")
@@ -114,7 +111,6 @@ func syncFixture(t *testing.T) (*Syncer, *fakeS3) {
 	return s, fake
 }
 
-// finishedJob writes a job folder Harbor has finished.
 func finishedJob(t *testing.T, s *Syncer, id string) string {
 	t.Helper()
 	dir := filepath.Join(s.Runner.JobsDir, id)
@@ -224,7 +220,6 @@ func TestSyncIsIncremental(t *testing.T) {
 		t.Fatalf("%d puts", fake.count())
 	}
 
-	// A new console starts with only the manifest.
 	s2 := &Syncer{Runner: s.Runner, Reader: s.Reader, Endpoint: s.Endpoint, Backoff: time.Millisecond}
 	writeFile(t, filepath.Join(dir, "a.txt"), "ONE")
 	later := time.Now().Add(time.Minute)
@@ -236,13 +231,11 @@ func TestSyncIsIncremental(t *testing.T) {
 		t.Errorf("a.txt %q", got)
 	}
 
-	// Touched but not changed: hashed, not uploaded.
 	os.Chtimes(filepath.Join(dir, "b.txt"), later, later)
 	if res, err := s2.RunOnce(ctx, "j1"); err != nil || res.Uploaded != 0 {
 		t.Fatalf("touched: %+v %v", res, err)
 	}
 
-	// Deleted locally: stays in the bucket, and is not an error.
 	os.Remove(filepath.Join(dir, "b.txt"))
 	if res, err := s2.RunOnce(ctx, "j1"); err != nil || res.Uploaded != 0 {
 		t.Fatalf("deleted: %+v %v", res, err)

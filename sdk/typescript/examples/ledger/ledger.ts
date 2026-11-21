@@ -19,7 +19,7 @@ export interface LedgerOptions {
 /** A single-writer wallet ledger: it folds events into balances. */
 export class Ledger implements Handler {
   balances: Record<string, number> = {};
-  net = 0; // deposits minus withdrawals
+  net = 0;
 
   constructor(private readonly options: LedgerOptions = {}) {}
 

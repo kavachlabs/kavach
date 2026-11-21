@@ -68,7 +68,6 @@ func newTestModel(t *testing.T) (*Model, *[]harbor.RunRequest) {
 	return m, &posted
 }
 
-// modelsServer stands in for OpenRouter's model list.
 func modelsServer(t *testing.T) string {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[
@@ -112,7 +111,6 @@ func press(m *Model, k tea.KeyType) {
 	drive(m, cmd)
 }
 
-// screen renders m without trailing spaces, for golden files.
 func screen(m *Model) string {
 	var b strings.Builder
 	for _, l := range strings.Split(m.View(), "\n") {
@@ -256,8 +254,6 @@ func TestRunWithoutDocker(t *testing.T) {
 	}
 }
 
-// openRuns opens the fixture job with a running, a passed, an errored and
-// a queued attempt.
 func openRuns(t *testing.T) *Model {
 	m, _ := newTestModel(t)
 	drive(m, m.openJob("opencode-glm"))

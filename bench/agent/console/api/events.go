@@ -12,7 +12,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// event is one Server-Sent Event: "job" or "trial", with its JSON.
 type event struct {
 	name string
 	data []byte

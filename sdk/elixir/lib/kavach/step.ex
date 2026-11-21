@@ -1,6 +1,5 @@
 defmodule Kavach.Step do
   @moduledoc false
-  # Runs one handler step and maps how it ended; shared by the recorder and the host.
   alias Kavach.Failure
 
   @type result ::

@@ -45,7 +45,6 @@ type InvariantDef struct {
 	Agent bool `json:"agent,omitempty"`
 }
 
-// Snippet is a few lines of a source file.
 type Snippet struct {
 	Role  string `json:"role"` // declaration, check or fails
 	Path  string `json:"path"`
@@ -173,9 +172,8 @@ func (r *Reader) TrialInvariants(tasksDir, job, id string, names []string) (*Inv
 	return out, nil
 }
 
-// patchSource is a patch TrialInvariants reads.
 type patchSource struct {
-	path  string // absolute
+	path  string
 	text  []byte
 	agent bool
 }
@@ -300,7 +298,6 @@ func commentAbove(f *hunkFile, i int) (string, srcLine) {
 	return strings.Join(parts, " "), first
 }
 
-// newFilePatch is a unified diff that adds the file name with text b.
 func newFilePatch(name string, b []byte) []byte {
 	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 	var out strings.Builder
@@ -504,7 +501,6 @@ func snippet(f *hunkFile, lo, hi int, role string) Snippet {
 		File: f.file, FileLine: f.lines[lo].pline, plines: plines}
 }
 
-// maxCheckLines bounds a check function's snippet.
 const maxCheckLines = 40
 
 // funcBody finds the function named name and returns it: a Python def to

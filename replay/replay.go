@@ -37,14 +37,14 @@ const (
 
 // Failure describes a failure recorded in a journal.
 type Failure struct {
-	Seq     uint64 `json:"seq"` // seq of the input whose step failed
+	Seq     uint64 `json:"seq"`
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
 }
 
 // StepResult is what one step produced during replay.
 type StepResult struct {
-	Seq     uint64          `json:"seq"` // seq of the step's input
+	Seq     uint64          `json:"seq"`
 	Outputs []kavach.Output `json:"outputs"`
 	Panic   string          `json:"panic,omitempty"`
 	Error   string          `json:"error,omitempty"`
@@ -125,8 +125,8 @@ func (p ProbeResult) FailureDetail() string {
 // produces an identical Result.
 type Result struct {
 	Status    Status       `json:"status"`
-	Seq       *uint64      `json:"seq,omitempty"`   // where Status applies, if anywhere
-	Until     *uint64      `json:"until,omitempty"` // step seq limit when replayed with Options.Until
+	Seq       *uint64      `json:"seq,omitempty"` // where Status applies, if anywhere
+	Until     *uint64      `json:"until,omitempty"`
 	Invariant string       `json:"invariant,omitempty"`
 	Detail    string       `json:"detail,omitempty"`
 	Service   string       `json:"service"`
@@ -154,10 +154,10 @@ type Result struct {
 
 // Change is a feature step whose outputs differ from the recorded ones.
 type Change struct {
-	Seq      uint64          `json:"seq"` // seq of the step's input
+	Seq      uint64          `json:"seq"`
 	Recorded []kavach.Output `json:"recorded"`
 	Replay   []kavach.Output `json:"replay"`
-	Detail   string          `json:"detail"` // the first difference
+	Detail   string          `json:"detail"`
 }
 
 // Options configure a replay.
@@ -208,11 +208,11 @@ func RunFile(path string, newHandler func() kavach.Handler) (*Result, error) {
 
 type step struct {
 	input    journal.Record
-	reads    []journal.Record // clock, rand, gateway and config, in order
+	reads    []journal.Record
 	outputs  []kavach.Output
-	marker   *journal.Record  // failure marker, if any
-	envAfter []journal.Record // environment records written after the step
-	lastSeq  uint64           // highest record seq in the step
+	marker   *journal.Record
+	envAfter []journal.Record
+	lastSeq  uint64
 }
 
 // Replay re-runs every step of j against a fresh handler from newHandler,
@@ -240,8 +240,6 @@ func RunWith(j *journal.Journal, newHandler func() kavach.Handler, opts Options)
 	})
 }
 
-// replayJournal is the replay engine. open creates the handler the journal
-// starts from; snapshot is nil unless the journal starts from one.
 func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) (kavach.Handler, error)) (*Result, error) {
 	res := &Result{
 		Service: j.Header.Meta.Service,
@@ -540,7 +538,6 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 	return steps, nil
 }
 
-// genesisEnv returns the environment record before the first input, if any.
 func genesisEnv(recs []journal.Record) *journal.Record {
 	for i := range recs {
 		switch recs[i].Type {
@@ -594,8 +591,6 @@ func runReplayStep(h kavach.Handler, env *replayEnv, in kavach.Input) (pv any, p
 	return nil, false, h.Handle(env, in)
 }
 
-// nondeterminism is the panic value replayEnv uses to stop a handler whose
-// reads do not match the journal.
 type nondeterminism struct {
 	seq uint64
 	msg string
@@ -680,7 +675,7 @@ type replayEnv struct {
 	randPos     int
 	lastClock   int64
 	synthesized int
-	used        []bool // lenient gateway and config reads already served
+	used        []bool
 	hist        *history
 }
 
@@ -701,7 +696,6 @@ func (e *replayEnv) next(want journal.Type) journal.Record {
 	return r
 }
 
-// nextOfType returns the next recorded read of type want, scanning from *pos.
 func (e *replayEnv) nextOfType(want journal.Type, pos *int) (journal.Record, bool) {
 	for ; *pos < len(e.reads); *pos++ {
 		if e.reads[*pos].Type == want {
@@ -713,7 +707,6 @@ func (e *replayEnv) nextOfType(want journal.Type, pos *int) (journal.Record, boo
 	return journal.Record{}, false
 }
 
-// takeUnread marks and returns the first unserved read for which match is true.
 func (e *replayEnv) takeUnread(match func(journal.Record) bool) (journal.Record, bool) {
 	if e.used == nil {
 		e.used = make([]bool, len(e.reads))
@@ -818,7 +811,7 @@ func (e *replayEnv) Emit(sink string, data []byte) {
 
 // Divergence is the first point where two replays of the same journal differ.
 type Divergence struct {
-	Seq    uint64         `json:"seq"`    // seq of the step's input
+	Seq    uint64         `json:"seq"`
 	Output int            `json:"output"` // index of the differing output in the step, or -1 for a failure difference
 	Old    *kavach.Output `json:"old,omitempty"`
 	New    *kavach.Output `json:"new,omitempty"`

@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// fakeRunner sets up a Runner whose Harbor is a script and a task for it.
 func fakeRunner(t *testing.T, script string) (*Runner, string) {
 	t.Helper()
 	dir := t.TempDir()

@@ -162,7 +162,6 @@ def render_chapter(n, text):
         subtitle = lines[i][2:].strip()
         i += 1
     body = render_body(lines[i:])
-    # Number the chapter's sections: ## -> h2 "n.k".
     k = [0]
 
     def num_h2(m):

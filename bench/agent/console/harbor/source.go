@@ -182,7 +182,6 @@ func readArtifact(root, path string) ([]byte, error) {
 	return os.ReadFile(p)
 }
 
-// snippetFiles lists the repo-relative files the snippets are in.
 func snippetFiles(inv *Invariants) []string {
 	var files []string
 	add := func(s *Snippet) {

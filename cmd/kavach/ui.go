@@ -9,7 +9,6 @@ import (
 	"github.com/kavachlabs/kavach/replay"
 )
 
-// 256-color palette carried over from the original kavach CLI.
 const (
 	ansiReset   = "\033[0m"
 	ansiBold    = "\033[1m"
@@ -31,9 +30,6 @@ type ui struct {
 	banner bool
 }
 
-// newUI decides styling for w: color only on a terminal, never with a
-// non-empty NO_COLOR or TERM=dumb; FORCE_COLOR turns it on regardless. The banner follows color
-// unless disabled.
 func newUI(w io.Writer, noBanner bool) ui {
 	color := isTerminal(w) && os.Getenv("TERM") != "dumb"
 	if os.Getenv("FORCE_COLOR") != "" {
@@ -54,7 +50,6 @@ func isTerminal(w io.Writer) bool {
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
 
-// paint wraps s in the given styles when color is on.
 func (u ui) paint(s string, styles ...string) string {
 	if !u.color || s == "" {
 		return s
@@ -62,7 +57,6 @@ func (u ui) paint(s string, styles ...string) string {
 	return strings.Join(styles, "") + s + ansiReset
 }
 
-// label renders the left-hand column of a key/value line.
 func (u ui) label(s string, width int) string {
 	return u.paint(fmt.Sprintf("%-*s", width, s), ansiBold)
 }
@@ -85,7 +79,6 @@ var bannerText = []string{
 	"██    ██  ▀█████     ▀▀     ▀█████   ▀████▀  ██   ██ ",
 }
 
-// printBanner prints the kada mark and wordmark, if the banner is enabled.
 func (u ui) printBanner(w io.Writer) {
 	if !u.banner {
 		return
@@ -97,7 +90,6 @@ func (u ui) printBanner(w io.Writer) {
 	fmt.Fprintf(w, "  %s\n\n", u.paint("deterministic replay and fix verification for journal-driven services · "+version, ansiDim))
 }
 
-// header prints a section title such as "=== [KAVACH REPLAY] ===".
 func (u ui) header(w io.Writer, title string) {
 	if !u.color {
 		return
@@ -117,8 +109,6 @@ var statusStyle = map[replay.Status]struct{ bg, fg, text string }{
 	replay.StatusUnverified:        {"\033[48;5;220m", ansiYellow, "UNVERIFIED"},
 }
 
-// verdict renders a verdict: a colored badge followed by the exact verdict
-// string when color is on, the verdict string alone when it is off.
 func (u ui) verdict(status replay.Status, verdict string) string {
 	st, ok := statusStyle[status]
 	if !u.color || !ok {
@@ -128,7 +118,6 @@ func (u ui) verdict(status replay.Status, verdict string) string {
 	return badge + " " + u.paint(verdict, ansiBold, st.fg)
 }
 
-// verdictColor returns the foreground color for a status.
 func verdictColor(s replay.Status) string {
 	if st, ok := statusStyle[s]; ok {
 		return st.fg

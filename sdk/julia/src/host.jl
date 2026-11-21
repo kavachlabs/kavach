@@ -75,7 +75,6 @@ function recv(h::Host)
     return msg
 end
 
-# Sends one request and waits for its answer; unwinds on `abort`.
 function request(h::Host, msg, want::String)
     h.aborted && throw(Aborted())
     send(h, msg)

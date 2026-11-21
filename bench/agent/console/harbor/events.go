@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 )
 
-// maxEventBytes is the most of the event log one Events call returns.
 const maxEventBytes = 256 << 10
 
 // Events is a piece of an attempt's OpenCode event log: whole JSON lines,

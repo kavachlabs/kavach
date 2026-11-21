@@ -12,10 +12,8 @@ import (
 	"github.com/kavachlabs/kavach/journal"
 )
 
-// maxIncidents bounds a listing.
 const maxIncidents = 500
 
-// incident summarizes one fixture.
 type incident struct {
 	Path       string           `json:"path"`
 	Service    string           `json:"service,omitempty"`
@@ -36,9 +34,6 @@ type incidentFailure struct {
 	Message string `json:"message"`
 }
 
-// listIncidents finds fixtures (*.kavach) under root, skipping hidden
-// directories and vendor/. It reports unreadable fixtures with Error set rather
-// than failing, and stops after maxIncidents.
 func listIncidents(root string) (list []incident, truncated bool, err error) {
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

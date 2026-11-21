@@ -13,7 +13,7 @@ import (
 // Event is one wallet event from upstream.
 type Event struct {
 	ID      string `json:"id"`
-	Type    string `json:"type"` // deposit, withdraw or transfer
+	Type    string `json:"type"`
 	Account string `json:"account"`
 	To      string `json:"to,omitempty"`
 	Amount  *int64 `json:"amount"`
@@ -38,7 +38,7 @@ type Rejection struct {
 // Ledger is a single-writer wallet ledger: it folds events into balances.
 type Ledger struct {
 	Balances map[string]int64 `json:"balances"`
-	Net      int64            `json:"net"` // deposits minus withdrawals
+	Net      int64            `json:"net"`
 }
 
 func NewLedger() *Ledger { return &Ledger{Balances: map[string]int64{}} }

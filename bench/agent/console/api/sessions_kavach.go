@@ -301,7 +301,6 @@ func (h *SessionService) label(id string) string {
 
 var runLabel = regexp.MustCompile(`run-(\d+)`)
 
-// unlabel puts the run ids back for the labels in an input.
 func (h *SessionService) unlabel(s string) string {
 	return runLabel.ReplaceAllStringFunc(s, func(m string) string {
 		var n int

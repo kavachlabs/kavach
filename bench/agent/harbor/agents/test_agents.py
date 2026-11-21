@@ -577,7 +577,7 @@ class LiveLog(unittest.TestCase):
         self.assertTrue(self.tail(env))
         self.remote += 'use","part":{"tool":"bash","state":{"output":"é"}}}\n'.encode()
         self.assertTrue(self.tail(env))
-        self.assertTrue(self.tail(env))  # nothing new
+        self.assertTrue(self.tail(env))
         self.assertEqual(self.live(), self.remote)
         self.assertEqual(self.agent._live_offset, len(self.remote))
 

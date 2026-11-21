@@ -14,7 +14,6 @@ trap 'rm -rf "$work"' EXIT
 old="julia $here/ledger.jl"
 new="julia $here/ledger.jl --fix"
 
-# The buggy ledger crashes on purpose.
 KAVACH_RECORDER=$work/kavach-recorder $old --in "$root/examples/ledger/testdata/events.jsonl" --fixtures "$work/journal" >/dev/null || true
 set -- "$work"/journal/fixtures/*.kavach
 [ $# -eq 1 ] && [ -f "$1" ] || { echo "check: expected one fixture, got: $*" >&2; exit 1; }

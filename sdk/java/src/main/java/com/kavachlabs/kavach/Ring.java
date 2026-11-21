@@ -104,7 +104,6 @@ final class Ring {
         try {
             Files.deleteIfExists(path);
         } catch (IOException ignored) {
-            // a temp file; nothing more to do
         }
     }
 }

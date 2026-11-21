@@ -20,8 +20,6 @@ trap 'exit 130' INT
 while :; do sleep 0.05; done
 `
 
-// call waits for the n-th invocation of the fake Harbor and returns what it
-// recorded.
 func (e *trialEnv) call(n int) string {
 	e.t.Helper()
 	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
@@ -126,7 +124,6 @@ func TestTrialOwnKeysRunForm(t *testing.T) {
 	}
 	e.stop(c, id)
 
-	// An agent without a model needs no model key.
 	code, v = e.do(c, "POST", "/api/jobs", `{"tasks":["hello-world-control"],"agent":"oracle"}`)
 	if code != 202 {
 		t.Fatalf("oracle: %d %v", code, v)
@@ -136,7 +133,6 @@ func TestTrialOwnKeysRunForm(t *testing.T) {
 	}
 	e.stop(c, v["id"].(string))
 
-	// One live run per session still holds.
 	code, v = e.do(c, "POST", "/api/jobs", `{"tasks":["hello-world-control"],"agent":"nop"}`)
 	if code != 202 {
 		t.Fatal(code, v)
@@ -173,7 +169,6 @@ func TestTrialOwnCapsFromFile(t *testing.T) {
 	}
 }
 
-// startOwn starts a run on the cheapest request and returns its id.
 func (e *trialEnv) startOwn(c *http.Client) string {
 	e.t.Helper()
 	code, v := e.do(c, "POST", "/api/jobs", `{"tasks":["hello-world-control"],"models":["openrouter/z-ai/glm-5.3"]}`)
@@ -192,7 +187,6 @@ func TestTrialOwnKeysPauseResumeRetry(t *testing.T) {
 	if json := string(raw); !strings.Contains(json, `"stoppable": true`) {
 		t.Fatalf("owner: %s", raw)
 	}
-	// Someone else's session may neither see the controls nor use them.
 	other := e.visitor()
 	e.setKeys(other)
 	_, raw, _ = e.raw(other, "GET", "/api/jobs/"+id, "")
@@ -223,7 +217,6 @@ func TestTrialOwnKeysPauseResumeRetry(t *testing.T) {
 		t.Fatalf("paused: %s", raw)
 	}
 
-	// Resume starts Harbor again on the session's keys, never the server's.
 	if code, v := e.do(c, "POST", "/api/jobs/"+id+"/resume", ""); code != 202 {
 		t.Fatalf("resume: %d %v", code, v)
 	}
@@ -327,7 +320,6 @@ func TestTrialOwnKeysLimitsStillApply(t *testing.T) {
 	id2 := e.startOwn(c)
 	e.call(2)
 
-	// A second live run, by resume, is the same as by start.
 	if code, _ := e.do(c, "POST", "/api/jobs/"+id+"/resume", ""); code != 429 {
 		t.Errorf("resume beside a live run: %d", code)
 	}
@@ -381,14 +373,12 @@ func TestTrialInviteSessionStaysLimited(t *testing.T) {
 			t.Errorf("%s %s: %d", r[0], r[1], code)
 		}
 	}
-	// Another session may not retry it.
 	other := e.visitor()
 	e.invite(other)
 	if code, _ := e.do(other, "POST", "/api/trials/"+id+"/"+id+"__A/retry", ""); code != 404 {
 		t.Errorf("another invite session retried: %d", code)
 	}
 	_, before, _ := e.raw(c, "GET", "/api/trial/session", "")
-	// The owner retries an attempt on the operator's keys, using no run.
 	if code, v := e.do(c, "POST", "/api/trials/"+id+"/"+id+"__A/retry", ""); code != 202 {
 		t.Fatalf("retry: %d %v", code, v)
 	}
@@ -457,7 +447,6 @@ func TestTrialOwnRetryRequestsCapped(t *testing.T) {
 	if n := readRetryRequests(e.jobs, id); n != 2 {
 		t.Errorf("persisted count %d", n)
 	}
-	// Resume is not a retry request.
 	if code, _ := e.do(c, "POST", "/api/jobs/"+id+"/resume", ""); code != 202 {
 		t.Errorf("resume: %d", code)
 	}

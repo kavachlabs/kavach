@@ -35,7 +35,7 @@ type TrialConfig struct {
 	// InviteRuns runs.
 	InviteCodes []string
 	InviteRuns  int
-	Models      []string // allowed models
+	Models      []string
 	Tasks       []string // allowed task folders or base names; empty: every task
 	MaxAttempts int
 	// What a session with its own keys may ask for, which bills its own
@@ -53,8 +53,8 @@ type TrialConfig struct {
 
 	TurnstileSecret  string // when set, starting a run on a visitor's own keys needs a verified turnstile_token
 	TurnstileSiteKey string
-	TurnstileURL     string       // default Cloudflare's siteverify
-	Client           *http.Client // for the Turnstile call
+	TurnstileURL     string // default Cloudflare's siteverify
+	Client           *http.Client
 }
 
 const turnstileVerify = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -140,7 +140,6 @@ type visitorKeys struct {
 	model, provider, daytona, modalID, modalSecret string
 }
 
-// trial is the state of trial mode.
 type trial struct {
 	cfg    TrialConfig
 	runner *harbor.Runner
@@ -838,7 +837,6 @@ func (t *trial) allow(ip string) bool {
 	return w.n <= t.cfg.RatePerMin
 }
 
-// visible reports whether anyone may read the job: a trial run or a showcase run.
 func (t *trial) visible(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -864,7 +862,6 @@ func (t *trial) viewer(r *http.Request) viewer {
 	return viewer{digest(sid), sess.invite == ""}
 }
 
-// owns reports whether the visitor with this session cookie started the job.
 func (t *trial) owns(r *http.Request, id string) bool { return t.ownedBy(t.viewer(r), id) }
 
 func (t *trial) ownedBy(v viewer, id string) bool {
@@ -873,7 +870,6 @@ func (t *trial) ownedBy(v viewer, id string) bool {
 	return v.owner != "" && t.owners[id] == v.owner
 }
 
-// shapeEvent applies shape to a job event for one viewer.
 func (t *trial) shapeEvent(v viewer, e event) event {
 	if e.name == "trial" {
 		return t.shapeTrialEvent(e)
@@ -891,7 +887,6 @@ func (t *trial) shapeEvent(v viewer, e event) event {
 	return e
 }
 
-// shapeTrialEvent applies shapeTrial to a trial event.
 func (t *trial) shapeTrialEvent(e event) event {
 	var tr harbor.Trial
 	if json.Unmarshal(e.data, &tr) != nil {
@@ -1008,7 +1003,6 @@ func classifyTrialError(s string) string {
 	return "the attempt failed"
 }
 
-// jobID is the job a request path is about, or "".
 func jobID(path string) string {
 	rest, ok := strings.CutPrefix(path, "/api/jobs/")
 	if !ok {
@@ -1055,7 +1049,6 @@ func (t *trial) serve(s *Server, w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// scrubSecrets replaces the server's secrets and the job's in b.
 func (t *trial) scrubSecrets(job string, b []byte) []byte {
 	t.mu.Lock()
 	values := append(slices.Clone(t.serverSecrets), t.jobSecrets[job]...)

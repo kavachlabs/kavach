@@ -23,7 +23,6 @@ import (
 	"github.com/kavachlabs/kavach/journal"
 )
 
-// Files of a contract directory.
 const (
 	FileContract = "contract.json"
 	FileTraffic  = "traffic.kavach"
@@ -64,13 +63,13 @@ type Dir struct {
 
 // InitOptions describe a new contract.
 type InitOptions struct {
-	Spec             string // path to the specification
-	Traffic          string // path to the journal recorded on the base build
+	Spec             string
+	Traffic          string
 	FeatureSteps     []StepRange
 	FeatureMatch     []string
 	Invariants       []string
 	InvariantSources []string
-	Force            bool // replace an existing contract
+	Force            bool
 }
 
 // Init creates a contract in dir: it copies the traffic in and writes
@@ -202,7 +201,6 @@ func selectFeatures(c Contract, j *journal.Journal) (map[uint64]bool, error) {
 // input; a longer one selects the inputs within it.
 type StepRange struct{ Lo, Hi uint64 }
 
-// inputsIn returns the seqs of j's inputs that the ranges select.
 func inputsIn(j *journal.Journal, rs []StepRange) ([]uint64, error) {
 	inputs := map[uint64]bool{}
 	for _, r := range j.Records {
@@ -268,7 +266,7 @@ type Lock struct {
 type LockState struct {
 	State       string   `json:"state"` // "approved", "unapproved" or "stale"
 	Interactive bool     `json:"interactive,omitempty"`
-	Changed     []string `json:"changed,omitempty"` // files changed since approval
+	Changed     []string `json:"changed,omitempty"`
 }
 
 func (d *Dir) lockedFiles() []string {

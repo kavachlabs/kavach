@@ -30,7 +30,6 @@ func step(rec *kavach.Recorder, in kavach.Input) error {
 	return nil
 }
 
-// consumeFile folds a JSON-lines file of events.
 func consumeFile(path string, rec *kavach.Recorder) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -66,7 +65,6 @@ func kafkaClient(brokers []string, topic string, opts ...kgo.Opt) (*kgo.Client, 
 	}, opts...)...)
 }
 
-// consumeKafka folds records from cl until ctx is cancelled or a step panics.
 func consumeKafka(ctx context.Context, cl *kgo.Client, rec *kavach.Recorder) error {
 	for {
 		fetches := cl.PollFetches(ctx)
@@ -91,7 +89,6 @@ func consumeKafka(ctx context.Context, cl *kgo.Client, rec *kavach.Recorder) err
 	}
 }
 
-// seedKafka produces every non-empty line of path to topic, in order.
 func seedKafka(ctx context.Context, brokers []string, topic, path string) (int, error) {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),

@@ -175,8 +175,6 @@ func (r *Report) fail(verdict, detail string) {
 	}
 }
 
-// failedVariant is a variant in Report.VariantFailures, with the new
-// build's replay of it.
 type failedVariant struct {
 	j   *journal.Journal
 	res *replay.Result
@@ -257,8 +255,6 @@ func (d *Dir) checkVariants(r *Report, o CheckOptions) ([]failedVariant, error) 
 	return failed, nil
 }
 
-// saveRound writes each failing variant and the new build's replay of it to
-// rounds/<round>/, replacing whatever an earlier contract left there.
 func (d *Dir) saveRound(r *Report, failed []failedVariant) error {
 	rdir := filepath.Join(d.Path, DirRounds, strconv.Itoa(r.Round))
 	if err := os.RemoveAll(rdir); err != nil {
@@ -284,14 +280,13 @@ func (d *Dir) saveRound(r *Report, failed []failedVariant) error {
 	return nil
 }
 
-// round is one line of rounds.jsonl.
 type round struct {
 	Round     int    `json:"round"`
 	At        string `json:"at"`
 	Build     string `json:"build,omitempty"`
 	Verdict   string `json:"verdict"`
 	Changed   int    `json:"changed"`
-	Signature string `json:"signature"` // equal for checks with the same outcome
+	Signature string `json:"signature"`
 }
 
 // signature digests what a build did: the verdict, the changed outputs and

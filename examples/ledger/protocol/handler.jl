@@ -59,7 +59,6 @@ end
 
 reject(world, ev, reason) = emit!(world, "ledger.rejections", tojson((event=get(ev, "id", ""), reason=reason)))
 
-# Invariants, in check order. Each returns nothing when it holds, or why not.
 const INVARIANTS = [
     "balances_non_negative" => function (l::Ledger)
         for a in sort!(collect(keys(l.balances)))
@@ -72,8 +71,6 @@ const INVARIANTS = [
     end,
 ]
 
-# check_invariants returns the name and failure of the first invariant that
-# does not hold, or nothing.
 function check_invariants(l::Ledger)
     for (name, check) in INVARIANTS
         why = check(l)

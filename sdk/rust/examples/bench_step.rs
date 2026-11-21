@@ -43,7 +43,6 @@ impl Snapshotter for Bench {
 
 fn run(no_ring: bool) -> f64 {
     let dir = std::env::temp_dir().join(format!("kavach-bench-{}", std::process::id()));
-    // A seeded xorshift, so that every run records the same bytes.
     let mut state = 1u64;
     let mut rec = Recorder::builder("bench")
         .dir(dir.to_string_lossy())

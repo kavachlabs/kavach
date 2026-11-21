@@ -105,7 +105,6 @@ killedService t = do
     (_, _, _, ph) <- createProcess (proc "kavach-kill-helper" (dir : flags)) {env = Just (("KAVACH_RECORDER", work ++ "/kavach-recorder") : env)}
     code <- waitForProcess ph
     t ("killed service over the " ++ name ++ " dies of SIGKILL") (code == ExitFailure (-9))
-    -- the recorder is no child of this process: it finishes on its own
     let wait :: Int -> IO [FilePath]
         wait k = do
           fs <- map ((dir ++ "/fixtures/") ++) . filter (".kavach" `isSuffixOf`) <$> (listDirectory (dir ++ "/fixtures") `catch` \e -> const (pure []) (e :: IOException))

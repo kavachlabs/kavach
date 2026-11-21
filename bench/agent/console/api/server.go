@@ -25,7 +25,7 @@ import (
 
 // Config locates what the server reads and runs.
 type Config struct {
-	JobsDir  string // absolute
+	JobsDir  string
 	TasksDir string
 	EnvFile  string // bench/agent/.env; passed to Harbor, never read
 	Harbor   string // the harbor command; default "harbor"
@@ -351,7 +351,6 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	s.writeJob(w, r, http.StatusOK, r.PathValue("id"))
 }
 
-// writeJob writes a job with its trials.
 func (s *Server) writeJob(w http.ResponseWriter, r *http.Request, code int, id string) {
 	j, err := s.reader.Job(id)
 	if err != nil {

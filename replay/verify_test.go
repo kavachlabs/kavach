@@ -24,7 +24,6 @@ func crashJournal(t *testing.T) *journal.Journal {
 	return j
 }
 
-// wrapped lets a test put a candidate fix in front of the buggy wallet.
 type wrapped struct {
 	*wallet
 	pre func(w *wallet, env kavach.Env, in kavach.Input) (handled bool, err error)
@@ -424,7 +423,6 @@ func TestReplayWithFeatureSteps(t *testing.T) {
 	}
 }
 
-// bobFormat writes bob's entries in another format.
 type bobFormat struct{ *wallet }
 
 func (h *bobFormat) Handle(env kavach.Env, in kavach.Input) error {

@@ -14,8 +14,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// wordmark is "kavach" in peach and "bench" in blue, in OpenCode's block
-// letters.
 var wordmark = [3][2]string{
 	{"█  ▄ ▀▀▀█ █  █ ▀▀▀█ █▀▀▀ █   ", "█    ▄▀▀▀ █▀▀▄ █▀▀▀ █   "},
 	{"█▄▀  █▀▀█ █  █ █▀▀█ █    █▀▀▄", "█▀▀█ █▀▀▀ █  █ █    █▀▀▄"},
@@ -31,7 +29,6 @@ func version() string {
 	return "dev"
 }
 
-// margin is the blank border around the screen, in columns.
 const margin = 2
 
 func (m *Model) View() string {
@@ -51,7 +48,6 @@ func (m *Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-// promptWidth is the width of the prompt box on the start screen.
 func (m *Model) promptWidth() int { return min(76, m.width-2*margin) }
 
 func (m *Model) homeView() []string {
@@ -110,7 +106,6 @@ func (m *Model) bottomLines(width int) []string {
 	return out
 }
 
-// menuLines is how many suggestions the pop-up shows at once.
 const menuLines = 8
 
 func (m *Model) menuView(sugg []suggestion, width int) []string {
@@ -332,7 +327,6 @@ func (m *Model) focusLine() int {
 	return -1
 }
 
-// header is the title bar's text: the run on job pages, else the task.
 func (m *Model) header() (title, right string) {
 	if j := m.job; j != nil && (m.page == pageRuns || m.page == pageResults || m.page == pageCompare) {
 		bases, arms, runs := map[string]bool{}, map[string]bool{}, 0
@@ -481,8 +475,6 @@ func (m *Model) gridDot(t harbor.Trial) string {
 	return lipgloss.NewStyle().Background(colFaint).Bold(true).Render(dot(t.Status))
 }
 
-// attemptLines describe one attempt and its latest steps, in at most
-// height lines.
 func (m *Model) attemptLines(t harbor.Trial, width, height int) []string {
 	fresh := t.Tokens.Fresh()
 	var head string
@@ -611,7 +603,6 @@ func stepLine(s harbor.Step, width int) string {
 	return fill(line, width, "")
 }
 
-// cardsBody is a grade card per finished attempt, two to a row.
 func (m *Model) cardsBody(width int) []string {
 	if m.job == nil {
 		return []string{sDim.Render("Loading the run…")}

@@ -22,7 +22,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/web"
 )
 
-// options are the flags every serving subcommand shares.
 type options struct {
 	root, jobs, tasks, harbor string
 	port                      int
@@ -114,7 +113,6 @@ func findRoot() (string, error) {
 	}
 }
 
-// loopbackAddr is 127.0.0.1:port.
 func loopbackAddr(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
 
 // serve serves h on addr until SIGINT or SIGTERM, calling ready, if set,

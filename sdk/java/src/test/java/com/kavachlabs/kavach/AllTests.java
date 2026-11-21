@@ -75,7 +75,6 @@ public final class AllTests {
                 Json.parse(bad);
                 throw new AssertionError("accepted " + bad);
             } catch (Json.ParseException expected) {
-                // ok
             }
         }
     }
@@ -218,7 +217,6 @@ public final class AllTests {
             try {
                 env.nowNanos();
             } catch (Throwable t) {
-                // swallowed
             }
         };
         got = play(greedy,
@@ -280,7 +278,6 @@ public final class AllTests {
             new Recorder(new ConformanceHandler(), o).close();
             throw new AssertionError("expected RecorderException");
         } catch (RecorderException expected) {
-            // ok
         }
     }
 

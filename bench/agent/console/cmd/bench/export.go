@@ -304,7 +304,6 @@ func (e *exporter) trial(job, id, arm string) error {
 
 var errNotFound = errors.New("not found")
 
-// get asks the API for target, as the browser would.
 func (e *exporter) get(target string) ([]byte, error) {
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1"+target, nil)
 	rec := httptest.NewRecorder()

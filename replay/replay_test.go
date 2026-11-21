@@ -99,7 +99,6 @@ func testOptions(t *testing.T) kavach.Options {
 	}
 }
 
-// newRecorder starts a recorder that is closed when the test ends.
 func newRecorder(t *testing.T, h kavach.Handler, opts kavach.Options) *kavach.Recorder {
 	t.Helper()
 	r := kavach.NewRecorder(h, opts)
@@ -107,8 +106,6 @@ func newRecorder(t *testing.T, h kavach.Handler, opts kavach.Options) *kavach.Re
 	return r
 }
 
-// fixtureIn waits until everything recorded is durable and returns the one
-// fixture the recorder wrote under dir.
 func fixtureIn(t *testing.T, r *kavach.Recorder, dir string) string {
 	t.Helper()
 	if err := r.Flush(true); err != nil {
@@ -523,7 +520,6 @@ func BenchmarkRecorderStep(b *testing.B) {
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*4), "ns/event")
 }
 
-// benchHandler snapshots, as a production handler would.
 type benchHandler struct{}
 
 func (benchHandler) Handle(env kavach.Env, in kavach.Input) error {

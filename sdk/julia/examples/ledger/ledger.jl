@@ -23,7 +23,7 @@ using Dates: Dates
 mutable struct Handler
     fix::Bool
     balances::Dict{String,Int64}
-    net::Int64 # deposits minus withdrawals
+    net::Int64
 end
 Handler(fix::Bool) = Handler(fix, Dict{String,Int64}(), 0)
 

@@ -11,7 +11,6 @@ import (
 	"github.com/kavachlabs/kavach/bench/agent/console/harbor"
 )
 
-// A trial whose collect hook copied the source out needs no Docker.
 func TestInvariantArtifactSource(t *testing.T) {
 	tasks := filepath.Join(t.TempDir(), "harbor", "tasks")
 	task := filepath.Join(tasks, "redis-10068-kavach")

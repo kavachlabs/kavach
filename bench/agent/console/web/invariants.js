@@ -29,7 +29,6 @@ function s(tag, attrs, ...kids) {
 
 const invOf = (verdict) => (/^invariant_violated\(([^)]+)\)/.exec(verdict) || [])[1] || null;
 const seqOf = (verdict) => { const m = /@(\d+)$/.exec(verdict); return m ? +m[1] : null; };
-// roundLabel names a verdict in the few characters a round's tile has.
 const ROUND = { invariant_violated: "broke", variant_failed: "variant", missing_invariant: "missing", baseline_mismatch: "baseline", still_failing: "failing" };
 const roundLabel = (verdict) => { const v = verdict.replace(/[(@].*$/, ""); return ROUND[v] || v; };
 
@@ -44,7 +43,6 @@ function guessKind(m) {
   return "field";
 }
 
-// checksOf returns the attempt's contract checks, oldest first.
 export function checksOf(steps) {
   if (!Array.isArray(steps)) return [];
   return steps.filter((st) => st.contract).map((st, i) => ({ ...st.contract, n: i + 1, step: st }));
@@ -102,7 +100,6 @@ function lamp(st, title) {
   return h("span", { class: `lamp ${st}`, title, "aria-label": title });
 }
 
-// verdictClass buckets a verdict for the round dots.
 function verdictClass(v) {
   if (v === "pass") return "pass";
   if (/^variant_failed/.test(v)) return "trip";
@@ -255,11 +252,8 @@ function expand(box, sel, open, makeBody) {
   }
 }
 
-// put appends the views that have something to show.
 const put = (box, ...kids) => box.append(...kids.filter(Boolean));
 
-// renderInvariants is the Invariants tab: what the checks found (Results),
-// or what each invariant is (Definitions).
 export function renderInvariants(t, checks) {
   const iv = state.iv;
   const defs = loadDefs(t, checks);
@@ -538,8 +532,6 @@ function renderSaved(m, rv) {
     })));
 }
 
-// renderFeatureStrip shows the contract's feature steps in order: which the
-// build changed, which it hasn't reached, and where it, or a variant, broke.
 function renderFeatureStrip(c, m) {
   const feats = c.feature_steps || [];
   if (!feats.length) return null;
@@ -565,8 +557,6 @@ function renderFeatureStrip(c, m) {
     h("div", { class: "fstrip-ends m faint" }, h("span", {}, `@${feats[0]}`), h("span", {}, `@${feats[feats.length - 1]}`)));
 }
 
-// renderRounds lays every check of the attempt side by side, each as the
-// selected invariant's radar with the round before it ghosted.
 function renderRounds(checks, idx, name) {
   if (checks.length < 2) return null;
   const iv = state.iv;
@@ -636,7 +626,6 @@ const trialPath = (t) => `/trials/${encodeURIComponent(t.job)}/${encodeURICompon
 const loadPatch = (ctx, i) => loadText(ctx, i, apiURL(`${trialPath(ctx.t)}/invariants/source?i=${i}`));
 const loadFile = (ctx, path) => loadText(ctx, `file|${path}`, apiURL(`${trialPath(ctx.t)}/invariants/file?path=${encodeURIComponent(path)}`));
 
-// loadText fetches a plain-text resource of the trial once, as sub names it.
 function loadText(ctx, sub, url) {
   const k = `${ctx.trial}|${sub}`;
   const got = patchText.get(k);
@@ -710,8 +699,6 @@ function wholePatch(ctx, key, sn, src, hit) {
   return h("div", { class: "inv-patch" }, head, view);
 }
 
-// realFile is the whole real file a snippet lives in, scrolled to and
-// marking the snippet, in an editor (or plain text without Monaco).
 function realFile(ctx, key, sn) {
   const name = fileName(sn.src_file);
   const head = h("div", { class: "inv-patch-head" },
@@ -728,7 +715,6 @@ function realFile(ctx, key, sn) {
   return h("div", { class: "inv-patch" }, head, view);
 }
 
-// Arrow keys, Home and End move between a menu's options.
 function menuKeys(e) {
   const opts = [...e.currentTarget.querySelectorAll(".cselect-opt")];
   let i = opts.indexOf(document.activeElement);
@@ -779,9 +765,6 @@ function openIn(key, file, line) {
       })) : null);
 }
 
-// codeBlock is one snippet of an invariant's code: a read-only editor of it
-// (or plain text without Monaco), its whole patch on request, and a link
-// that opens the patch at the line in a local editor.
 function codeBlock(ctx, d, sn, i, defaultOpen) {
   const key = `${ctx.trial}|${d.name}|${sn.role}|${i}`;
   const id = domId(key);
@@ -836,8 +819,6 @@ function codeBlock(ctx, d, sn, i, defaultOpen) {
   return block;
 }
 
-// renderDefinitions lists every invariant the service declares: what its
-// source says it means, where it is declared, and the code that checks it.
 function renderDefinitions(t, defs, checks) {
   const iv = state.iv;
   const trial = `${t.job}/${t.id}`;

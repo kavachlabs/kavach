@@ -13,7 +13,6 @@ const say = (m: object) => process.stdout.write(JSON.stringify(m) + "\n");
 let buf = Buffer.alloc(0);
 process.stdin.on("data", (chunk: Buffer) => {
   buf = Buffer.concat([buf, chunk]);
-  // Consume whole frames only.
   let end = 0;
   for (let i = 0; i < buf.length; ) {
     let len = 0;
