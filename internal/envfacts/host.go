@@ -38,6 +38,7 @@ func (h *host) add(key, value string) {
 	h.facts = append(h.facts, journal.Fact{Key: "host." + key, Form: journal.FactValue, Value: []byte(value)})
 }
 
+// read returns the trimmed contents of the file at path under the root.
 func (c *Collector) read(path string) (string, bool) {
 	b, err := os.ReadFile(filepath.Join(c.Root, path))
 	if err != nil {
@@ -155,6 +156,8 @@ func firstNonEmpty(ss ...string) string {
 	return ""
 }
 
+// userName finds the name of uid in the passwd file, then in the OS's user
+// database, then in $USER.
 func (c *Collector) userName(uid int) string {
 	if data, ok := c.read("/etc/passwd"); ok {
 		if n := PasswdName(data, uid); n != "" {
@@ -185,6 +188,8 @@ func (c *Collector) timeZone() string {
 	return name
 }
 
+// memoryLimit is the memory available to the process in bytes: the tightest
+// cgroup limit, or the machine's memory when there is none.
 func (c *Collector) memoryLimit() uint64 {
 	var limit uint64
 	if m, ok := c.read("/proc/meminfo"); ok {
@@ -264,6 +269,8 @@ func (c *Collector) cgroupCPUs() (int, bool) {
 	return best, best > 0
 }
 
+// logindSetting returns "yes" or "no" for a setting of systemd-logind, from
+// the running manager when it can be asked, else from the configuration files.
 func (c *Collector) logindSetting(name string) (string, bool) {
 	if out, ok := c.run("busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", name); ok {
 		if v, ok := ParseBusctlBool(out); ok {
@@ -310,6 +317,7 @@ func (c *Collector) logindSetting(name string) (string, bool) {
 	if found {
 		return value, true
 	}
+	// Built-in defaults of systemd-logind.
 	switch name {
 	case "RemoveIPC":
 		return "yes", true
@@ -319,6 +327,7 @@ func (c *Collector) logindSetting(name string) (string, bool) {
 	return "", false
 }
 
+// sessions counts the login sessions of uid that systemd-logind keeps.
 func (c *Collector) sessions(uid int) (int, bool) {
 	if !c.exists("/run/systemd/users") {
 		return 0, false

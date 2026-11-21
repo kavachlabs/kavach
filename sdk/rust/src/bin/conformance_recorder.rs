@@ -176,6 +176,7 @@ fn run(case_path: &str, result_path: &str, no_ring: bool) -> Result<(), String> 
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().collect();
+    // The ring is the default transport; --pipe forces the pipe.
     let no_ring = args.get(1).is_some_and(|a| a == "--pipe");
     if no_ring {
         args.remove(1);

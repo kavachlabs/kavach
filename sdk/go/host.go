@@ -33,6 +33,8 @@ type driverMsg struct {
 	Detail    string  `json:"detail"`
 }
 
+// abortStep and hostFatal are panic values of the host's Env: the driver
+// stopped the step, or the session cannot go on.
 type abortStep struct{}
 
 type hostFatal struct{ err error }
@@ -166,6 +168,8 @@ func (s *session) step(h Handler, m driverMsg) {
 	s.send(done)
 }
 
+// hostEnv is the Env of a handler running under a driver: every read is a
+// request the driver answers.
 type hostEnv struct {
 	s       *session
 	aborted bool

@@ -58,6 +58,8 @@ def main() -> int:
                     continue
                 result = rec.step(Input("file:" + os.path.basename(args.path), str(line_no), line))
                 if result.kind == "panic":
+                    # Stop the service, as the Go demo does. The recorder has
+                    # already marked the failure and cut a fixture.
                     rec.close()
                     result.raise_for_failure()
                 elif not result.ok:

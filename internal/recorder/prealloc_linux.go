@@ -17,6 +17,7 @@ func preallocate(f *os.File, n int64) {
 	syscall.Fallocate(int(f.Fd()), keepSize, 0, n)
 }
 
+// trimPrealloc gives back what preallocate reserved and the segment did not use.
 func trimPrealloc(f *os.File) error {
 	fi, err := f.Stat()
 	if err != nil {

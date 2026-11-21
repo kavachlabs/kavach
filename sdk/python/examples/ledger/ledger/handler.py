@@ -23,7 +23,7 @@ class Ledger:
     def __init__(self, fix: bool = False):
         self.fix = fix
         self.balances: dict[str, int] = {}
-        self.net = 0
+        self.net = 0  # deposits minus withdrawals
 
     def handle(self, env: Env, input: Input) -> None:
         try:

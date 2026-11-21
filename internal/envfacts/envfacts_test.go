@@ -147,6 +147,7 @@ func TestParseLogind(t *testing.T) {
 	}
 }
 
+// writeTree creates the files of a fake root, keyed by absolute path.
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

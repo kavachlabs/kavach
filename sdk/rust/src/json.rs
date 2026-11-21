@@ -312,7 +312,7 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) -> Result<String, String> {
-        self.i += 1;
+        self.i += 1; // opening quote
         let mut out: Vec<u8> = Vec::new();
         loop {
             let Some(&c) = self.s.get(self.i) else {

@@ -9,6 +9,7 @@ import (
 
 type limit struct{ name, value string }
 
+// limits returns the soft resource limits of the process (getrlimit(2)).
 func limits() []limit {
 	table := append([]struct {
 		name string

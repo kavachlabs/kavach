@@ -114,6 +114,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
+	// 1. GET / should include kavach-live meta marker, while static RenderHTML does not.
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
@@ -138,6 +139,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 		t.Fatalf("static RenderHTML should not include kavach-live meta tag")
 	}
 
+	// 2. GET /api/model starts with 0 fixtures.
 	mResp, err := http.Get(ts.URL + "/api/model")
 	if err != nil {
 		t.Fatalf("GET /api/model: %v", err)
@@ -161,6 +163,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 		t.Fatalf("initial fixtures = %d, want 0", len(m0.Fixtures))
 	}
 
+	// 3. Connect to /api/events and verify initial update event.
 	sseCtx, sseCancel := context.WithCancel(context.Background())
 	defer sseCancel()
 	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, ts.URL+"/api/events", nil)
@@ -181,6 +184,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 		t.Fatalf("initial SSE event = %+v, want revision=1 fixtures=0", initEv)
 	}
 
+	// 4. Write a valid .kavach fixture and verify SSE emits an update and /api/model reflects it.
 	fx1 := filepath.Join(fixturesDir, "svc-run1-000001.kavach")
 	writeTestFixture(t, fx1, "payments", "first failure")
 
@@ -212,6 +216,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 		t.Fatalf("expected unchanged Refresh to return false")
 	}
 
+	// 5. Write a truncated/corrupt .kavach file and verify server stays healthy with a warning.
 	corruptPath := filepath.Join(fixturesDir, "corrupt.kavach")
 	if err := os.WriteFile(corruptPath, []byte("truncated-not-kavach"), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,6 +250,7 @@ func TestLiveServerWatchAndEvents(t *testing.T) {
 		t.Fatalf("expected warning mentioning corrupt.kavach, got %v", m2.Warnings)
 	}
 
+	// 6. Replace the corrupt file with a valid .kavach file and verify recovery.
 	writeTestFixture(t, corruptPath, "orders", "recovered failure")
 	ev4 := readNextSSEUpdate(t, reader, 3*time.Second)
 	if ev4.Revision <= ev3.Revision || ev4.Fixtures != 2 {

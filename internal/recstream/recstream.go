@@ -183,7 +183,7 @@ func (r *Reader) Raw() io.Reader { return r.r }
 // Reader decodes frames from a stream.
 type Reader struct {
 	r    *bufio.Reader
-	slab []byte
+	slab []byte // frames are carved from it, one allocation for many
 }
 
 const slabSize = 64 << 10

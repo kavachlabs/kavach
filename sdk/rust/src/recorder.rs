@@ -1120,7 +1120,7 @@ impl Recorder {
                     .0;
             }
         }
-        self.pipe.stdin = None;
+        self.pipe.stdin = None; // EOF for the recorder
         if let Some(t) = self.thread.take() {
             if acked {
                 let _ = t.join();

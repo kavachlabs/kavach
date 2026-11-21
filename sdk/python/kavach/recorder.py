@@ -196,6 +196,7 @@ class Recorder:
             self._fail(f"could not start the recorder: {e}")
         atexit.register(self.close)
 
+    # -- process and control stream -------------------------------------
 
     def _spawn(self, cmd: list[str]) -> None:
         self._proc = subprocess.Popen(
@@ -290,6 +291,7 @@ class Recorder:
         else:
             log.debug("kavach: ignoring recorder message %r", t)
 
+    # -- writing --------------------------------------------------------
 
     def _write(self, data: bytes | bytearray) -> None:
         if not self._active or not data:
@@ -307,6 +309,7 @@ class Recorder:
         if self._buf is not None and self._active:
             self._buf += frame_bytes
 
+    # -- stepping -------------------------------------------------------
 
     def step(self, inp: Input) -> StepResult:
         """Run the handler on one input. Never raises for a handler failure
@@ -365,6 +368,7 @@ class Recorder:
             return
         self._write(wire.snapshot_frame(data))
 
+    # -- flush and close ------------------------------------------------
 
     def flush(self, durable: bool = False, timeout: float = 10.0) -> bool:
         """Ask the recorder to close its open block now. With ``durable=True``

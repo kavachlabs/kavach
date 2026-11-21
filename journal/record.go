@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 )
 
+// Format version written by this package.
 const (
 	Major = 0
 	Minor = 2
@@ -23,8 +24,8 @@ var Magic = [8]byte{0x89, 'K', 'V', 'J', '\r', '\n', 0x1a, '\n'}
 const (
 	MaxMetaLen  = 1 << 20
 	MaxBodyLen  = 16 << 20
-	MaxBlockLen = 64 << 20
-	minBodyLen  = 10 // type + flags + seq
+	MaxBlockLen = 64 << 20 // raw_len and data_len of a block
+	minBodyLen  = 10       // type + flags + seq
 )
 
 // Type is a record type code.
@@ -169,6 +170,7 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 func checksum(b []byte) uint32 { return crc32.Checksum(b, castagnoli) }
 
+// checkRecord validates the parts of r that are the same everywhere.
 func checkRecord(r Record) error {
 	if r.Type == 0 {
 		return errors.New("record type 0 is invalid")
@@ -221,6 +223,7 @@ func AppendPayload(dst []byte, r Record) ([]byte, error) {
 		dst = appendBytes(dst, r.Value)
 		dst = appendString(dst, r.Source)
 	default:
+		// Extension types carry an opaque payload.
 		dst = append(dst, r.Data...)
 	}
 	return dst, nil
@@ -290,6 +293,7 @@ func parsePayload(ty Type, flags uint8, p *payload) (Record, error) {
 	return r, p.err
 }
 
+// appendBody appends the encoded record body (type, flags, seq, payload) to dst.
 func appendBody(dst []byte, r Record) ([]byte, error) {
 	if err := checkRecord(r); err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
@@ -312,6 +316,7 @@ func AppendFrame(dst []byte, r Record) ([]byte, error) {
 	return append(dst, body...), nil
 }
 
+// parseBody decodes a record body.
 func parseBody(body []byte) (Record, error) {
 	seq := binary.LittleEndian.Uint64(body[2:10])
 	r, err := ParsePayload(Type(body[0]), body[1], body[10:])
@@ -329,6 +334,7 @@ func appendString(dst []byte, s string) []byte {
 	return append(dst, s...)
 }
 
+// payload is a cursor over a record payload that remembers the first error.
 type payload struct {
 	b   []byte
 	err error
@@ -380,6 +386,7 @@ func (p *payload) uvarint() uint64 {
 	return n
 }
 
+// view reads a length-prefixed field without copying it.
 func (p *payload) view() []byte {
 	n := p.uvarint()
 	if p.err != nil {
@@ -413,6 +420,8 @@ func (p *payload) string() string {
 	return string(v)
 }
 
+// facts reads the body of an environment record: a count and that many facts,
+// whose keys must be distinct.
 func (p *payload) facts() []Fact {
 	n := p.uvarint()
 	if p.err != nil {
