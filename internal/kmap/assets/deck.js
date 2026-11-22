@@ -1354,7 +1354,7 @@
         for (let k = 0; k < n; k++) {
           const a = A[k];
           const b = B ? B[k] : null;
-          box.appendChild(el("h4", { text: rowLabel(a || b, k) }));
+          box.appendChild(el("h4", null, rowLabel(a || b, k)));
           if (ds.raw || !((a && a.fields.length) || (b && b.fields.length))) {
             box.appendChild(el("pre", { className: "kd-raw", text: (two ? "old  " : "") + (a ? a.raw : "(not written)") }));
             if (two) box.appendChild(el("pre", { className: "kd-raw", text: "new  " + (b ? b.raw : "(not written)") }));
