@@ -1,14 +1,14 @@
 # Kavach Agent Skills
 
-Agent skills that teach AI coding agents ([Claude Code](https://code.claude.com/docs), [OpenAI Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), Cursor, and Antigravity) how to reproduce production crashes in microseconds, verify bug fixes across 56 fault-neighborhood variants, build features against locked behavioural contracts, and falsify domain invariants with Kavach.
+Agent skills that teach AI coding agents ([Claude Code](https://code.claude.com/docs), [OpenAI Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), Cursor, and Antigravity) how to reproduce production crashes in microseconds, verify bug fixes across 56 fault-neighborhood variants, build features against locked behavioural contracts, falsify domain invariants, and check other agents' changes with Kavach.
 
-> **[Install](#install)** · **[Skills overview](#skills-overview)** · **[Starter prompts](#starter-prompts)** · **[MCP server](#mcp-server)**
+> **[Install](#install)** · **[Skills overview](#skills-overview)** · **[Starter prompts](#starter-prompts)** · **[MCP server](#mcp-server)** · **[Antigravity](#antigravity)**
 
 ## Install
 
 ### Single-command install (CLI + Agent Skills)
 
-Install the `kavach` CLI, the `kavach-recorder` flight recorder, and all four Kavach agent skills in one command:
+Install the `kavach` CLI, the `kavach-recorder` flight recorder, and all five Kavach agent skills in one command:
 
 ```bash
 curl -fsSL https://www.thekavachlabs.com/install.sh | sh
@@ -39,6 +39,7 @@ claude mcp add kavach -- kavach mcp
 | [`kavach-fix`](./kavach-fix/SKILL.md) | Fix a production incident recorded in a `*.kavach` fixture and prove the patch survives 10+ incident variants and 48 neighbour regression variants (`verdict: "fixed"`). | `kavach inspect`, `kavach replay`, `kavach diff` (`kavach_list_incidents`, `kavach_replay`, `kavach_diff`) |
 | [`kavach-implement`](./kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline + feature traffic, declare spec invariants, pause for human `kavach contract approve`, and iterate until `kavach contract check` returns `pass`. | `kavach contract init`, `kavach contract show`, `kavach contract check` (`kavach_contract_show`, `kavach_contract_check`) |
 | [`kavach-setup`](./kavach-setup/SKILL.md) | Map state boundaries into `.kavach/plan/state-map.md`, then instrument a handler or build a `kavach-host` harness in Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP, Elixir, OCaml, Haskell, or Julia. | `.kavach/plan/state-map.md`, Language SDKs (`sdk/*`), `kavach-recorder`, `kavach replay` |
+| [`kavach-verify`](./kavach-verify/SKILL.md) | Check another agent's fix or feature without touching the code: replay the incident on the old and new builds, then post one fixed-format result naming the author (or `@coordinator [done]` when it holds). Built for the verifier role in an Antigravity `/swarm` or any agent pipeline. | `kavach replay`, `kavach diff`, `kavach contract check`, `kavach map` (`kavach_replay`, `kavach_diff`, `kavach_contract_check`) |
 | [`kavach-invariants`](./kavach-invariants/SKILL.md) | Propose domain invariants and planned mutants in `.kavach/plan/invariants.md`, declare them via the SDK, and falsify (mutation-test) each one in milliseconds to confirm every invariant catches real bugs. | `.kavach/plan/invariants.md`, `env.Invariant`, `kavach replay`, `kavach diff` |
 
 See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state-map.md`](../examples/ledger/.kavach/plan/state-map.md) and [`invariants.md`](../examples/ledger/.kavach/plan/invariants.md)) for a complete example of the human-reviewable planning artifacts generated before code changes.
@@ -65,6 +66,18 @@ See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state
 /kavach-setup Map the order-matching handler in internal/matcher/ into .kavach/plan/state-map.md and instrument it with the Kavach Go SDK so it records production failures via kavach-recorder and runs as a kavach-host for deterministic replay.
 ```
 
+### `kavach-verify`
+
+```text
+/kavach-verify Check the ledger worker's fix in #12 against testdata/null-amount.kavach and post the verdict to the board.
+```
+
+In an Antigravity `/swarm`, ask the coordinator for a Kavach verifier:
+
+```text
+/swarm Fix the incident in testdata/null-amount.kavach. Add a worker named verifier whose brief is: load the kavach-verify skill and check every [done] post from the fixer.
+```
+
 ### `kavach-invariants`
 
 ```text
@@ -75,10 +88,41 @@ See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state
 
 ## MCP server
 
-All four skills work with both the `kavach` CLI and the `kavach mcp` Model Context Protocol server (`claude mcp add kavach -- kavach mcp`):
+All five skills work with both the `kavach` CLI and the `kavach mcp` Model Context Protocol server (`claude mcp add kavach -- kavach mcp`):
 
 - `kavach_list_incidents` — discover `*.kavach` fixtures and inspect how each failed
 - `kavach_replay` — reproduce an incident or variant in microseconds (`still_failing@N`, `ok`)
 - `kavach_diff` — compare `--old` and `--new` across incident perturbations and 48 regression variants (`fixed`, `variant_failed(K)@N`, `regressed(K)@N`)
 - `kavach_contract_show` — inspect a feature contract and lock status before human approval
 - `kavach_contract_check` — verify a candidate feature build against an approved contract (`pass`, `regression@N`, `unreached@N`, `variant_failed(K)@N`)
+
+---
+
+## Antigravity
+
+Antigravity reads MCP servers from `~/.gemini/config/mcp_config.json` and global skills from `~/.gemini/config/skills/<name>/SKILL.md` (workspace skills go in `.agents/skills/<name>/SKILL.md`).
+
+1. Register the MCP server. Antigravity starts it without your shell's `PATH`, so give the full path that `command -v kavach` prints:
+
+   ```json
+   {
+     "mcpServers": {
+       "kavach": { "command": "/Users/you/.local/bin/kavach", "args": ["mcp"] }
+     }
+   }
+   ```
+
+   Every agent, including each member of a `/swarm`, then has the `kavach_*` tools.
+
+2. Install the skills. `install.sh` copies them to `~/.gemini/config/skills` when `~/.gemini/config` exists; to copy them by hand:
+
+   ```bash
+   cp -R skills/kavach-* ~/.gemini/config/skills/
+   ```
+
+3. In a swarm, give the verifier role to `kavach-verify` (see [Starter prompts](#kavach-verify)). It posts one result per check, for example:
+
+   ```text
+   @coordinator [done] [kavach] fixed · 01_split_repeated_identifier_bulk.kavach · re #12
+   old still_failing@15 → new fixed · variants 56/56 · regressions 42/42
+   ```

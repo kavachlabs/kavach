@@ -30,7 +30,7 @@ Kavach records every input, clock read, and random read a service makes. When a 
 
 ## Install
 
-Install prebuilt `kavach` and `kavach-recorder` binaries **plus all four Kavach agent skills** on Linux or macOS (`amd64` / `arm64`) in a single command (no Go toolchain required):
+Install prebuilt `kavach` and `kavach-recorder` binaries **plus all five Kavach agent skills** on Linux or macOS (`amd64` / `arm64`) in a single command (no Go toolchain required):
 
 ```bash
 curl -fsSL https://www.thekavachlabs.com/install.sh | sh
@@ -126,13 +126,14 @@ claude mcp add kavach -- kavach mcp
 npx skills add kavachlabs/kavach
 ```
 
-Kavach ships with four [Agent Skills](skills/README.md) (installed automatically by `install.sh` or `npx skills add kavachlabs/kavach`):
+Kavach ships with five [Agent Skills](skills/README.md) (installed automatically by `install.sh` or `npx skills add kavachlabs/kavach`):
 
 | Skill | What it teaches your agent |
 | --- | --- |
 | [`/kavach-fix`](skills/kavach-fix/SKILL.md) | Reproduce a `.kavach` crash fixture and generalize the fix until `kavach diff` returns `fixed` across all incident and regression variants. |
 | [`/kavach-implement`](skills/kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline traffic, declare spec invariants, stop for human `kavach contract approve`, and iterate until `pass`. |
 | [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Map state boundaries into [`.kavach/plan/state-map.md`](examples/ledger/.kavach/plan/state-map.md), then instrument a handler or build a `kavach-host` harness in any of the 12 language SDKs. |
+| [`/kavach-verify`](skills/kavach-verify/SKILL.md) | Check another agent's fix or feature and post the verdict without touching the code: the verifier role in an Antigravity `/swarm` or any agent pipeline. |
 | [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Write a reviewable invariant blueprint to [`.kavach/plan/invariants.md`](examples/ledger/.kavach/plan/invariants.md), declare the invariants, and mutation-test each one in milliseconds with `kavach replay` and `kavach diff`. |
 
 See [AGENTS.md](AGENTS.md) for the complete verdict loop and rules.
