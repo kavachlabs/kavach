@@ -1,7 +1,11 @@
 package replay
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/kavachlabs/kavach/journal"
@@ -33,6 +37,10 @@ type VerifyOptions struct {
 	// build, and then pass on the new one, for a fix to count. Zero means
 	// DefaultMinVariants; a negative value skips variants.
 	MinVariants int
+	// MinKinds is the minimum number of distinct mutation kinds (field, pair,
+	// move, drop, duplicate, clock) that must reproduce the incident on the
+	// old build. Zero disables this check.
+	MinKinds int
 	// Parallel is how many variants are checked at once. Values below 1 mean
 	// one. The result does not depend on it.
 	Parallel int
@@ -48,9 +56,10 @@ type ReplayFunc func(j *journal.Journal) (*Result, error)
 type VariantCheck struct {
 	ID       int    `json:"id"`
 	Mutation string `json:"mutation"`
+	Kind     string `json:"kind,omitempty"`
 	Incident uint64 `json:"incident_seq"`
 	// Reproduces is true when the old build fails on the variant at
-	// Incident exactly as it failed in production. Only those variants count.
+	// Incident as it failed in production. Only those variants count.
 	Reproduces bool    `json:"reproduces"`
 	Old        string  `json:"old"`
 	New        string  `json:"new,omitempty"`
@@ -90,11 +99,12 @@ type Verification struct {
 	Old *Result `json:"old"`
 	New *Result `json:"new"`
 	// MinVariants is the number of reproducing variants required.
-	MinVariants int            `json:"min_variants"`
-	Candidates  int            `json:"candidates"`
-	Reproducing int            `json:"reproducing"`
-	Passing     int            `json:"passing"`
-	Variants    []VariantCheck `json:"variants"`
+	MinVariants       int            `json:"min_variants"`
+	Candidates        int            `json:"candidates"`
+	Reproducing       int            `json:"reproducing"`
+	ReproducingByKind map[string]int `json:"reproducing_by_kind,omitempty"`
+	Passing           int            `json:"passing"`
+	Variants          []VariantCheck `json:"variants"`
 
 	// Regression is the first regression variant the new build changed.
 	Regression int `json:"regression,omitempty"`
@@ -162,16 +172,24 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 		return nil, err
 	}
 	v.Candidates = len(variants)
+	requireIncidentOutput := hasIncidentOutputs(oldRes)
 	checks := make([]VariantCheck, len(variants))
 	if err := parallel(len(variants), opts.Parallel, func(i int) (err error) {
-		checks[i], err = checkVariant(variants[i], replayOld, replayNew)
+		checks[i], err = checkVariant(variants[i], replayOld, replayNew, requireIncidentOutput)
 		return err
 	}); err != nil {
 		return nil, err
 	}
+	var byKind map[string]int
 	for _, c := range checks {
 		if c.Reproduces {
 			v.Reproducing++
+			if c.Kind != "" {
+				if byKind == nil {
+					byKind = map[string]int{}
+				}
+				byKind[c.Kind]++
+			}
 		}
 		if c.Passed {
 			v.Passing++
@@ -179,6 +197,7 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 			v.Variant, v.Seq = c.ID, c.Seq
 		}
 	}
+	v.ReproducingByKind = byKind
 	v.Variants = checks
 
 	var regs []*journal.Journal
@@ -230,21 +249,27 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	case v.Reproducing < min:
 		v.Status, v.Verdict = StatusUnverified, string(StatusUnverified)
 		v.Detail = fmt.Sprintf("the recorded incident is fixed, but only %d of %d variants reproduce it on the old build; %d are required", v.Reproducing, v.Candidates, min)
+	case allMetadataOnlyReproducing(v.Variants):
+		v.Status, v.Verdict = StatusUnverified, string(StatusUnverified)
+		v.Detail = "all reproducing variants only mutated non-semantic metadata fields"
+	case opts.MinKinds > 0 && len(v.ReproducingByKind) < opts.MinKinds:
+		v.Status, v.Verdict = StatusUnverified, string(StatusUnverified)
+		v.Detail = fmt.Sprintf("the recorded incident is fixed, but only %d distinct mutation kinds reproduced it on the old build; %d are required", len(v.ReproducingByKind), opts.MinKinds)
 	default:
 		v.Status, v.Verdict = StatusFixed, string(StatusFixed)
 	}
 	return v, nil
 }
 
-func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc) (VariantCheck, error) {
+func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc, requireIncidentOutput bool) (VariantCheck, error) {
 	info := vj.Header.Meta.Variant
-	c := VariantCheck{ID: info.ID, Mutation: info.Mutation, Incident: info.Incident, Journal: vj}
+	c := VariantCheck{ID: info.ID, Mutation: info.Mutation, Kind: info.Kind, Incident: info.Incident, Journal: vj}
 	o, err := replayOld(vj)
 	if err != nil {
 		return c, fmt.Errorf("old build, variant %d: %w", info.ID, err)
 	}
 	c.Old = o.String()
-	if o.Seq == nil || *o.Seq != info.Incident || failureOf(o) != info.Failure {
+	if o.Seq == nil || *o.Seq != info.Incident || !failureMatches(failureOf(o), info.Failure) || (requireIncidentOutput && !hasIncidentOutputs(o)) {
 		return c, nil
 	}
 	c.Reproduces = true
@@ -285,6 +310,18 @@ func judge(c *VariantCheck, old, new *Result) {
 // outputs: it names the builds rather than a recording.
 func diffBuilds(old, new []kavach.Output) string {
 	return diffNamed(old, new, "old build", "new build")
+}
+
+func hasIncidentOutputs(r *Result) bool {
+	if r == nil || r.Seq == nil || len(r.Steps) == 0 {
+		return false
+	}
+	for i := len(r.Steps) - 1; i >= 0; i-- {
+		if r.Steps[i].Seq == *r.Seq {
+			return len(r.Steps[i].Outputs) > 0
+		}
+	}
+	return false
 }
 
 func failureOf(r *Result) string {
@@ -382,4 +419,220 @@ func regressionIndex(cs []RegressionCheck, id int) int {
 		}
 	}
 	return -1
+}
+
+var failureLiteralRE = regexp.MustCompile(
+	`(^|[^0-9A-Za-z_])(?:` +
+		`(\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2}))|` +
+		`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})|` +
+		`(0[xX][0-9a-fA-F]+|[0-9a-fA-F]{16,})|` +
+		`([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)` +
+		`)\b`,
+)
+
+// failureMatches reports whether an observed failure matches the recorded one.
+// Crash, timeout, and invariant failures must match strictly; error and panic
+// messages are compared after normalizing variable literals so numeric/time
+// mutations still count as reproducing the same failure mode.
+func failureMatches(actual, expected string) bool {
+	if actual == expected {
+		return true
+	}
+	if (strings.HasPrefix(actual, journal.MarkerError+": ") && strings.HasPrefix(expected, journal.MarkerError+": ")) ||
+		(strings.HasPrefix(actual, journal.MarkerPanic+": ") && strings.HasPrefix(expected, journal.MarkerPanic+": ")) {
+		return normalizeFailure(actual) == normalizeFailure(expected)
+	}
+	return false
+}
+
+// normalizeFailure preserves an error/panic prefix and canonicalizes RFC3339
+// timestamps, UUIDs, hex hashes, and numeric literals inside the message.
+func normalizeFailure(s string) string {
+	var prefix, body string
+	switch {
+	case strings.HasPrefix(s, journal.MarkerError+": "):
+		prefix = journal.MarkerError + ": "
+		body = s[len(prefix):]
+	case strings.HasPrefix(s, journal.MarkerPanic+": "):
+		prefix = journal.MarkerPanic + ": "
+		body = s[len(prefix):]
+	default:
+		return s
+	}
+	matches := failureLiteralRE.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	b.WriteString(prefix)
+	pos := 0
+	for _, m := range matches {
+		b.WriteString(body[pos:m[3]])
+		switch {
+		case m[4] >= 0:
+			b.WriteString("<ts>")
+		case m[6] >= 0:
+			b.WriteString("<uuid>")
+		case m[8] >= 0:
+			b.WriteString("<hex>")
+		case m[10] >= 0:
+			b.WriteString("<num>")
+		}
+		pos = m[1]
+	}
+	b.WriteString(body[pos:])
+	return b.String()
+}
+
+func allMetadataOnlyReproducing(checks []VariantCheck) bool {
+	reproducing := 0
+	for _, c := range checks {
+		if !c.Reproduces {
+			continue
+		}
+		reproducing++
+		if c.Kind != KindField && c.Kind != KindPair && c.Kind != "" {
+			return false
+		}
+		if !isMetadataOnlyMutation(c.Mutation) {
+			return false
+		}
+	}
+	return reproducing > 0
+}
+
+func isMetadataOnlyMutation(mutation string) bool {
+	s := strings.TrimSpace(mutation)
+	if strings.HasPrefix(s, "failing input ") {
+		i := strings.Index(s, ": ")
+		if i < 0 {
+			return false
+		}
+		s = s[i+2:]
+	}
+	if s == "" {
+		return false
+	}
+	clauses := 0
+	for {
+		s = strings.TrimSpace(s)
+		key, rest, ok := parseMutationKey(s)
+		if !ok || !IsMetadataKey(key) {
+			return false
+		}
+		clauses++
+		s = rest
+		switch {
+		case strings.HasPrefix(s, " removed"):
+			s = s[len(" removed"):]
+		case strings.HasPrefix(s, ": "):
+			var consumed bool
+			s, consumed = consumeMutationValue(s[2:])
+			if !consumed || !strings.HasPrefix(s, " added") {
+				return false
+			}
+			s = s[len(" added"):]
+		case strings.HasPrefix(s, " "):
+			var consumed bool
+			s, consumed = consumeMutationValue(s[1:])
+			if !consumed || !strings.HasPrefix(s, " → ") {
+				return false
+			}
+			s, consumed = consumeMutationValue(s[len(" → "):])
+			if !consumed {
+				return false
+			}
+		default:
+			return false
+		}
+		if s == "" {
+			return clauses > 0
+		}
+		if !strings.HasPrefix(s, ", ") {
+			return false
+		}
+		s = s[2:]
+	}
+}
+
+func parseMutationKey(s string) (key, rest string, ok bool) {
+	if !strings.HasPrefix(s, `"`) {
+		return "", "", false
+	}
+	end := 1
+	escaped := false
+	for end < len(s) {
+		ch := s[end]
+		if escaped {
+			escaped = false
+			end++
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			end++
+			continue
+		}
+		if ch == '"' {
+			break
+		}
+		end++
+	}
+	if end >= len(s) || s[end] != '"' {
+		return "", "", false
+	}
+	k, err := strconv.Unquote(s[:end+1])
+	if err != nil {
+		return "", "", false
+	}
+	key = k
+	rest = s[end+1:]
+	for {
+		if strings.HasPrefix(rest, "[") {
+			closeIdx := strings.IndexByte(rest, ']')
+			if closeIdx < 0 {
+				return "", "", false
+			}
+			rest = rest[closeIdx+1:]
+			continue
+		}
+		if strings.HasPrefix(rest, ".") {
+			sub := rest[1:]
+			if strings.HasPrefix(sub, `"`) {
+				subKey, nextRest, subOK := parseMutationKey(sub)
+				if !subOK {
+					return "", "", false
+				}
+				key = subKey
+				rest = nextRest
+				continue
+			}
+			stop := strings.IndexAny(sub, " :.[,")
+			if stop < 0 {
+				stop = len(sub)
+			}
+			if stop == 0 {
+				return "", "", false
+			}
+			key = sub[:stop]
+			rest = sub[stop:]
+			continue
+		}
+		break
+	}
+	return key, rest, true
+}
+
+func consumeMutationValue(s string) (string, bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return "", false
+	}
+	off := int(dec.InputOffset())
+	if off < 0 || off > len(s) {
+		return "", false
+	}
+	return s[off:], true
 }

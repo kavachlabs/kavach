@@ -54,7 +54,7 @@ func regressionVariants(j *journal.Journal, limit int) ([]*journal.Journal, int,
 		// classes: dropping, moving or redelivering history says little about
 		// a fix to one handler path, and clock shifts are already covered by
 		// the incident's variants.
-		cs := candidates(steps, k)
+		cs := candidatesWith(steps, k, mutationOpts{signPreserving: true})
 		cs[0] = append(cs[0], cs[1]...)
 		for i := range cs[0] {
 			cs[0][i].mutation = regressionWords.Replace(cs[0][i].mutation)

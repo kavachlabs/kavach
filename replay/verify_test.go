@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,8 +57,9 @@ func TestVariantsOfPlainInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The inputs are not JSON, so only structural mutations apply: 3 moves,
-	// 3 drops plus dropping all history, 3 redeliveries and 4 clock shifts.
-	if len(vs) != 14 {
+	// 3 drops plus dropping all history, 6 redeliveries (3 immediate, 2
+	// delayed, 1 failing-step), and 8 clock shifts (4 uniform, 4 relative).
+	if len(vs) != 21 {
 		t.Fatalf("got %d variants", len(vs))
 	}
 	var muts []string
@@ -192,7 +194,7 @@ func TestVariantsOfJSONInput(t *testing.T) {
 
 func TestVerifyFixed(t *testing.T) {
 	v := verify(t, crashJournal(t), fixedWallet, replay.VerifyOptions{})
-	if v.String() != "fixed" || !v.Passed() || v.Candidates != 14 || v.Reproducing != 14 || v.Passing != 14 {
+	if v.String() != "fixed" || !v.Passed() || v.Candidates != 21 || v.Reproducing != 20 || v.Passing != 20 {
 		t.Fatalf("got %s: %d candidates, %d reproduce, %d pass; %s", v, v.Candidates, v.Reproducing, v.Passing, v.Detail)
 	}
 	if v.Old.String() != "still_failing@13" || v.New.String() != "fixed" {
@@ -242,8 +244,8 @@ func TestVerifyRejectsVariantDivergence(t *testing.T) {
 
 func TestVerifyUnverifiedAndDisabled(t *testing.T) {
 	j := crashJournal(t)
-	v := verify(t, j, fixedWallet, replay.VerifyOptions{MinVariants: 20})
-	if v.Status != replay.StatusUnverified || v.Passed() || !strings.Contains(v.Detail, "only 14 of 14 variants") {
+	v := verify(t, j, fixedWallet, replay.VerifyOptions{MinVariants: 25})
+	if v.Status != replay.StatusUnverified || v.Passed() || !strings.Contains(v.Detail, "only 20 of 21 variants") {
 		t.Fatalf("got %s: %s", v, v.Detail)
 	}
 	v = verify(t, j, fixedWallet, replay.VerifyOptions{MinVariants: -1})
@@ -308,7 +310,7 @@ func TestVerifyErrorIncident(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.String() != "fixed" || v.Reproducing != v.Candidates {
+	if v.String() != "fixed" || v.Reproducing != v.Candidates-1 {
 		t.Fatalf("got %s: %d of %d reproduce; %s", v, v.Reproducing, v.Candidates, v.Detail)
 	}
 }
@@ -629,3 +631,454 @@ type invHandler struct {
 
 func (h *invHandler) Handle(env kavach.Env, in kavach.Input) error { return h.handle(env, in) }
 func (h *invHandler) Invariants() []kavach.Invariant               { return []kavach.Invariant{h.inv} }
+
+func recordFailingJSON(t *testing.T, h kavach.Handler, inputs ...string) *journal.Journal {
+	t.Helper()
+	opts := testOptions(t)
+	r := newRecorder(t, h, opts)
+	if err := feed(t, r, inputs...); err == nil {
+		t.Fatal("expected recorded failure")
+	}
+	j, err := journal.ReadFile(fixtureIn(t, r, opts.Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j
+}
+
+func okReplayResult(j *journal.Journal) *replay.Result {
+	var steps []replay.StepResult
+	for _, r := range j.Records {
+		if r.Type == journal.TypeInput {
+			steps = append(steps, replay.StepResult{Seq: r.Seq})
+		}
+	}
+	return &replay.Result{Status: replay.StatusOK, Steps: steps}
+}
+
+func fixedReplayResult(j *journal.Journal) *replay.Result {
+	res := okReplayResult(j)
+	res.Status = replay.StatusFixed
+	return res
+}
+
+func failingReplayAt(j *journal.Journal, seq uint64, step replay.StepResult, inv string) *replay.Result {
+	var steps []replay.StepResult
+	for _, r := range j.Records {
+		if r.Type != journal.TypeInput {
+			continue
+		}
+		if r.Seq == seq {
+			step.Seq = seq
+			steps = append(steps, step)
+			break
+		}
+		steps = append(steps, replay.StepResult{Seq: r.Seq})
+	}
+	s := seq
+	res := &replay.Result{Status: replay.StatusStillFailing, Seq: &s, Steps: steps}
+	if inv != "" {
+		res.Status = replay.StatusInvariantViolated
+		res.Invariant = inv
+	}
+	return res
+}
+
+func TestVerifyNormalizedFailureMatching(t *testing.T) {
+	t.Run("error-numbers-uuids-timestamps-hex", func(t *testing.T) {
+		type payload struct {
+			Amount int     `json:"amount"`
+			Delta  float64 `json:"delta"`
+			ID     string  `json:"id"`
+			TS     string  `json:"ts"`
+			Hash   string  `json:"hash"`
+		}
+		oldFn := func() kavach.Handler {
+			return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+				var p payload
+				if err := json.Unmarshal(in.Data, &p); err != nil {
+					return err
+				}
+				if p.Amount >= 100 {
+					return fmt.Errorf("limit exceeded: %d > 50, delta=%.2f, win=%s, id=%s, digest=0x%s, sha=%s",
+						p.Amount, p.Delta, p.TS, p.ID, p.Hash[:8], p.Hash)
+				}
+				env.Emit("ok", []byte("1"))
+				return nil
+			})
+		}
+		newFn := func() kavach.Handler {
+			return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+				env.Emit("ok", []byte("1"))
+				return nil
+			})
+		}
+		j := recordFailingJSON(t, oldFn(),
+			`{"amount":10,"delta":1.5,"id":"11111111-2222-3333-4444-555555555555","ts":"2026-01-15T09:00:00Z","hash":"0123456789abcdef0123456789abcdef"}`,
+			`{"amount":20,"delta":-2.25,"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","ts":"2026-01-15T09:30:00+05:30","hash":"abcdef0123456789abcdef0123456789"}`,
+			`{"amount":100,"delta":-3.5,"id":"550e8400-e29b-41d4-a716-446655440000","ts":"2026-01-15T10:00:00.123456Z","hash":"deadbeefcafebabe0123456789abcdef"}`,
+		)
+		v, err := replay.Verify(j, oldFn, newFn, replay.VerifyOptions{MinVariants: 5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Status != replay.StatusFixed || v.Reproducing < 5 {
+			t.Fatalf("got %s (reproducing=%d/%d): %s", v, v.Reproducing, v.Candidates, v.Detail)
+		}
+	})
+
+	t.Run("panic-floats-and-signed-nums", func(t *testing.T) {
+		j := recordFailingJSON(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			if strings.Contains(string(in.Data), `"boom"`) {
+				panic("drift 1.0000000000000002 at -5")
+			}
+			env.Emit("ok", []byte("1"))
+			return nil
+		}), `{"op":"ok"}`, `{"op":"ok2"}`, `{"op":"boom"}`)
+
+		v, err := replay.VerifyWith(j,
+			func(vj *journal.Journal) (*replay.Result, error) {
+				if vj.Header.Meta.Variant == nil {
+					return failingReplayAt(vj, j.Records[len(j.Records)-2].Seq, replay.StepResult{Panic: "drift 1.0000000000000002 at -5"}, ""), nil
+				}
+				return failingReplayAt(vj, vj.Header.Meta.Variant.Incident, replay.StepResult{Panic: "drift 2.5 at +17"}, ""), nil
+			},
+			func(vj *journal.Journal) (*replay.Result, error) {
+				if vj.Header.Meta.Variant == nil {
+					return fixedReplayResult(vj), nil
+				}
+				return okReplayResult(vj), nil
+			},
+			replay.VerifyOptions{MinVariants: 3},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Status != replay.StatusFixed || v.Reproducing != v.Candidates {
+			t.Fatalf("got %s (%d/%d): %s", v, v.Reproducing, v.Candidates, v.Detail)
+		}
+	})
+
+	t.Run("distinct-errors-and-strict-modes-never-match", func(t *testing.T) {
+		j := recordFailingJSON(t, kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			if strings.Contains(string(in.Data), `"boom"`) {
+				return errors.New("account_not_found")
+			}
+			env.Emit("ok", []byte("1"))
+			return nil
+		}), `{"op":"ok"}`, `{"op":"boom"}`)
+
+		jInv := recordFailingJSON(t, &invHandler{
+			handle: func(env kavach.Env, in kavach.Input) error { return nil },
+			inv: kavach.Invariant{Name: "inv_1", Check: func() error {
+				return errors.New("violated")
+			}},
+		}, `{"op":"boom"}`)
+
+		cases := []struct {
+			name string
+			j    *journal.Journal
+			step replay.StepResult
+			inv  string
+		}{
+			{name: "different-error-text", j: j, step: replay.StepResult{Error: "insufficient funds"}},
+			{name: "different-error-code-template", j: j, step: replay.StepResult{Error: "code 500: internal error"}},
+			{name: "error-vs-panic", j: j, step: replay.StepResult{Panic: "account_not_found"}},
+			{name: "error-vs-crash", j: j, step: replay.StepResult{Crash: "SIGSEGV"}},
+			{name: "error-vs-timeout", j: j, step: replay.StepResult{Timeout: "1s"}},
+			{name: "different-invariant-name", j: jInv, inv: "inv_2"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				v, err := replay.VerifyWith(tc.j,
+					func(vj *journal.Journal) (*replay.Result, error) {
+						if vj.Header.Meta.Variant == nil {
+							var recSeq uint64
+							for _, r := range vj.Records {
+								if r.Type == journal.TypeInput {
+									recSeq = r.Seq
+								}
+							}
+							if tc.inv != "" {
+								return failingReplayAt(vj, recSeq, replay.StepResult{}, "inv_1"), nil
+							}
+							return failingReplayAt(vj, recSeq, replay.StepResult{Error: "account_not_found"}, ""), nil
+						}
+						return failingReplayAt(vj, vj.Header.Meta.Variant.Incident, tc.step, tc.inv), nil
+					},
+					func(vj *journal.Journal) (*replay.Result, error) {
+						if vj.Header.Meta.Variant == nil {
+							return fixedReplayResult(vj), nil
+						}
+						return okReplayResult(vj), nil
+					},
+					replay.VerifyOptions{MinVariants: 1},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if v.Status != replay.StatusUnverified || v.Reproducing != 0 {
+					t.Fatalf("got %s (reproducing=%d), want unverified with 0 reproducing", v, v.Reproducing)
+				}
+			})
+		}
+	})
+}
+
+func TestVerifyKindDiversityAndReproducingByKind(t *testing.T) {
+	oldFn := func() kavach.Handler {
+		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			var ev struct {
+				Amount int `json:"amount"`
+			}
+			if err := json.Unmarshal(in.Data, &ev); err != nil {
+				return err
+			}
+			if ev.Amount >= 100 {
+				return fmt.Errorf("too high: %d", ev.Amount)
+			}
+			env.Emit("ok", []byte("1"))
+			return nil
+		})
+	}
+	newFn := func() kavach.Handler {
+		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			env.Emit("ok", []byte("1"))
+			return nil
+		})
+	}
+	j := recordFailingJSON(t, oldFn(),
+		`{"amount":10}`,
+		`{"amount":20}`,
+		`{"amount":100}`,
+	)
+
+	v, err := replay.Verify(j, oldFn, newFn, replay.VerifyOptions{MinVariants: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != replay.StatusFixed {
+		t.Fatalf("got %s: %s", v, v.Detail)
+	}
+	if len(v.ReproducingByKind) < 2 {
+		t.Fatalf("expected >= 2 reproducing kinds, got %v", v.ReproducingByKind)
+	}
+	sum := 0
+	for k, n := range v.ReproducingByKind {
+		if k == "" {
+			t.Fatalf("empty kind key in ReproducingByKind: %v", v.ReproducingByKind)
+		}
+		sum += n
+	}
+	if sum != v.Reproducing {
+		t.Fatalf("ReproducingByKind sum %d != Reproducing %d (%v)", sum, v.Reproducing, v.ReproducingByKind)
+	}
+	for _, c := range v.Variants {
+		if c.Kind == "" {
+			t.Fatalf("variant %d missing Kind: %+v", c.ID, c)
+		}
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"reproducing_by_kind"`) || !strings.Contains(string(raw), `"kind"`) {
+		t.Fatalf("missing kind fields in JSON: %s", raw)
+	}
+
+	// Simulate an incident where only a single mutation kind reproduces.
+	singleKindOld := func(vj *journal.Journal) (*replay.Result, error) {
+		if vj.Header.Meta.Variant == nil {
+			var recSeq uint64
+			for _, r := range vj.Records {
+				if r.Type == journal.TypeInput {
+					recSeq = r.Seq
+				}
+			}
+			return failingReplayAt(vj, recSeq, replay.StepResult{Error: "too high: 100"}, ""), nil
+		}
+		if vj.Header.Meta.Variant.Kind == replay.KindDrop {
+			return failingReplayAt(vj, vj.Header.Meta.Variant.Incident, replay.StepResult{Error: "too high: 100"}, ""), nil
+		}
+		return okReplayResult(vj), nil
+	}
+	passNew := func(vj *journal.Journal) (*replay.Result, error) {
+		if vj.Header.Meta.Variant == nil {
+			return fixedReplayResult(vj), nil
+		}
+		return okReplayResult(vj), nil
+	}
+
+	// Default MinKinds=0 passes when MinVariants is met.
+	v0, err := replay.VerifyWith(j, singleKindOld, passNew, replay.VerifyOptions{MinVariants: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v0.Status != replay.StatusFixed {
+		t.Fatalf("MinKinds=0: got %s (%s)", v0, v0.Detail)
+	}
+
+	// MinKinds=2 rejects single-kind reproduction even though Reproducing >= MinVariants.
+	vLow, err := replay.VerifyWith(j, singleKindOld, passNew, replay.VerifyOptions{MinVariants: 2, MinKinds: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vLow.Status != replay.StatusUnverified || vLow.Passed() || !strings.Contains(vLow.Detail, "1 distinct mutation kinds") {
+		t.Fatalf("MinKinds=2: got %s (%s)", vLow, vLow.Detail)
+	}
+
+	// MinKinds=1 passes.
+	v1, err := replay.VerifyWith(j, singleKindOld, passNew, replay.VerifyOptions{MinVariants: 2, MinKinds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.Status != replay.StatusFixed {
+		t.Fatalf("MinKinds=1: got %s (%s)", v1, v1.Detail)
+	}
+}
+
+func TestVerifyRejectsPureMetadataPadding(t *testing.T) {
+	// Journal whose payload only contains non-semantic metadata keys, so field
+	// variants are guaranteed to exist for those metadata keys.
+	metaHandler := func() kavach.Handler {
+		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			if strings.Contains(string(in.Data), `"r3"`) {
+				return errors.New("boom")
+			}
+			env.Emit("ok", []byte("1"))
+			return nil
+		})
+	}
+	jMeta := recordFailingJSON(t, metaHandler(),
+		`{"customer_email":"a@example.com","trace_id":"t1","request_id":"r1"}`,
+		`{"customer_email":"b@example.com","trace_id":"t2","request_id":"r2"}`,
+		`{"customer_email":"c@example.com","trace_id":"t3","request_id":"r3"}`,
+	)
+
+	passNew := func(vj *journal.Journal) (*replay.Result, error) {
+		if vj.Header.Meta.Variant == nil {
+			return fixedReplayResult(vj), nil
+		}
+		return okReplayResult(vj), nil
+	}
+	metaOnlyOld := func(vj *journal.Journal) (*replay.Result, error) {
+		if vj.Header.Meta.Variant == nil {
+			var recSeq uint64
+			for _, r := range vj.Records {
+				if r.Type == journal.TypeInput {
+					recSeq = r.Seq
+				}
+			}
+			return failingReplayAt(vj, recSeq, replay.StepResult{Error: "boom"}, ""), nil
+		}
+		k := vj.Header.Meta.Variant.Kind
+		if k == replay.KindField || k == replay.KindPair {
+			return failingReplayAt(vj, vj.Header.Meta.Variant.Incident, replay.StepResult{Error: "boom"}, ""), nil
+		}
+		return okReplayResult(vj), nil
+	}
+
+	vRejected, err := replay.VerifyWith(jMeta, metaOnlyOld, passNew, replay.VerifyOptions{MinVariants: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vRejected.Reproducing < 2 {
+		t.Fatalf("expected >= 2 reproducing metadata variants, got %d", vRejected.Reproducing)
+	}
+	if vRejected.Status != replay.StatusUnverified || vRejected.Passed() || vRejected.Detail != "all reproducing variants only mutated non-semantic metadata fields" {
+		t.Fatalf("got %s (%s), want unverified anti-metadata-padding", vRejected, vRejected.Detail)
+	}
+
+	// If even one structural variant (e.g. drop) reproduces alongside metadata ones, it passes.
+	metaPlusDropOld := func(vj *journal.Journal) (*replay.Result, error) {
+		if vj.Header.Meta.Variant != nil && vj.Header.Meta.Variant.Kind == replay.KindDrop {
+			return failingReplayAt(vj, vj.Header.Meta.Variant.Incident, replay.StepResult{Error: "boom"}, ""), nil
+		}
+		return metaOnlyOld(vj)
+	}
+	vMixed, err := replay.VerifyWith(jMeta, metaPlusDropOld, passNew, replay.VerifyOptions{MinVariants: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vMixed.Status != replay.StatusFixed {
+		t.Fatalf("mixed metadata+drop: got %s (%s)", vMixed, vMixed.Detail)
+	}
+
+	// Normal semantic keys (including values containing metadata-looking strings or commas) must pass.
+	semHandler := func() kavach.Handler {
+		return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+			if strings.Contains(string(in.Data), `"boom"`) {
+				return errors.New("boom")
+			}
+			env.Emit("ok", []byte("1"))
+			return nil
+		})
+	}
+	jSem := recordFailingJSON(t, semHandler(),
+		`{"amount":10,"note":"email, trace_id","tag":"ok"}`,
+		`{"amount":20,"note":"request_id, pan","tag":"ok2"}`,
+		`{"amount":30,"note":"email, trace_id","tag":"boom"}`,
+	)
+	vSem, err := replay.VerifyWith(jSem, metaOnlyOld, passNew, replay.VerifyOptions{MinVariants: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vSem.Status != replay.StatusFixed {
+		t.Fatalf("semantic keys: got %s (%s)", vSem, vSem.Detail)
+	}
+}
+
+func TestVerifyPreFailureOutputPresence(t *testing.T) {
+	// Simulate a multi-item handler where the recorded failing step emitted an
+	// output for item 0 before failing on item 1. A mutation that flips an
+	// admission precondition (allow_overdraft: true -> false) aborts item 0
+	// immediately with 0 outputs on the failing step; both old and new reject it
+	// with the same error, so it must NOT count as reproducing the incident.
+	makeBulk := func(fixed bool) func() kavach.Handler {
+		return func() kavach.Handler {
+			return kavach.HandlerFunc(func(env kavach.Env, in kavach.Input) error {
+				var req struct {
+					AllowOverdraft bool   `json:"allow_overdraft"`
+					Item           string `json:"item"`
+				}
+				if err := json.Unmarshal(in.Data, &req); err != nil {
+					return err
+				}
+				if !req.AllowOverdraft && req.Item == "bad" {
+					return errors.New("insufficient funds")
+				}
+				env.Emit("tx0", []byte(req.Item))
+				if !fixed && req.Item == "bad" {
+					return errors.New("insufficient funds")
+				}
+				env.Emit("tx1", []byte(req.Item))
+				return nil
+			})
+		}
+	}
+	j := recordFailingJSON(t, makeBulk(false)(),
+		`{"allow_overdraft":false,"item":"ok1"}`,
+		`{"allow_overdraft":true,"item":"ok2"}`,
+		`{"allow_overdraft":true,"item":"bad"}`,
+	)
+
+	v, err := replay.Verify(j, makeBulk(false), makeBulk(true), replay.VerifyOptions{MinVariants: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != replay.StatusFixed || !v.Passed() {
+		t.Fatalf("got %s (%s), want fixed", v, v.Detail)
+	}
+	checkedPrecond := false
+	for _, c := range v.Variants {
+		if strings.Contains(c.Mutation, `"allow_overdraft" true → false`) {
+			checkedPrecond = true
+			if c.Reproduces {
+				t.Fatalf("early precondition rejection %q should not count as reproducing", c.Mutation)
+			}
+		}
+	}
+	if !checkedPrecond {
+		t.Fatal("expected an allow_overdraft true -> false variant")
+	}
+}

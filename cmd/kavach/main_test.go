@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kavachlabs/kavach/journal"
 )
 
 const fixture = "../../examples/ledger/testdata/null-amount.kavach"
@@ -109,6 +113,64 @@ func TestReplayUntilAndProbesCLI(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestDiffJSONIncludesKindAndReproducingByKind(t *testing.T) {
+	host, work := storeContract(t)
+	setIn, _ := json.Marshal(map[string]any{"argv": []string{"SET", "greeting", "hello"}})
+	incrIn, _ := json.Marshal(map[string]any{"argv": []string{"INCR", "greeting"}})
+	recs := []journal.Record{
+		{Seq: 0, Type: journal.TypeEnvironment, Flags: journal.FlagCritical, Facts: []journal.Fact{}},
+		{Seq: 1, Type: journal.TypeInput, Source: "test", Data: setIn},
+		{Seq: 2, Type: journal.TypeOutput, Sink: "reply", Data: []byte("OK")},
+		{Seq: 3, Type: journal.TypeInput, Source: "test", Data: incrIn},
+		{Seq: 4, Type: journal.TypeMarker, Kind: journal.MarkerInvariant, Message: "counter-holds-integer"},
+	}
+	incPath := filepath.Join(work, "incident.kavach")
+	meta := journal.Meta{Service: "store", Compression: journal.CompressionNone, Start: journal.StartGenesis}
+	if err := journal.WriteFile(incPath, meta, recs); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errs := runCLI(t, "diff", "--json", "--variants", "3", "--regressions", "0", incPath, "--old", host+" sloppy", "--new", host+" good")
+	if code != exitPass {
+		t.Fatalf("diff --json exit %d:\n%s%s", code, out, errs)
+	}
+	var report struct {
+		Verdict  string `json:"verdict"`
+		Variants struct {
+			Reproducing       int            `json:"reproducing"`
+			ReproducingByKind map[string]int `json:"reproducing_by_kind"`
+			Checks            []struct {
+				ID   int    `json:"id"`
+				Kind string `json:"kind"`
+			} `json:"checks"`
+		} `json:"variants"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("unmarshal diff json: %v\n%s", err, out)
+	}
+	if report.Verdict != "fixed" {
+		t.Fatalf("verdict = %q, want fixed", report.Verdict)
+	}
+	if len(report.Variants.ReproducingByKind) == 0 {
+		t.Fatalf("missing variants.reproducing_by_kind in diff JSON: %s", out)
+	}
+	sum := 0
+	for _, n := range report.Variants.ReproducingByKind {
+		sum += n
+	}
+	if sum != report.Variants.Reproducing {
+		t.Fatalf("reproducing_by_kind sum %d != reproducing %d", sum, report.Variants.Reproducing)
+	}
+	if len(report.Variants.Checks) == 0 {
+		t.Fatal("expected variant checks in diff JSON")
+	}
+	for _, c := range report.Variants.Checks {
+		if c.Kind == "" {
+			t.Fatalf("variant check %d missing kind in diff JSON: %s", c.ID, out)
 		}
 	}
 }

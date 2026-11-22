@@ -678,6 +678,9 @@ func (o *diffOutcome) report() map[string]any {
 	for i, c := range v.Variants {
 		m := map[string]any{"id": c.ID, "mutation": c.Mutation, "incident_seq": c.Incident,
 			"reproduces": c.Reproduces, "old": c.Old, "passed": c.Passed}
+		if c.Kind != "" {
+			m["kind"] = c.Kind
+		}
 		if c.Reproduces {
 			m["new"] = c.New
 		}
@@ -704,13 +707,17 @@ func (o *diffOutcome) report() map[string]any {
 		}
 		rchecks[i] = m
 	}
+	variantsReport := map[string]any{
+		"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
+		"passing": v.Passing, "checks": checks,
+	}
+	if len(v.ReproducingByKind) > 0 {
+		variantsReport["reproducing_by_kind"] = v.ReproducingByKind
+	}
 	return map[string]any{
 		"fixture": o.fixture, "verdict": v.String(), "status": v.Status, "detail": v.Detail,
 		"old": v.Old.String(), "new": v.New.String(), "new_detail": v.New.Detail, "divergence": o.divergence,
-		"variants": map[string]any{
-			"required": v.MinVariants, "candidates": v.Candidates, "reproducing": v.Reproducing,
-			"passing": v.Passing, "checks": checks,
-		},
+		"variants": variantsReport,
 		"regressions": map[string]any{
 			"neighbours": v.Neighbours, "candidates": v.RegressionCandidates, "counted": v.RegressionCounted,
 			"passing": v.RegressionPassing, "checks": rchecks,
