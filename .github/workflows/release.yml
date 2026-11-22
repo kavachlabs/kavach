@@ -86,6 +86,7 @@ jobs:
           test -f "$tmp/skills/kavach-implement/SKILL.md"
           test -f "$tmp/skills/kavach-setup/SKILL.md"
           test -f "$tmp/skills/kavach-invariants/SKILL.md"
+          test -f "$tmp/skills/kavach-verify/SKILL.md"
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

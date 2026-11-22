@@ -6,12 +6,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/kavachlabs/kavach/main/scripts/install.sh | sh
 #
 # Flags:
-#   --skills-only       Install only the agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants)
+#   --skills-only       Install only the agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants, kavach-verify)
 #   --no-skills         Install only the kavach and kavach-recorder binaries
 #
 # Environment variables:
 #   KAVACH_INSTALL_DIR  Binary destination directory (default: /usr/local/bin if writable, else ~/.local/bin)
-#   KAVACH_SKILLS_DIR   Explicit skills destination directory (default: ~/.claude/skills, plus ~/.codex/skills if present)
+#   KAVACH_SKILLS_DIR   Explicit skills destination directory (default: ~/.claude/skills, plus ~/.codex/skills,
+#                       ~/.config/opencode/skills and ~/.gemini/config/skills (Antigravity) if present)
 #   KAVACH_SKIP_SKILLS  If set to 1, skip installing agent skills
 #   KAVACH_VERSION      Release tag to install, e.g. v0.1.1 (default: latest release)
 #   KAVACH_FROM_SOURCE  If set to 1, install binaries via 'go install' instead of downloading release archives
@@ -125,7 +126,7 @@ copy_skills_to() {
       cp -R "$skill_path" "${target_dir}/${skill_name}"
     fi
   done
-  say "installed agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants) to ${target_dir}"
+  say "installed agent skills (kavach-fix, kavach-implement, kavach-setup, kavach-invariants, kavach-verify) to ${target_dir}"
 }
 
 install_skills() {
@@ -155,6 +156,7 @@ install_skills() {
   claude_home="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
   codex_home="${CODEX_HOME:-${HOME}/.codex}"
   opencode_home="${HOME}/.config/opencode"
+  antigravity_home="${HOME}/.gemini/config"
 
   if [ -d "$claude_home" ] || command -v claude >/dev/null 2>&1; then
     copy_skills_to "$src_skills" "${claude_home}/skills"
@@ -168,6 +170,11 @@ install_skills() {
 
   if [ -d "$opencode_home" ] || command -v opencode >/dev/null 2>&1; then
     copy_skills_to "$src_skills" "${opencode_home}/skills"
+    installed_any=1
+  fi
+
+  if [ -d "$antigravity_home" ]; then
+    copy_skills_to "$src_skills" "${antigravity_home}/skills"
     installed_any=1
   fi
 
