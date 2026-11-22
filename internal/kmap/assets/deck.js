@@ -42,12 +42,49 @@
     return { model: m, nodes, edges, nodeMap, out, inEdges, edgeByKey, invNodes, flows: m.flows || [] };
   }
 
+  // A tokenized copy of a capsule replays the same incident as the original.
+  const fixtureKey = (x) => String(x || "").split("/").pop().replace(/\.kavach$/, "").replace(/\.tokenized$/, "");
+
   function flowMatchesFixture(flow, f) {
     if (!flow || !flow.fixture) return false;
-    // A tokenized copy of a capsule replays the same incident as the original.
-    const norm = (x) => String(x || "").split("/").pop().replace(/\.kavach$/, "").replace(/\.tokenized$/, "");
-    const want = norm(flow.fixture);
-    return want !== "" && (want === norm(f.path) || want === norm(f.label) || want === norm(f.id));
+    const want = fixtureKey(flow.fixture);
+    return want !== "" && (want === fixtureKey(f.path) || want === fixtureKey(f.label) || want === fixtureKey(f.id));
+  }
+
+  // The spec's step_names entry for fixture f, or null.
+  function stepNamesFor(model, f) {
+    const all = (model && model.step_names) || null;
+    if (!all || !f) return null;
+    for (const k of [f.path, f.label, f.id]) {
+      const v = all[fixtureKey(k)];
+      if (v) return v;
+    }
+    return null;
+  }
+
+  const CURRENCY_SIGN = { USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", CNY: "¥", AUD: "A$", CAD: "C$", NGN: "₦" };
+
+  // Formats an integer amount in minor units as currency: 2000 with
+  // minor_units 2 and USD is "$20", 2050 is "$20.50". Anything that isn't an
+  // integer comes back unchanged.
+  function formatMoney(value, money) {
+    const raw = String(value === null || value === undefined ? "" : value).trim();
+    const m = /^(-?)0*(\d+)$/.exec(raw);
+    if (!money || !m) return raw;
+    const units = Math.max(0, Math.min(8, Number(money.minor_units) || 0));
+    const digits = m[2].padStart(units + 1, "0");
+    const whole = digits.slice(0, digits.length - units).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const frac = digits.slice(digits.length - units);
+    const num = whole + (units && /[1-9]/.test(frac) ? "." + frac : "");
+    const cur = String(money.currency || "");
+    const sign = CURRENCY_SIGN[cur];
+    const neg = m[1] && /[1-9]/.test(digits) ? "-" : "";
+    if (sign) return neg + sign + num;
+    return neg + (cur ? cur + " " : "") + num;
+  }
+
+  function isMoneyField(money, field) {
+    return Boolean(money && Array.isArray(money.fields) && money.fields.includes(field));
   }
 
   // Shortest directed path from any of `sources` (in preference order) to `target`.
@@ -388,6 +425,7 @@
     const seqSet = new Set();
     for (const k of ["prod", "old", "new"]) for (const s of maps[k].keys()) seqSet.add(s);
     const seqs = Array.from(seqSet).sort((a, b) => a - b);
+    const names = stepNamesFor(ix.model, f);
     const steps = seqs.map((seq, i) => {
       const views = {
         prod: makeView(ix, f, runs.prod, maps.prod.get(seq)),
@@ -418,7 +456,7 @@
         i,
         seq,
         position: refStep.position || refStep.source || "",
-        name: stepShortName(refStep, entryNode),
+        name: (names && names[String(seq)]) || stepShortName(refStep, entryNode),
         headline: stepHeadline(refStep, entryNode),
         entry: entryNode ? entryNode.id : null,
         views,
@@ -1182,6 +1220,13 @@
       const f = p.fields.find((x) => x[0] === field);
       return f ? f[1] : "—";
     }
+    // A field value as shown: money fields as currency, the rest as written.
+    // Comparisons use the raw value; the raw toggle shows it unformatted.
+    function showVal(field, v) {
+      const money = D && D.ix.model.money;
+      if (v === null || v === undefined || v === "—" || !isMoneyField(money, field)) return v;
+      return formatMoney(v, money);
+    }
     function pickField(a, b) {
       if (!a && !b) return "";
       const base = (a || b).fields;
@@ -1250,8 +1295,8 @@
               "tr",
               { className: "click", title: "Open the parsed writes", on: { click: () => openSink() } },
               el("td", null, rowLabel(a || b, k), field ? el("small", { text: field }) : null),
-              a ? el("td", { className: "amt" + (diff ? " bad" : ""), text: av }) : notWritten(vO && vO.step),
-              two ? (b ? el("td", { className: "amt" + (diff ? " good" : ""), text: bv }) : notWritten(vN.step)) : null
+              a ? el("td", { className: "amt" + (diff ? " bad" : ""), text: showVal(field, av) }) : notWritten(vO && vO.step),
+              two ? (b ? el("td", { className: "amt" + (diff ? " good" : ""), text: showVal(field, bv) }) : notWritten(vN.step)) : null
             )
           );
         }
@@ -1298,9 +1343,10 @@
         return env.prettyJson ? env.prettyJson(x) : x;
       }
     }
-    function nodeRefs(n) {
+    function nodeRefs(n, skip) {
       if (!n) return null;
-      const links = n.links && n.links.length ? n.links : (n.code || []).map((c) => ({ text: c }));
+      let links = n.links && n.links.length ? n.links : (n.code || []).map((c) => ({ text: c }));
+      if (skip) links = links.filter((lk) => !skip.has(lk.text));
       if (!links.length) return null;
       return el("div", { className: "kd-refs" }, links.map((lk) => env.safeLink(lk.url, lk.text, "kd-ref")));
     }
@@ -1365,7 +1411,7 @@
             const av = a ? cellVal(a, fk) : "—";
             const bv = b ? cellVal(b, fk) : "—";
             const d = two && av !== bv;
-            tbody.appendChild(el("tr", null, el("td", { text: fk }), el("td", { className: d ? "d" : "", text: av }), two ? el("td", { text: bv }) : null));
+            tbody.appendChild(el("tr", null, el("td", { text: fk }), el("td", { className: d ? "d" : "", text: showVal(fk, av) }), two ? el("td", { text: showVal(fk, bv) }) : null));
           }
           box.appendChild(
             el("table", { className: "kd-wt" }, el("thead", null, el("tr", null, el("th"), el("th", { className: two ? "o" : "", text: two ? "Old" : vO && vN ? "Both" : buildLabel(tb) }), two ? el("th", { className: "n", text: "New" }) : null)), tbody)
@@ -1408,9 +1454,106 @@
       for (const nt of hp.notes) box.appendChild(el("p", { className: "kd-note" }, el("b", { text: nt.flow }), " " + nt.text));
       if (target && target.plain) box.appendChild(el("p", { className: hp.bug ? "kd-bad" : "kd-faint", text: target.plain }));
       if (target && target.detail) box.appendChild(el("p", { className: "kd-faint", text: target.detail }));
-      const refs = nodeRefs(target);
-      if (refs) box.append(el("h4", { text: "Code" }), refs);
+      const src = sourceEvidence(target);
+      for (const b of src.blocks) box.appendChild(b);
+      const refs = nodeRefs(target, src.covered);
+      if (refs) box.append(el("h4", { text: src.blocks.length ? "Other refs" : "Code" }), refs);
       return box;
+    }
+    // The commit or branch a group's code_base URL is pinned to, shortened.
+    function pinOf(codeBase) {
+      const m = /\/(?:blob|tree|src|commit)\/([^/]+)\/?$/.exec(String(codeBase || ""));
+      if (!m) return "";
+      return /^[0-9a-f]{40}$/i.test(m[1]) ? m[1].slice(0, 10) : m[1];
+    }
+    function groupBase(id) {
+      const g = (D.ix.model.groups || []).find((x) => x.id === id);
+      return (g && g.code_base) || "";
+    }
+    // Source lines with numbers, the shared leading indent removed so the
+    // excerpt fits the rail.
+    function commonIndent(lines) {
+      let pre = null;
+      for (const ln of lines) {
+        if (!ln.trim()) continue;
+        const lead = /^[\t ]*/.exec(ln)[0];
+        if (pre === null) pre = lead;
+        else {
+          let i = 0;
+          while (i < pre.length && i < lead.length && pre[i] === lead[i]) i++;
+          pre = pre.slice(0, i);
+        }
+      }
+      return pre ? pre.length : 0;
+    }
+    function srcLines(lines, start, cls) {
+      const cut = commonIndent(lines);
+      return el(
+        "pre",
+        { className: "kd-lines" },
+        lines.map((ln, k) => el("span", { className: cls(start + k) }, el("i", { text: String(start + k) }), ln.slice(cut) || " "))
+      );
+    }
+    function hunkBlock(h) {
+      // The gutter counts old-side lines, matching the excerpt above; added
+      // lines have none.
+      let o = h.old_start;
+      const rows = [el("span", { className: "at" }, el("i"), "@@ -" + h.old_start + "," + h.old_lines + " +" + h.new_start + "," + h.new_lines + " @@" + (h.section ? " " + h.section : ""))];
+      const body = h.lines || [];
+      const cut = commonIndent(body.filter((ln) => ln[0] !== "\\").map((ln) => ln.slice(1)));
+      for (const raw of body) {
+        const c = raw[0];
+        const ln = c === "\\" ? raw : c + raw.slice(1 + cut);
+        let num = "";
+        let cls = "ctx";
+        if (c === "-") {
+          num = o++;
+          cls = "del";
+        } else if (c === "+") cls = "add";
+        else if (c === "\\") cls = "at";
+        else num = o++;
+        rows.push(el("span", { className: cls }, el("i", { text: String(num) }), ln));
+      }
+      return el(
+        "div",
+        { className: "kd-src" },
+        el("h4", null, el("span", { text: h.patch }), el("small", { text: "at " + h.file + ":" + h.old_start })),
+        el("pre", { className: "kd-lines" }, rows),
+        h.truncated ? el("p", { className: "kd-faint", text: "Hunk cut at the map's line limit." }) : null
+      );
+    }
+    // Source excerpts for node n, each followed by the patch hunks that touch
+    // it. covered lists the refs that got an excerpt or a hunk.
+    function sourceEvidence(n) {
+      const out = { blocks: [], covered: new Set() };
+      const ev = n && D.ix.model.evidence && D.ix.model.evidence[n.id];
+      if (!ev) return out;
+      const hunks = D.ix.model.hunks || [];
+      const shown = new Set();
+      const addHunk = (i) => {
+        if (shown.has(i) || !hunks[i]) return;
+        shown.add(i);
+        out.blocks.push(hunkBlock(hunks[i]));
+      };
+      for (const e of ev.excerpts || []) {
+        out.covered.add(e.ref);
+        const base = groupBase(e.root || n.group);
+        const range = e.hl_start + (e.hl_end > e.hl_start ? "-" + e.hl_end : "");
+        const url = base ? base + e.path + "#L" + e.hl_start + (e.hl_end > e.hl_start ? "-L" + e.hl_end : "") : "";
+        const pin = pinOf(base);
+        out.blocks.push(
+          el(
+            "div",
+            { className: "kd-src" },
+            el("h4", null, env.safeLink(url, e.path + ":" + range, "kd-ref"), pin ? el("small", { text: "at " + pin }) : null),
+            srcLines(e.lines || [], e.start, (k) => (k >= e.hl_start && k <= e.hl_end ? "hl" : "")),
+            e.truncated ? el("p", { className: "kd-faint", text: "Excerpt cut at " + (e.lines || []).length + " lines." }) : null
+          )
+        );
+        for (const i of e.hunks || []) addHunk(i);
+      }
+      for (const i of ev.hunks || []) addHunk(i);
+      return out;
     }
     function renderTrace(body) {
       const s = cur();
@@ -1970,6 +2113,8 @@
     deriveHops,
     divergenceReasons,
     parseOutput,
+    formatMoney,
+    stepNamesFor,
     invSummary,
     isBadStep,
     createDeck,

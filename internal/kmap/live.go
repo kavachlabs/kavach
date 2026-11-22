@@ -35,6 +35,10 @@ type LiveConfig struct {
 	New       string
 	Diffs     []string
 	Overlays  []string
+	// Sources are raw --source values (DIR or GROUP=DIR), parsed against
+	// the spec on every rebuild.
+	Sources   []string
+	Patches   []string
 	MaxData   int
 	BaseDir   string
 	Version   string
@@ -515,7 +519,19 @@ func (s *LiveServer) buildFromScan(scan scanResult) (*Model, error) {
 		validOverlays = append(validOverlays, op)
 	}
 
+	var roots []SourceRoot
+	if len(s.cfg.Sources) > 0 {
+		r, err := ParseSourceRoots(s.cfg.Sources, spec)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("live: %v", err))
+		} else {
+			roots = r
+		}
+	}
+
 	m, err := Build(Input{
+		Sources:  roots,
+		Patches:  s.cfg.Patches,
 		Spec:     spec,
 		Fixtures: validFixtures,
 		Bin:      s.cfg.Bin,

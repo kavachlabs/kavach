@@ -39,7 +39,7 @@ Usage:
   kavach replay  <fixture> --bin <host-command> [--until <seq>] [--probe <input>]... [--hold] [--json]
   kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--regressions N] [--keep DIR] [--json]
   kavach contract init|show|approve|check ...
-  kavach map     [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N]
+  kavach map     [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--source [GROUP=]DIR]... [--patch P.diff]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N]
   kavach mcp
   kavach version
 

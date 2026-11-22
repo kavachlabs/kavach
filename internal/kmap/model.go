@@ -25,7 +25,11 @@ type Input struct {
 	BaseDir  string
 	Version  string
 	Title    string
-	Replay   func(j *journal.Journal, bin string) (*replay.Result, error)
+	// Sources are local checkouts that node code refs are read from.
+	Sources []SourceRoot
+	// Patches are unified diffs whose hunks attach to the nodes they touch.
+	Patches []string
+	Replay  func(j *journal.Journal, bin string) (*replay.Result, error)
 }
 
 // Model is the unified data/call/invariant/overlay JSON structure embedded in
@@ -43,6 +47,12 @@ type Model struct {
 	Overlays  []Overlay             `json:"overlays,omitempty"`
 	Stats     map[string]*NodeStats `json:"stats"`
 	Warnings  []string              `json:"warnings,omitempty"`
+
+	Money     *Money                       `json:"money,omitempty"`
+	StepNames map[string]map[string]string `json:"step_names,omitempty"`
+	// Evidence is source excerpts and patch hunks per node id.
+	Evidence map[string]*NodeEvidence `json:"evidence,omitempty"`
+	Hunks    []Hunk                   `json:"hunks,omitempty"`
 }
 
 // Fixture is one recorded .kavach incident or baseline journal plus its runs and diff.
@@ -372,6 +382,16 @@ func Build(in Input) (*Model, error) {
 		m.Flows = append(m.Flows, spec.Flows...)
 		m.Title = spec.Title
 		m.Summary = spec.Summary
+		m.Money = spec.Money
+		m.StepNames = spec.StepNames
+		ev, hunks, warns, err := attachEvidence(spec.Nodes, in.Sources, in.Patches)
+		if err != nil {
+			return nil, err
+		}
+		m.Evidence, m.Hunks = ev, hunks
+		m.Warnings = append(m.Warnings, warns...)
+	} else if len(in.Sources) > 0 || len(in.Patches) > 0 {
+		m.Warnings = append(m.Warnings, "--source and --patch need a map spec; ignored")
 	}
 
 	// Evaluate hits on spec nodes first so we know what runtime entities are unmapped.
@@ -512,6 +532,21 @@ func cloneSpec(s *Spec) *Spec {
 		cp.Nodes[i] = n
 	}
 	cp.Edges = append([]Edge(nil), s.Edges...)
+	if s.Money != nil {
+		mo := *s.Money
+		mo.Fields = append([]string(nil), s.Money.Fields...)
+		cp.Money = &mo
+	}
+	if s.StepNames != nil {
+		cp.StepNames = make(map[string]map[string]string, len(s.StepNames))
+		for k, v := range s.StepNames {
+			inner := make(map[string]string, len(v))
+			for sk, sv := range v {
+				inner[sk] = sv
+			}
+			cp.StepNames[k] = inner
+		}
+	}
 	cp.Flows = make([]Flow, len(s.Flows))
 	for i, f := range s.Flows {
 		f.Steps = append([]FlowStep(nil), f.Steps...)

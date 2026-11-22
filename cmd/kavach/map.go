@@ -32,6 +32,10 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 	fs.Var(&overlays, "overlay", "stage overlay JSON file to attach (may be repeated)")
 	var watchDirs stringList
 	fs.Var(&watchDirs, "watch", "recorder or fixtures directory to watch live (may be repeated)")
+	var sources stringList
+	fs.Var(&sources, "source", "source root for code excerpts: DIR, or GROUP=DIR for one spec group (may be repeated)")
+	var patches stringList
+	fs.Var(&patches, "patch", "unified diff whose hunks attach to the nodes they touch (may be repeated)")
 	listenAddr := fs.String("listen", "127.0.0.1:8090", "HTTP listen address for live map server")
 	interval := fs.Duration("interval", 500*time.Millisecond, "poll interval for --watch")
 	var outPath string
@@ -103,6 +107,8 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 			New:       *newBin,
 			Diffs:     diffs,
 			Overlays:  overlays,
+			Sources:   sources,
+			Patches:   patches,
 			MaxData:   *maxData,
 			BaseDir:   baseDir,
 			Version:   version,
@@ -140,7 +146,19 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 		}
 	}
 
+	if (len(sources) > 0 || len(patches) > 0) && spec == nil {
+		fmt.Fprintln(stderr, "kavach map: --source and --patch need a map spec (*.json)")
+		return exitUsage
+	}
+	roots, err := kmap.ParseSourceRoots(sources, spec)
+	if err != nil {
+		fmt.Fprintf(stderr, "kavach map: %v\n", err)
+		return exitUsage
+	}
+
 	m, err := kmap.Build(kmap.Input{
+		Sources:  roots,
+		Patches:  patches,
 		Spec:     spec,
 		Fixtures: fixtures,
 		Bin:      *bin,

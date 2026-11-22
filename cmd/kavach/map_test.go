@@ -85,13 +85,45 @@ func TestCmdMapFixtureOnly(t *testing.T) {
 	}
 }
 
+func TestCmdMapSourceAndPatch(t *testing.T) {
+	specPath := "../../examples/ledger/.kavach/plan/map.json"
+	patch := filepath.Join(t.TempDir(), "fix.patch")
+	diff := "--- a/examples/ledger/sdk/ledger.go\n+++ b/examples/ledger/sdk/ledger.go\n@@ -90,1 +90,1 @@\n-old\n+new\n"
+	if err := os.WriteFile(patch, []byte(diff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errb := runCLI(t, "map", specPath, fixture, "--source", "handlers=../..", "--source", "../..", "--patch", patch, "--json")
+	if code != exitPass {
+		t.Fatalf("map --source --patch exit %d, stderr:\n%s", code, errb)
+	}
+	var m kmap.Model
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatalf("decode map json: %v", err)
+	}
+	ev := m.Evidence["fn_post"]
+	if ev == nil || len(ev.Excerpts) == 0 || ev.Excerpts[0].Root != "handlers" || len(ev.Hunks) != 1 {
+		t.Fatalf("fn_post evidence = %+v", ev)
+	}
+	if e := ev.Excerpts[0]; e.HLStart != 85 || e.HLEnd != 100 || e.Start != 82 {
+		t.Errorf("fn_post excerpt = %+v", e)
+	}
+	if ev := m.Evidence["in_deposit"]; ev == nil || len(ev.Excerpts) != 1 || ev.Excerpts[0].Root != "" {
+		t.Errorf("in_deposit should resolve under the unscoped root: %+v", ev)
+	}
+}
+
 func TestCmdMapUsageErrors(t *testing.T) {
+	specPath := "../../examples/ledger/.kavach/plan/map.json"
 	cases := [][]string{
 		{"map"},
 		{"map", "unknown.txt"},
 		{"map", "a.json", "b.json"},
 		{"map", fixture, "--new", "./bin"},
 		{"map", fixture, "--max-data", "-1"},
+		{"map", fixture, "--source", "."},
+		{"map", fixture, "--patch", "x.patch"},
+		{"map", specPath, "--source", "nogroup=."},
+		{"map", specPath, "--source", "handlers=./does-not-exist"},
 	}
 	for _, args := range cases {
 		if code, _, _ := runCLI(t, args...); code != exitUsage {

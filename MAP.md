@@ -3,7 +3,7 @@
 `kavach map` generates one self-contained interactive HTML file (with pan/zoom cards, edges, guided flow walkthroughs, step-by-step replay inspection, an invariant matrix, and optional stage overlay tabs) or prints the underlying JSON model via `--json`.
 
 ```bash
-kavach map [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N] [--title T]
+kavach map [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--source [GROUP=]DIR]... [--patch P.diff]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N] [--title T]
 ```
 
 With a spec (`map.json`), `kavach map` binds runtime fixture inputs, outputs, failures, and invariants onto code-level cards (`entry` → `function` → `state` / `sink` → `invariant` / `bug`). Without a spec, it synthesizes an `auto` map directly from the fixtures (`inputs`, `outputs`, `invariants`, `failures`).
@@ -93,7 +93,9 @@ Decoded strictly (`DisallowUnknownFields`).
         { "node": "in_deposit", "text": "Step explanation." }
       ]
     }
-  ]
+  ],
+  "money": { "fields": ["amt", "src_bal", "dst_bal"], "minor_units": 2, "currency": "USD" },
+  "step_names": { "incident": { "1": "Fund", "3": "Pay" } }
 }
 ```
 
@@ -105,6 +107,24 @@ Decoded strictly (`DisallowUnknownFields`).
   - `position`: exact match, or prefix match when ending in `*`.
   - `json`: dot-path → scalar matched against parsed JSON object payloads (numbers normalized as `float64`).
   - `contains` / `regex`: tested against raw input/output bytes or failure `message`.
+- **Money (optional):** `fields` names the output (and input) fields that hold integer amounts in minor units. The Replay tab shows them as currency in its write tables (`2000` with `minor_units: 2` and `USD` is `$20`; `2050` is `$20.50`); the raw-strings toggle still shows the values as written. Known currency codes get a symbol (`USD`, `EUR`, `GBP`, `JPY`, `INR`, ...); others are shown as a prefix (`CHF 19.99`).
+- **Step names (optional):** `step_names` maps a fixture, by base name without `.kavach` or `.tokenized`, to names keyed by input `seq`. The Replay tab uses them on its tape; steps without a name keep the name derived from the entry node.
+
+## Source Excerpts and Patches (`--source`, `--patch`)
+
+The spec stays portable (it names files relative to a checkout, plus an optional `code_base` URL); where the checkouts are on this machine is passed at build time:
+
+```bash
+kavach map map.json incident.kavach --bin ./old --new ./new \
+  --source upstream=../upstream --source harness=../harness \
+  --patch fix.patch
+```
+
+- **`--source [GROUP=]DIR`** (repeatable): a local checkout that `code` refs are read from. `GROUP=DIR` applies to nodes in that spec group; a bare `DIR` applies to every group. The value is `GROUP=DIR` only when the text before the first `=` is a group id in the spec. A ref is looked up under its group's roots first, then the unscoped roots, then any other root. If the ref starts with the root's own directory name (`upstream/model/tx.go` under a root named `upstream`), it is also tried without it.
+- For every `path:N` or `path:A-B` ref that resolves, the map embeds lines `A-3` to `B+3` (at most 60 lines per ref, at most 256 KB across the map). Refs without line numbers are not read. Paths that are absolute or contain `..` after cleaning, and symlinks that resolve outside the root, are rejected. A missing file, a line past the end of the file, or a rejected path adds a warning; the build still succeeds.
+- **`--patch FILE`** (repeatable): a unified diff (`git diff`, `diff -u`). Each hunk attaches to the nodes whose line refs overlap its old-side lines in the same file; `a/` and `b/` prefixes are ignored and either path may carry extra leading directories. Hunks that match no node add a warning.
+- In the Replay tab, the evidence for a function or bug hop shows each excerpt with line numbers and the referenced lines highlighted, headed by the file, the ref, and the commit the group's `code_base` is pinned to; any matching hunk follows with removed and added lines coloured.
+- Both flags need a spec. They also work with `--watch`.
 
 ## Overlay Schema (`kavach_map_overlay: 1`)
 
@@ -152,6 +172,8 @@ Top-level fields emitted by `kavach map --json`:
   - `runs[]`: `{ id, mode, build, bin, verdict, status, detail, seq, invariants, declared, steps[], divergence, error }`
   - `steps[]`: `{ seq, source, position, input, input_truncated, omitted, outputs[], reads, outcome, message, hits[], invariants, detected }`
 - `overlays[]`, `stats` (per-node `hits`, `violations`, `variants_old`, `variants_new`), `warnings`
+- `money`, `step_names`: copied from the spec when set
+- `evidence` and `hunks`, present only with `--source` or `--patch`: `evidence` maps a node id to `excerpts[]` (`{ ref, path, root, start, hl_start, hl_end, lines[], truncated, hunks[] }`) and `hunks[]`, both indexing `hunks[]` (`{ patch, file, old_start, old_lines, new_start, new_lines, section, lines[], truncated }`)
 
 ## Privacy & Path Safety
 

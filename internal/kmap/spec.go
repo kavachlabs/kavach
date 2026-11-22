@@ -24,6 +24,21 @@ type Spec struct {
 	Nodes   []Node  `json:"nodes"`
 	Edges   []Edge  `json:"edges"`
 	Flows   []Flow  `json:"flows,omitempty"`
+
+	// Money names the output/input fields that carry amounts so the replay
+	// deck can show them as currency. Optional.
+	Money *Money `json:"money,omitempty"`
+	// StepNames gives steps short names, keyed by fixture (base name without
+	// .kavach or .tokenized) and then by seq. Optional.
+	StepNames map[string]map[string]string `json:"step_names,omitempty"`
+}
+
+// Money describes which payload fields are money and how to show them.
+// Values are integers in minor units (2000 with minor_units 2 is 20.00).
+type Money struct {
+	Fields     []string `json:"fields"`
+	MinorUnits int      `json:"minor_units,omitempty"`
+	Currency   string   `json:"currency,omitempty"`
 }
 
 // Group is a visual column / layer of cards on the map.
@@ -231,7 +246,60 @@ func (s *Spec) NormalizeAndValidate() error {
 		}
 	}
 
+	if s.Money != nil {
+		if len(s.Money.Fields) == 0 {
+			errs = append(errs, errors.New("money: fields must not be empty"))
+		}
+		for i, f := range s.Money.Fields {
+			if strings.TrimSpace(f) == "" {
+				errs = append(errs, fmt.Errorf("money: fields[%d] is empty", i))
+			}
+		}
+		if s.Money.MinorUnits < 0 || s.Money.MinorUnits > 8 {
+			errs = append(errs, fmt.Errorf("money: minor_units must be between 0 and 8, got %d", s.Money.MinorUnits))
+		}
+		s.Money.Currency = strings.ToUpper(strings.TrimSpace(s.Money.Currency))
+	}
+
+	if len(s.StepNames) > 0 {
+		names := make(map[string]map[string]string, len(s.StepNames))
+		for fx, bySeq := range s.StepNames {
+			key := FixtureKey(fx)
+			if key == "" {
+				errs = append(errs, fmt.Errorf("step_names: empty fixture key %q", fx))
+				continue
+			}
+			if _, dup := names[key]; dup {
+				errs = append(errs, fmt.Errorf("step_names: fixture %q given more than once", key))
+				continue
+			}
+			out := make(map[string]string, len(bySeq))
+			for seq, name := range bySeq {
+				if !isDigits(seq) {
+					errs = append(errs, fmt.Errorf("step_names %q: seq %q is not a number", key, seq))
+					continue
+				}
+				n, _ := strconv.ParseUint(seq, 10, 64)
+				out[strconv.FormatUint(n, 10)] = name
+			}
+			names[key] = out
+		}
+		s.StepNames = names
+	}
+
 	return errors.Join(errs...)
+}
+
+// FixtureKey is the name a fixture is known by in step_names and flows: its
+// base name without the .kavach and .tokenized suffixes.
+func FixtureKey(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		p = p[i+1:]
+	}
+	p = strings.TrimSuffix(p, ".kavach")
+	p = strings.TrimSuffix(p, ".tokenized")
+	return p
 }
 
 func (r *Rule) prepare() error {
