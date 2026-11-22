@@ -819,8 +819,10 @@
       // The panel isn't attached yet, so estimate its shape from the window:
       // it sits beside the ~370px rail, above the tape and below the headers.
       const wide = window.innerWidth > 980;
-      const hw = wide ? window.innerWidth - 420 : window.innerWidth - 40;
-      const hh = wide ? window.innerHeight - 330 : Math.max(300, hw * 0.62);
+      // Under 640px the map is a fixed 820x480 canvas that scrolls (map.css).
+      const phone = window.innerWidth <= 640;
+      const hw = phone ? 836 : wide ? window.innerWidth - 420 : window.innerWidth - 40;
+      const hh = phone ? 544 : wide ? window.innerHeight - 330 : Math.max(300, hw * 0.62);
       const aspect = hw > 200 && hh > 150 ? Math.max(0.35, Math.min(0.8, (hh - 64) / (hw - 16))) : 0.5;
       const L = layout(ix, aspect);
       const svg = svgEl("svg", {
@@ -1730,6 +1732,22 @@
         });
       }
       placePlayhead();
+      keepStepInView();
+    }
+    // On narrow screens the tape scrolls sideways; keep the current step's
+    // column on screen when the step changes, not on every animation frame.
+    let lastInView = -1;
+    function keepStepInView() {
+      const T = dom && dom.tape;
+      const s = cur();
+      if (!T || !s || s.i === lastInView) return;
+      lastInView = s.i;
+      const grid = T.grid || (T.ph && T.ph.closest(".kd-tgrid"));
+      const cell = T.rows[T.trs[0][0]][s.i];
+      if (!grid || !cell || grid.scrollWidth <= grid.clientWidth) return;
+      const gr = grid.getBoundingClientRect();
+      const cr = cell.getBoundingClientRect();
+      if (cr.left < gr.left + 90 || cr.right > gr.right) grid.scrollLeft += cr.left - gr.left - 96;
     }
     function placePlayhead() {
       if (!dom || !dom.tape.ph) return;
