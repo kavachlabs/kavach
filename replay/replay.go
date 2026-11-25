@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kavachlabs/kavach/internal/kconfig"
 	"github.com/kavachlabs/kavach/journal"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
@@ -60,6 +61,12 @@ type StepResult struct {
 	// record of the step held. It is only ever non-zero for a lenient step
 	// (SPEC.md §6): a fixed build may read more than the failing one did.
 	Synthesized int `json:"synthesized_reads,omitempty"`
+	// ReorderedGateways counts gateway calls matched via Tier 2 (KeyedTemplate)
+	// out of strict recorded order within the step. Non-fatal telemetry.
+	ReorderedGateways int `json:"reordered_gateways,omitempty"`
+	// FaultsInjected counts gateway calls in this step that returned an error
+	// from a fault-injection variant.
+	FaultsInjected int `json:"faults_injected,omitempty"`
 }
 
 // ProbeResult is what one synthetic probe input produced when run against a
@@ -179,6 +186,17 @@ type Options struct {
 	// input leniently against the held handler and appends its outcome to
 	// Result.Probes. The host is closed when OnHold returns.
 	OnHold func(probe func(kavach.Input) (ProbeResult, error)) error
+	// InvariantsPath, if non-empty, loads declarative invariants from a
+	// .kavach/invariants.yaml file and evaluates them during replay.
+	InvariantsPath string
+	// Invariants are declarative invariant rules evaluated alongside
+	// handler-declared invariants during replay.
+	Invariants []kconfig.InvariantRule
+	// BaselineOutputs holds per-sink output counts from a baseline recording
+	// for anti_lobotomy checks when replaying a variant journal (which carries
+	// no recorded output records). When nil on a non-variant journal, baseline
+	// counts are computed automatically from the journal's recorded outputs.
+	BaselineOutputs map[string]int
 }
 
 // String formats the status as an agent-facing verdict, e.g. "diverged@12",
@@ -207,12 +225,13 @@ func RunFile(path string, newHandler func() kavach.Handler) (*Result, error) {
 }
 
 type step struct {
-	input    journal.Record
-	reads    []journal.Record
-	outputs  []kavach.Output
-	marker   *journal.Record
-	envAfter []journal.Record
-	lastSeq  uint64
+	input      journal.Record
+	reads      []journal.Record
+	outputs    []kavach.Output
+	outputSeqs []uint64
+	marker     *journal.Record
+	envAfter   []journal.Record
+	lastSeq    uint64
 }
 
 // Replay re-runs every step of j against a fresh handler from newHandler,
@@ -272,6 +291,15 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 	if err != nil {
 		return nil, err
 	}
+	declRules, err := resolveInvariantRules(opts.InvariantsPath, opts.Invariants)
+	if err != nil {
+		return nil, err
+	}
+	baseline := opts.BaselineOutputs
+	if baseline == nil && !variant {
+		baseline = recordBaselineOutputs(steps)
+	}
+	declEval := newDeclarativeEvaluator(declRules, baseline)
 	for _, st := range steps {
 		if st.marker != nil {
 			res.Recorded = &Failure{Seq: st.input.Seq, Kind: st.marker.Kind, Message: st.marker.Message}
@@ -304,6 +332,7 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 			res.Invariants = append(res.Invariants, inv.Name)
 		}
 	}
+	res.Invariants = appendUniqueInvariantNames(res.Invariants, declRules)
 	env := &replayEnv{hist: hist}
 
 	runProbes := func() error {
@@ -389,7 +418,7 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 	}
 
 	reachedFailure := false
-	for _, st := range steps {
+	for stepIdx, st := range steps {
 		seq := st.input.Seq
 		if opts.Until != nil && seq > *opts.Until {
 			break
@@ -406,6 +435,8 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		pv, panicked, herr := runReplayStep(h, env, kavach.Input{Source: st.input.Source, Position: st.input.Position, Data: st.input.Data})
 		sr.Outputs = append([]kavach.Output{}, env.outs...)
 		sr.Synthesized = env.synthesized
+		sr.ReorderedGateways = env.reorderedGateways
+		sr.FaultsInjected = env.faultsInjected
 		for _, r := range st.reads {
 			if r.Type == journal.TypeClock {
 				env.lastClock = r.UnixNanos
@@ -432,7 +463,12 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		if panicked {
 			sr.Panic = fmt.Sprint(pv)
 			res.Steps = append(res.Steps, sr)
-			res.set(StatusStillFailing, seq, "panic: "+sr.Panic)
+			if v := declEval.checkStep(sr); v != nil {
+				res.Invariant = v.name
+				res.set(StatusInvariantViolated, v.seq, v.detail)
+			} else {
+				res.set(StatusStillFailing, seq, "panic: "+sr.Panic)
+			}
 			if err := runProbes(); err != nil {
 				return nil, err
 			}
@@ -441,6 +477,21 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 		if herr != nil {
 			sr.Error = herr.Error()
 			res.Steps = append(res.Steps, sr)
+			if v := declEval.checkStep(sr); v != nil {
+				res.Invariant = v.name
+				res.set(StatusInvariantViolated, v.seq, v.detail)
+				if err := runProbes(); err != nil {
+					return nil, err
+				}
+				return res, nil
+			}
+			// On a fault-injection variant's error-injected attempt that is
+			// immediately followed by a redelivery of the identical input, a
+			// clean error return is expected so the retry attempt can run.
+			if isRetryableFaultAttempt(j, steps, stepIdx) {
+				hist.addStep(st)
+				continue
+			}
 			res.set(StatusStillFailing, seq, "error: "+sr.Error)
 			if err := runProbes(); err != nil {
 				return nil, err
@@ -448,13 +499,22 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 			return res, nil
 		}
 		res.Steps = append(res.Steps, sr)
-		if !env.lenient && env.pos < len(env.reads) {
-			r := env.reads[env.pos]
-			return res.set(StatusNondeterministic, r.Seq, fmt.Sprintf("step finished without reading the recorded %s at seq %d", r.Type, r.Seq)), nil
+		if !env.lenient {
+			if r, ok := env.firstUnreadRead(); ok {
+				return res.set(StatusNondeterministic, r.Seq, fmt.Sprintf("step finished without reading the recorded %s at seq %d", r.Type, r.Seq)), nil
+			}
 		}
 		if name, ierr := kavach.CheckInvariants(h); ierr != nil {
 			res.Invariant = name
 			res.set(StatusInvariantViolated, seq, ierr.Error())
+			if err := runProbes(); err != nil {
+				return nil, err
+			}
+			return res, nil
+		}
+		if v := declEval.checkStep(sr); v != nil {
+			res.Invariant = v.name
+			res.set(StatusInvariantViolated, v.seq, v.detail)
 			if err := runProbes(); err != nil {
 				return nil, err
 			}
@@ -476,6 +536,14 @@ func replayJournal(j *journal.Journal, opts Options, open func(snapshot []byte) 
 			}
 		}
 		hist.addStep(st)
+	}
+	if v := declEval.checkEnd(); v != nil {
+		res.Invariant = v.name
+		res.set(StatusInvariantViolated, v.seq, v.detail)
+		if err := runProbes(); err != nil {
+			return nil, err
+		}
+		return res, nil
 	}
 	if res.Recorded != nil && reachedFailure {
 		res.Status = StatusFixed
@@ -520,6 +588,7 @@ func splitSteps(recs []journal.Record) ([]*step, error) {
 				return nil, fmt.Errorf("kavach: output record at seq %d precedes the first input", rec.Seq)
 			}
 			cur.outputs = append(cur.outputs, kavach.Output{Sink: rec.Sink, Data: rec.Data})
+			cur.outputSeqs = append(cur.outputSeqs, rec.Seq)
 			cur.lastSeq = rec.Seq
 		case journal.TypeEnvironment:
 			if cur != nil {
@@ -566,6 +635,9 @@ func diffNamed(want, got []kavach.Output, wantName, gotName string) string {
 		case i >= len(want):
 			return fmt.Sprintf("output %d unexpected: %s %s", i, gotName, describe(got[i]))
 		case want[i].Sink != got[i].Sink || !bytes.Equal(want[i].Data, got[i].Data):
+			if sameOutputsPerSink(want, got) {
+				return ""
+			}
 			return fmt.Sprintf("output %d differs: %s %s, %s %s", i, wantName, describe(want[i]), gotName, describe(got[i]))
 		}
 	}
@@ -666,22 +738,60 @@ func (h *history) lookup(key string) ([]byte, bool) {
 // served by type in recorded order and, once those run out, synthesized
 // deterministically (the last recorded time; hash-derived random bytes).
 type replayEnv struct {
-	input       uint64
-	reads       []journal.Record
-	pos         int
-	outs        []kavach.Output
-	lenient     bool
-	clockPos    int
-	randPos     int
-	lastClock   int64
-	synthesized int
-	used        []bool
-	hist        *history
+	input             uint64
+	reads             []journal.Record // non-gateway reads: clock, rand, config
+	pos               int
+	gateways          []journal.Record // gateway reads, separate stream from reads & outs
+	gwUsed            []bool
+	reorderedGateways int
+	faultsInjected    int
+	outs              []kavach.Output
+	lenient           bool
+	clockPos          int
+	randPos           int
+	lastClock         int64
+	synthesized       int
+	used              []bool
+	hist              *history
 }
 
 func (e *replayEnv) reset(st *step, lenient bool) {
-	e.input, e.reads, e.pos, e.outs = st.input.Seq, st.reads, 0, e.outs[:0]
+	e.input = st.input.Seq
+	e.reads = e.reads[:0]
+	e.gateways = e.gateways[:0]
+	for _, r := range st.reads {
+		if r.Type == journal.TypeGateway {
+			e.gateways = append(e.gateways, r)
+		} else {
+			e.reads = append(e.reads, r)
+		}
+	}
+	if len(e.gateways) > 0 {
+		e.gwUsed = make([]bool, len(e.gateways))
+	} else {
+		e.gwUsed = nil
+	}
+	e.reorderedGateways = 0
+	e.faultsInjected = 0
+	e.pos, e.outs = 0, e.outs[:0]
 	e.lenient, e.clockPos, e.randPos, e.synthesized, e.used = lenient, 0, 0, 0, nil
+}
+
+func (e *replayEnv) firstUnreadRead() (journal.Record, bool) {
+	var best journal.Record
+	found := false
+	if e.pos < len(e.reads) {
+		best = e.reads[e.pos]
+		found = true
+	}
+	if idx := e.nextUnusedGateway(); idx >= 0 {
+		r := e.gateways[idx]
+		if !found || r.Seq < best.Seq {
+			best = r
+			found = true
+		}
+	}
+	return best, found
 }
 
 func (e *replayEnv) next(want journal.Type) journal.Record {
@@ -762,24 +872,24 @@ func fillDeterministic(p []byte, seq uint64, n int) {
 }
 
 func (e *replayEnv) Query(gateway string, request []byte) ([]byte, error) {
-	var rec journal.Record
-	if !e.lenient {
-		rec = e.next(journal.TypeGateway)
-		if rec.Gateway != gateway || !bytes.Equal(rec.Request, request) {
-			panic(nondeterminism{rec.Seq, fmt.Sprintf("handler queried %s with %q, journal has a query of %s with %q at seq %d", gateway, request, rec.Gateway, rec.Request, rec.Seq)})
-		}
-	} else {
-		var ok bool
-		if rec, ok = e.takeUnread(func(r journal.Record) bool {
-			return r.Type == journal.TypeGateway && r.Gateway == gateway && bytes.Equal(r.Request, request)
-		}); !ok {
-			e.synthesized++
-			if rec, ok = e.takeUnread(func(r journal.Record) bool { return r.Type == journal.TypeGateway && r.Gateway == gateway }); !ok {
-				return nil, errors.New("kavach: no recorded response")
+	rec, ok, nextIdx := e.matchGateway(gateway, request)
+	if !ok {
+		if !e.lenient {
+			if nextIdx >= 0 {
+				r := e.gateways[nextIdx]
+				panic(nondeterminism{r.Seq, fmt.Sprintf("UnmatchedGateway: handler queried %s with %q, journal has a query of %s with %q at seq %d", gateway, request, r.Gateway, r.Request, r.Seq)})
 			}
+			panic(nondeterminism{e.input, fmt.Sprintf("UnmatchedGateway: handler queried %s with %q, but the step at seq %d has no matching unconsumed gateway record", gateway, request, e.input)})
+		}
+		e.synthesized++
+		if rec, ok = e.lenientFallbackGateway(gateway, request); !ok {
+			return nil, errors.New("kavach: no recorded response")
 		}
 	}
 	if rec.Error != "" {
+		if e.lenient {
+			e.faultsInjected++
+		}
 		return nil, errors.New(rec.Error)
 	}
 	return clone(rec.Response), nil

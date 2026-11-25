@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kavachlabs/kavach/internal/kconfig"
 	"github.com/kavachlabs/kavach/journal"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
 )
@@ -47,6 +48,13 @@ type VerifyOptions struct {
 	// Regressions is how many regression variants (see RegressionVariants) are
 	// generated. Zero means DefaultRegressions; a negative value skips them.
 	Regressions int
+	// InvariantsPath, if non-empty, loads declarative invariants from a
+	// .kavach/invariants.yaml file and evaluates them on both builds during
+	// verification (including driver-level fault-injection variants).
+	InvariantsPath string
+	// Invariants are inline declarative invariant rules evaluated alongside
+	// any InvariantsPath rules and handler-declared invariants.
+	Invariants []kconfig.InvariantRule
 }
 
 // ReplayFunc replays a journal against one build of a handler.
@@ -125,9 +133,10 @@ func (v *Verification) Passed() bool { return v.Status == StatusFixed || v.Statu
 
 // Verify checks a candidate fix in process. See VerifyWith.
 func Verify(j *journal.Journal, oldHandler, newHandler func() kavach.Handler, opts VerifyOptions) (*Verification, error) {
+	ropts := Options{InvariantsPath: opts.InvariantsPath, Invariants: opts.Invariants}
 	return VerifyWith(j,
-		func(j *journal.Journal) (*Result, error) { return Run(j, oldHandler) },
-		func(j *journal.Journal) (*Result, error) { return Run(j, newHandler) },
+		func(j *journal.Journal) (*Result, error) { return RunWith(j, oldHandler, ropts) },
+		func(j *journal.Journal) (*Result, error) { return RunWith(j, newHandler, ropts) },
 		opts)
 }
 
@@ -153,18 +162,39 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	if min == 0 {
 		min = DefaultMinVariants
 	}
-	oldRes, err := replayOld(j)
+	declRules, err := resolveInvariantRules(opts.InvariantsPath, opts.Invariants)
+	if err != nil {
+		return nil, err
+	}
+	recBaseline := baselineForJournal(j)
+	runWithDecl := func(fn ReplayFunc, vj *journal.Journal, base map[string]int) (*Result, error) {
+		res, err := fn(vj)
+		if err != nil {
+			return nil, err
+		}
+		applyDeclarativeInvariants(res, declRules, base)
+		return res, nil
+	}
+
+	oldRes, err := runWithDecl(replayOld, j, recBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("old build: %w", err)
 	}
-	newRes, err := replayNew(j)
+	newRes, err := runWithDecl(replayNew, j, recBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("new build: %w", err)
 	}
 	v := &Verification{Old: oldRes, New: newRes, MinVariants: max(min, 0), Variants: []VariantCheck{}, Regressions: []RegressionCheck{}}
-	if !newRes.Passed() || newRes.Status == StatusOK || min < 0 {
+	if !newRes.Passed() || min < 0 {
 		v.Status, v.Verdict, v.Seq, v.Detail = newRes.Status, newRes.String(), newRes.Seq, newRes.Detail
 		return v, nil
+	}
+	if newRes.Status == StatusOK {
+		if !hasGatewayRecords(j) {
+			v.Status, v.Verdict, v.Seq, v.Detail = newRes.Status, newRes.String(), newRes.Seq, newRes.Detail
+			return v, nil
+		}
+		return verifyHealthyBaselineFaults(j, v, replayOld, replayNew, opts, min, declRules)
 	}
 
 	variants, err := Variants(j)
@@ -175,7 +205,14 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	requireIncidentOutput := hasIncidentOutputs(oldRes)
 	checks := make([]VariantCheck, len(variants))
 	if err := parallel(len(variants), opts.Parallel, func(i int) (err error) {
-		checks[i], err = checkVariant(variants[i], replayOld, replayNew, requireIncidentOutput)
+		var base map[string]int
+		if k := variants[i].Header.Meta.Variant.Kind; k != KindDrop && k != KindMove {
+			base = recBaseline
+		}
+		checks[i], err = checkVariant(variants[i],
+			func(vj *journal.Journal) (*Result, error) { return runWithDecl(replayOld, vj, base) },
+			func(vj *journal.Journal) (*Result, error) { return runWithDecl(replayNew, vj, base) },
+			requireIncidentOutput)
 		return err
 	}); err != nil {
 		return nil, err
@@ -210,7 +247,9 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	v.RegressionCandidates = len(regs)
 	rchecks := make([]RegressionCheck, len(regs))
 	if err := parallel(len(regs), opts.Parallel, func(i int) (err error) {
-		rchecks[i], err = checkRegression(regs[i], replayOld, replayNew)
+		rchecks[i], err = checkRegression(regs[i],
+			func(vj *journal.Journal) (*Result, error) { return runWithDecl(replayOld, vj, nil) },
+			func(vj *journal.Journal) (*Result, error) { return runWithDecl(replayNew, vj, nil) })
 		return err
 	}); err != nil {
 		return nil, err
@@ -261,6 +300,171 @@ func VerifyWith(j *journal.Journal, replayOld, replayNew ReplayFunc, opts Verify
 	return v, nil
 }
 
+// verifyHealthyBaselineFaults runs driver-level fault-injection + redelivery
+// variants against a healthy baseline capsule containing Gateway records.
+// If the old build fails under injected driver faults (e.g. double-emit on
+// retry caught by invariants.yaml) and the new build passes >= min such
+// variants cleanly with no regressions, the verdict is StatusFixed.
+func verifyHealthyBaselineFaults(
+	j *journal.Journal,
+	v *Verification,
+	replayOld, replayNew ReplayFunc,
+	opts VerifyOptions,
+	min int,
+	declRules []kconfig.InvariantRule,
+) (*Verification, error) {
+	limit := MaxCandidates
+	if min*3 > limit {
+		limit = min * 3
+	}
+	bundles, err := baselineFaultBundles(j, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(bundles) == 0 {
+		v.Status, v.Verdict, v.Seq, v.Detail = v.New.Status, v.New.String(), v.New.Seq, v.New.Detail
+		return v, nil
+	}
+	v.Candidates = len(bundles)
+	checks := make([]VariantCheck, len(bundles))
+	regPerBundle := make([]*RegressionCheck, len(bundles))
+	if err := parallel(len(bundles), opts.Parallel, func(i int) error {
+		b := bundles[i]
+		info := b.journal.Header.Meta.Variant
+		c := VariantCheck{ID: info.ID, Mutation: info.Mutation, Kind: info.Kind, Incident: info.Incident, Journal: b.journal}
+		o, err := replayOld(b.journal)
+		if err != nil {
+			return fmt.Errorf("old build, variant %d: %w", info.ID, err)
+		}
+		applyDeclarativeInvariants(o, declRules, b.baseline)
+		c.Old = o.String()
+		if !o.Passed() {
+			// Ignore variants where the old build failed or dropped outputs
+			// (e.g. rejected a mutated/malformed input) before the injected
+			// gateway fault was ever triggered.
+			if !anyFaultInjected(o) {
+				checks[i] = c
+				return nil
+			}
+			c.Reproduces = true
+			n, err := replayNew(b.journal)
+			if err != nil {
+				return fmt.Errorf("new build, variant %d: %w", info.ID, err)
+			}
+			applyDeclarativeInvariants(n, declRules, b.baseline)
+			c.New = n.String()
+			judgeVariant(&c, b.journal, o, n)
+			checks[i] = c
+			return nil
+		}
+		checks[i] = c
+		if opts.Regressions < 0 {
+			return nil
+		}
+		// Old build survived this fault schedule: verify new build does not
+		// regress on it either.
+		rc := RegressionCheck{ID: info.ID, Mutation: info.Mutation, Input: info.Incident, Counted: true, Old: o.String(), Journal: b.journal}
+		n, err := replayNew(b.journal)
+		if err != nil {
+			return fmt.Errorf("new build, fault regression variant %d: %w", info.ID, err)
+		}
+		applyDeclarativeInvariants(n, declRules, b.baseline)
+		rc.New = n.String()
+		if !n.Passed() {
+			rc.Seq, rc.Detail = n.Seq, n.String()
+			if n.Detail != "" {
+				rc.Detail += ": " + n.Detail
+			}
+			regPerBundle[i] = &rc
+			return nil
+		}
+		stopSeq, hasStart := faultAttemptStartSeq(b.journal)
+		for idx, ost := range o.Steps {
+			if hasStart && ost.Seq >= stopSeq {
+				break
+			}
+			if idx >= len(n.Steps) {
+				break
+			}
+			if d := diffBuilds(ost.Outputs, n.Steps[idx].Outputs); d != "" {
+				seq := ost.Seq
+				rc.Seq, rc.Detail = &seq, "the new build's outputs differ from the old build's on a fault-injection variant: "+d
+				regPerBundle[i] = &rc
+				return nil
+			}
+		}
+		rc.Passed = true
+		regPerBundle[i] = &rc
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	var byKind map[string]int
+	for _, c := range checks {
+		if c.Reproduces {
+			v.Reproducing++
+			if c.Kind != "" {
+				if byKind == nil {
+					byKind = map[string]int{}
+				}
+				byKind[c.Kind]++
+			}
+		}
+		if c.Passed {
+			v.Passing++
+		} else if c.Reproduces && v.Variant == 0 {
+			v.Variant, v.Seq = c.ID, c.Seq
+		}
+	}
+	v.ReproducingByKind = byKind
+	v.Variants = checks
+
+	for _, rc := range regPerBundle {
+		if rc == nil {
+			continue
+		}
+		v.Regressions = append(v.Regressions, *rc)
+		v.RegressionCandidates++
+		if rc.Counted {
+			v.RegressionCounted++
+		}
+		if rc.Passed {
+			v.RegressionPassing++
+		} else if rc.Counted && v.Regression == 0 {
+			v.Regression = rc.ID
+		}
+	}
+
+	switch {
+	case v.Variant != 0:
+		c := v.Variants[indexOf(v.Variants, v.Variant)]
+		v.Status = StatusVariantFailed
+		v.Verdict = fmt.Sprintf("%s(%d)", StatusVariantFailed, c.ID)
+		if c.Seq != nil {
+			v.Verdict += fmt.Sprintf("@%d", *c.Seq)
+		}
+		v.Detail = fmt.Sprintf("variant %d (%s): %s", c.ID, c.Mutation, c.Detail)
+	case v.Regression != 0:
+		c := v.Regressions[regressionIndex(v.Regressions, v.Regression)]
+		v.Status = StatusRegressed
+		v.Verdict = fmt.Sprintf("%s(%d)", StatusRegressed, c.ID)
+		if c.Seq != nil {
+			v.Seq = c.Seq
+			v.Verdict += fmt.Sprintf("@%d", *c.Seq)
+		}
+		v.Detail = fmt.Sprintf("regression variant %d (%s): %s", c.ID, c.Mutation, c.Detail)
+	case v.Reproducing > 0 && v.Reproducing < min:
+		v.Status, v.Verdict = StatusUnverified, string(StatusUnverified)
+		v.Detail = fmt.Sprintf("fault-injection variants found a bug fixed by the new build, but only %d of %d variants reproduce it on the old build; %d are required", v.Reproducing, v.Candidates, min)
+	case v.Reproducing > 0:
+		v.Status, v.Verdict = StatusFixed, string(StatusFixed)
+	default:
+		v.Status, v.Verdict = StatusOK, string(StatusOK)
+	}
+	return v, nil
+}
+
 func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc, requireIncidentOutput bool) (VariantCheck, error) {
 	info := vj.Header.Meta.Variant
 	c := VariantCheck{ID: info.ID, Mutation: info.Mutation, Kind: info.Kind, Incident: info.Incident, Journal: vj}
@@ -269,8 +473,16 @@ func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc, requireI
 		return c, fmt.Errorf("old build, variant %d: %w", info.ID, err)
 	}
 	c.Old = o.String()
-	if o.Seq == nil || *o.Seq != info.Incident || !failureMatches(failureOf(o), info.Failure) || (requireIncidentOutput && !hasIncidentOutputs(o)) {
-		return c, nil
+	if isFaultInjectionVariant(vj) {
+		startSeq, hasStart := faultAttemptStartSeq(vj)
+		inWindow := o.Seq != nil && (*o.Seq == info.Incident || (hasStart && *o.Seq >= startSeq && *o.Seq <= info.Incident))
+		if o.Passed() || !inWindow || (info.Failure != "" && !failureMatches(failureOf(o), info.Failure)) {
+			return c, nil
+		}
+	} else {
+		if o.Seq == nil || *o.Seq != info.Incident || !failureMatches(failureOf(o), info.Failure) || (requireIncidentOutput && !hasIncidentOutputs(o)) {
+			return c, nil
+		}
 	}
 	c.Reproduces = true
 	n, err := replayNew(vj)
@@ -278,11 +490,11 @@ func checkVariant(vj *journal.Journal, replayOld, replayNew ReplayFunc, requireI
 		return c, fmt.Errorf("new build, variant %d: %w", info.ID, err)
 	}
 	c.New = n.String()
-	judge(&c, o, n)
+	judgeVariant(&c, vj, o, n)
 	return c, nil
 }
 
-func judge(c *VariantCheck, old, new *Result) {
+func judgeVariant(c *VariantCheck, vj *journal.Journal, old, new *Result) {
 	if !new.Passed() {
 		c.Seq, c.Detail = new.Seq, new.String()
 		if new.Detail != "" {
@@ -290,8 +502,14 @@ func judge(c *VariantCheck, old, new *Result) {
 		}
 		return
 	}
+	stopSeq := c.Incident
+	if isFaultInjectionVariant(vj) {
+		if startSeq, ok := faultAttemptStartSeq(vj); ok {
+			stopSeq = startSeq
+		}
+	}
 	for i, o := range old.Steps {
-		if o.Seq >= c.Incident {
+		if o.Seq >= stopSeq {
 			break
 		}
 		if i >= len(new.Steps) {
@@ -310,6 +528,18 @@ func judge(c *VariantCheck, old, new *Result) {
 // outputs: it names the builds rather than a recording.
 func diffBuilds(old, new []kavach.Output) string {
 	return diffNamed(old, new, "old build", "new build")
+}
+
+func anyFaultInjected(r *Result) bool {
+	if r == nil {
+		return false
+	}
+	for _, st := range r.Steps {
+		if st.FaultsInjected > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func hasIncidentOutputs(r *Result) bool {

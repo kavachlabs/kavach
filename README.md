@@ -10,9 +10,73 @@
 [![release](https://github.com/kavachlabs/kavach/actions/workflows/release.yml/badge.svg)](https://github.com/kavachlabs/kavach/releases)
 [![codecov](https://codecov.io/gh/kavachlabs/kavach/graph/badge.svg?branch=main)](https://codecov.io/gh/kavachlabs/kavach)
 
-**Replay the crash. Prove the fix.**
+# Kavach — Deterministic PR Verification for Stateful Backends
 
-Kavach records every input, clock read, and random read a service makes. When a step panics, returns an error, or breaks a declared invariant, it flushes a compact `.kavach` fixture that replays byte for byte in microseconds—with no broker, database, or network—and rejects narrow patches that fail across perturbed variants of the incident.
+AI coding agents ship backend PRs faster than unit tests can verify them. Kavach wraps your existing Postgres, Redis, Kafka, and HTTP clients in **Go** (`kavach-go`) and **TypeScript / Node 22** (`@kavach/*`) to record PII-scrubbed production traces and deterministically replay every PR across mutated retry and failure schedules—with **zero business-logic rewrites** and **zero live DBs in CI**.
+
+### 1. Install & equip your coding agent
+
+```bash
+# Go or TypeScript/Node 22
+go get github.com/kavachlabs/kavach-go                                     # Go
+npm install @kavach/core @kavach/http @kavach/pg @kavach/ioredis @kavach/kafkajs  # TypeScript
+
+# Equip Claude Code / Cursor / Codex / Antigravity + scaffold .kavach/ & CI workflow
+npx skills@latest add kavachlabs/kavach --skill kavach-setup
+kavach init
+```
+
+### 2. Wrap your clients (6 lines, zero handler rewrites)
+
+**Go (`sdk/kavach-go`)**
+
+```go
+kv := kavach.Init(kavach.Config{
+	Service:  "events-processor",
+	RingPath: "/dev/shm/kavach/events.shm", // no-op if unset; replay mode if KAVACH_HOST=1
+	PII:      kavach.ScrubStandard,
+})
+defer kv.Close()
+
+pool  := kavachpgx.Wrap(kv, rawPgxPool)
+rdb   := kavachredis.Wrap(kv, rawRedisClient)
+kafka := kavachkgo.Wrap(kv, rawKafkaClient)
+mux   := kavachhttp.Wrap(kv, appRouter(pool, rdb, kafka))
+
+kv.ServeOrReplay(mux)
+```
+
+**TypeScript / Node 22 (`sdk/kavach-ts`)**
+
+```ts
+import { init } from "@kavach/core";
+import { wrapHandler } from "@kavach/http";
+import { wrapPool } from "@kavach/pg";
+import { wrapRedis } from "@kavach/ioredis";
+import { wrapKafka } from "@kavach/kafkajs";
+
+const kv = init({ service: "events-processor", pii: "standard" });
+const pool = wrapPool(kv, rawPool);
+const redis = wrapRedis(kv, rawRedis);
+const kafka = wrapKafka(kv, rawKafka);
+const app = wrapHandler(kv, expressApp);
+
+await kv.serveOrReplay(app);
+```
+
+### 3. Gate every PR
+
+```bash
+kavach dev --cmd "go run ./cmd/events-processor" --out .kavach/capsules/   # or: --cmd "node dist/main.js"
+kavach map --open                                                          # inspect state & sink topology
+kavach diff .kavach/capsules/*.kavach --old ./bin/main --new ./bin/pr --variants 25  # prove fix across 25 failure schedules
+```
+
+*Need continuous 7-day production capture, automatic PII scrubbing, Immunity Vault invariant mining, or live per-entity quarantine? See [Kavach Enterprise](https://github.com/kavachlabs/kavach-enterprise).*
+
+---
+
+## Measured performance
 
 | Metric | Measured | How |
 | --- | --- | --- |
@@ -21,14 +85,21 @@ Kavach records every input, clock read, and random read a service makes. When a 
 | Fix verification across 56 variants, in-process | **5.9 ms** | `kavach diff` (`196.4 ms` end-to-end across 105 binary runs) |
 | Narrow single-event fixes rejected | **10 / 10** | Ten planted bugs in [`bench/`](bench), `1,000 / 1,000` byte-identical replays |
 
-**Scope:** deterministic replay, variant fix verification, and contract-first feature verification for single-writer, journal-driven services in **12 languages** ([sdk](sdk)) or over two small wire protocols ([INTEGRATING.md](INTEGRATING.md)). Explore multi-arm coding agent runs on real open-source incidents at [benchmark.kavachlabs.dev](https://benchmark.kavachlabs.dev).
+Explore multi-arm coding agent runs on real open-source incidents at [benchmark.kavachlabs.dev](https://benchmark.kavachlabs.dev).
 
-> **Status: pre-alpha.** The journal format ([SPEC.md](SPEC.md)), the flight
-> recorder, replay and the CLI work on the demo service. APIs and the format
-> will change before 1.0. Every performance number this project publishes is in
-> [BENCHMARKS.md](BENCHMARKS.md) with the command that measured it.
+## CLI quick reference
 
-## Install
+| Command | What it does |
+| --- | --- |
+| `kavach init` | Detects Go/TS/Rust drivers, scaffolds `.kavach/{config,invariants}.yaml`, Day-0 `.kavach/map.{json,html}`, and `.github/workflows/kavach.yml` |
+| `kavach doctor` | Static Go & TypeScript/JS audit (<2s): driver init sites, bare clock (`time.Now`/`Date.now`), rand/UUID, detached contexts, and tailored wrap snippet |
+| `kavach dev --cmd "..."` | Runs your Go or Node service locally over a temp `KVRING02` ring and writes `.kavach` capsules to `.kavach/capsules/` with no external daemon |
+| `kavach map [--auto] [--open]` | Generates & opens a standalone interactive HTML flow canvas (`--watch DIR` serves live updates over SSE) |
+| `kavach replay <fixture> --bin <cmd>` | Deterministically replays a `.kavach` capsule offline (supports `--invariants`, `--until`, `--probe`, `--hold`) |
+| `kavach diff <fixture>... --old <cmd> --new <cmd>` | Proves a fix across mutated retry, gateway fault-injection, clock-shift, and regression variants |
+| `kavach skills` / `kavach install-mcp` | 1-command Agent Skills & MCP server setup for Claude Code, Cursor, Codex, and Antigravity |
+
+## Install CLI
 
 Install prebuilt `kavach` and `kavach-recorder` binaries **plus all five Kavach agent skills** on Linux or macOS (`amd64` / `arm64`) in a single command (no Go toolchain required):
 
@@ -36,15 +107,14 @@ Install prebuilt `kavach` and `kavach-recorder` binaries **plus all five Kavach 
 curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 ```
 
-Or install only the agent skills via `npx skills`, or build the CLI from source with Go 1.24+:
+Or build from source with Go 1.23+:
 
 ```bash
-npx skills add kavachlabs/kavach
 go install github.com/kavachlabs/kavach/cmd/kavach@latest
 go install github.com/kavachlabs/kavach/cmd/kavach-recorder@latest
 ```
 
-## Try it
+## Try the ledger demo
 
 <p align="center">
   <picture>
@@ -61,90 +131,62 @@ go install github.com/kavachlabs/kavach/cmd/kavach-recorder@latest
   </sub>
 </p>
 
-The demo is a wallet ledger that crashes when upstream sends `"amount": null`.
-The commands below use its Go version; every SDK under [sdk](sdk) has a port
-with the same bug. The CLI and the recorder are written in Go, so building them
-from source needs Go; your service does not.
+The demo is a wallet ledger that crashes when upstream sends `"amount": null`:
 
 ```bash
 git clone https://github.com/kavachlabs/kavach && cd kavach
-go install ./cmd/kavach ./cmd/kavach-recorder   # or use install.sh above
+go install ./cmd/kavach ./cmd/kavach-recorder
 go build -o ledger-old ./examples/ledger/sdk
-go build -tags ledgerfix -o ledger-new ./examples/ledger/sdk   # the fixed build
-go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger/sdk  # a fix that is too narrow
+go build -tags ledgerfix -o ledger-new ./examples/ledger/sdk
+go build -tags ledgerpartialfix -o ledger-partial ./examples/ledger/sdk
 
-./ledger-old -in examples/ledger/testdata/events.jsonl     # crashes, writes kavach/fixtures/ledger-*.kavach
-kavach inspect kavach/fixtures/ledger-*.kavach                 # what happened, record by record
-kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old # still_failing@32
+./ledger-old -in examples/ledger/testdata/events.jsonl
+kavach inspect kavach/fixtures/ledger-*.kavach
+kavach replay  kavach/fixtures/ledger-*.kavach --bin ./ledger-old
 kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-new      # fixed
-kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed(7)@23
+kavach diff    kavach/fixtures/ledger-*.kavach --old ./ledger-old --new ./ledger-partial  # variant_failed
 ```
-
-The partial fix guards only deposits, the event type in the incident. It
-passes the recorded crash, but `diff` also replays 56 variants of it, and the
-old build crashes the same way on 47 of them; the partial fix crashes on 8,
-starting with the same event as a `transfer`.
-
-Replay runs no external services: the fixture holds every input, clock read and
-random read the handler made.
-
-The same demo reads from Kafka through [franz-go](https://github.com/twmb/franz-go).
-The topic is the ledger's journal: on every start the service folds it from the
-first offset. With a local broker (for example
-`docker run -p 9092:9092 apache/kafka:3.9.0`):
-
-```bash
-./ledger-old -kafka localhost:9092 -seed examples/ledger/testdata/events.jsonl  # load the topic once
-./ledger-old -kafka localhost:9092                                              # crashes at offset 0:7
-```
-
-The fixture's inputs carry their Kafka positions (`kafka:wallet-events @ 0:7`),
-and it still replays with no broker running. Kafka is a dependency of the demo
-only, not of the SDK.
 
 ## See the flow: `kavach map`
 
-Render an interactive, self-contained HTML map showing how events flow from entrypoints through handlers, state mutations, sinks, and invariant checks—with recorded/replayed step highlighting and diff verification:
+Render an interactive, self-contained HTML map showing how events flow from entrypoints through handlers, gateways, sinks, and invariant checks—with recorded/replayed step highlighting and diff verification:
 
 ```bash
+kavach map --auto --open                               # Day-0 map from static Go/TS scan + .kavach/invariants.yaml
 kavach map examples/ledger/.kavach/plan/map.json examples/ledger/testdata/null-amount.kavach \
   --bin ./ledger-old --new ./ledger-new -o ledger-map.html
 ```
 
-Or pass any `.kavach` fixture alone to synthesize an automatic flow map (`kavach map fixture.kavach`), or run `kavach map --watch <recorder-dir>` to serve a live map over HTTP/SSE (`--listen`, `--interval`) as fixtures arrive. See [MAP.md](MAP.md) for the `map.json` schema, live mode, replay/invariant semantics, and stage overlay format.
+See [MAP.md](MAP.md) for the `map.json` schema, live `--watch` mode, replay/invariant semantics, and stage overlay format.
 
 ## With an AI agent
 
-`kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server with seven tools (`kavach_list_incidents`, `kavach_replay`,
-`kavach_time_travel`, `kavach_diff`, `kavach_contract_show`,
-`kavach_contract_check`, and `kavach_map`) returning the same verdicts and flow map
-summaries (or optional HTML maps) as the CLI as structured JSON:
+`kavach mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server with seven tools (`kavach_list_incidents`, `kavach_replay`, `kavach_time_travel`, `kavach_diff`, `kavach_contract_show`, `kavach_contract_check`, and `kavach_map`):
 
 ```bash
-claude mcp add kavach -- kavach mcp
-npx skills add kavachlabs/kavach
+kavach install-mcp          # configures .mcp.json (or --target claude | cursor)
+kavach skills               # installs all 5 Agent Skills (or: npx skills@latest add kavachlabs/kavach)
 ```
-
-Kavach ships with five [Agent Skills](skills/README.md) (installed automatically by `install.sh` or `npx skills add kavachlabs/kavach`):
 
 | Skill | What it teaches your agent |
 | --- | --- |
 | [`/kavach-fix`](skills/kavach-fix/SKILL.md) | Reproduce a `.kavach` crash fixture and generalize the fix until `kavach diff` returns `fixed` across all incident and regression variants. |
 | [`/kavach-implement`](skills/kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline traffic, declare spec invariants, stop for human `kavach contract approve`, and iterate until `pass`. |
-| [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Map state boundaries into [`.kavach/plan/state-map.md`](examples/ledger/.kavach/plan/state-map.md), then instrument a handler or build a `kavach-host` harness in any of the 12 language SDKs. |
-| [`/kavach-verify`](skills/kavach-verify/SKILL.md) | Check another agent's fix or feature and post the verdict without touching the code: the verifier role in an Antigravity `/swarm` or any agent pipeline. |
-| [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Write a reviewable invariant blueprint to [`.kavach/plan/invariants.md`](examples/ledger/.kavach/plan/invariants.md), declare the invariants, and mutation-test each one in milliseconds with `kavach replay` and `kavach diff`. |
+| [`/kavach-setup`](skills/kavach-setup/SKILL.md) | Map state boundaries into [`.kavach/plan/state-map.md`](examples/ledger/.kavach/plan/state-map.md), then wrap drivers or build a `kavach-host` harness. |
+| [`/kavach-verify`](skills/kavach-verify/SKILL.md) | Check another agent's fix or feature and post the verdict without touching code. |
+| [`/kavach-invariants`](skills/kavach-invariants/SKILL.md) | Declare invariants in `.kavach/invariants.yaml` or code and mutation-test each one with `kavach replay` and `kavach diff`. |
 
 See [AGENTS.md](AGENTS.md) for the complete verdict loop and rules.
 
-## Using it in a service
+## SDKs
 
 | Language | SDK |
 | --- | --- |
-| Go | [sdk/go](sdk/go) |
+| Go (v0.2 driver adapters) | [sdk/kavach-go](sdk/kavach-go) |
+| TypeScript / Node 22 (v0.2 driver adapters) | [sdk/kavach-ts](sdk/kavach-ts) |
+| Go (direct `env` SDK) | [sdk/go](sdk/go) |
 | Python | [sdk/python](sdk/python) |
-| TypeScript / JavaScript | [sdk/typescript](sdk/typescript) |
+| TypeScript / JavaScript (direct `env` SDK) | [sdk/typescript](sdk/typescript) |
 | Rust | [sdk/rust](sdk/rust) |
 | Java | [sdk/java](sdk/java) |
 | C and C++ | [sdk/c](sdk/c) |
@@ -155,94 +197,38 @@ See [AGENTS.md](AGENTS.md) for the complete verdict loop and rules.
 | Haskell | [sdk/haskell](sdk/haskell) |
 | OCaml | [sdk/ocaml](sdk/ocaml) |
 
-Every SDK has the same shape:
-
-- a **handler**, called once per input, that reads the clock, random bytes,
-  gateways and config, and emits its effects, only through the env it is
-  given;
-- a **recorder** that wraps your consume loop: one step per input, with
-  effects delivered after the step succeeds;
-- a **host mode**: when the program is started with `kavach-host` as its last
-  argument, it serves replays to the CLI instead of consuming.
-
-A handler can also provide snapshots, so that fixtures start from recent state
-instead of from the service's first event, and declare invariants that are
-checked after every step, live and in replay. Each SDK's README shows the code.
-
-No SDK for your language? An SDK is a wrapper over the recorder and host
-protocols in [SPEC.md](SPEC.md) §9 and §10; [INTEGRATING.md](INTEGRATING.md)
-shows how to speak them directly.
-
-## How it works
-
-1. **Record.** Your handler reads time and randomness, and emits effects,
-   through the env the SDK gives it for each input. The SDK writes
-   everything to `kavach-recorder`, a child process that keeps the journal on
-   disk and writes a fixture file when the handler panics, returns an error, or
-   violates an invariant, even if the service dies in the step.
-2. **Replay.** `kavach replay <fixture> --bin <your-service>` runs your own
-   build as a host process (`--bin ./ledger`, `--bin "python -m ledger"`,
-   `--bin "node dist/main.js"`)
-   and folds the recorded inputs through its handler, serving every clock,
-   random, gateway and config read from the fixture. Outputs are captured as
-   events, never executed, so replay touches no external system.
-3. **Verify.** `kavach diff <fixture> --old <bin> --new <bin>` reports the first
-   output where two builds diverge. A fix only counts when the original failure
-   is gone, declared invariants hold, steps before the failure still produce
-   the outputs production saw, and the fix also passes at least 10 **variants**
-   of the incident: perturbed copies of the journal (fields of the failing
-   event changed, events reordered, dropped or redelivered, the clock shifted)
-   on which the old build fails exactly as it did in production. A fix that
-   only handles the recorded event does not pass. See [SPEC.md §6.1](SPEC.md#61-verifying-a-fix).
-4. **Build features against a contract.** `kavach contract check` replays
-   traffic recorded before a feature on the new build. Steps outside the
-   feature must produce the recorded outputs. Feature steps must change, and
-   every change is listed for review. Invariants written from the spec must
-   hold, on the traffic and on variants of the feature steps. See
-   [SPEC.md §6.4](SPEC.md#64-feature-steps-and-contracts).
+No SDK for your language? Speak the host & recorder wire protocols directly via [INTEGRATING.md](INTEGRATING.md) and [SPEC.md](SPEC.md) §9–§10.
 
 ## In CI (GitHub Actions)
 
-Check `.kavach` fixtures into `testdata/` and run `kavachlabs/kavach` in pull requests to replay regression fixtures or verify a candidate fix across incident variants (writing a verdict table to the workflow summary):
+`kavach init` generates a ready-to-commit `.github/workflows/kavach.yml` (Go or Node 22), or use the composite action directly:
 
 ```yaml
 - uses: kavachlabs/kavach@v0.2.0
   with:
-    fixtures: testdata/*.kavach
-    old: ./service-base
-    new: ./service-pr
+    fixtures: .kavach/capsules/*.kavach
+    old: ./bin/service-base
+    new: ./bin/service-pr
+    variants: 25
 ```
-
-## Not in scope
-
-- Multi-writer or shared-state services. Kavach assumes one writer folds the
-  journal into state.
-- Record-and-replay of network traffic ("tapes"). Kavach re-derives state from
-  inputs; it does not stub dependencies from recorded responses.
 
 ## Repository guide
 
 | File | What it is |
 | --- | --- |
-| [SPEC.md](SPEC.md) | Journal and fixture format, and the host and recorder protocols, v0 |
+| [sdk/kavach-go](sdk/kavach-go) | v0.2 zero-`memrepo` Go SDK + driver adapters (`kavachhttp`, `kavachpgx`, `kavachredis`, `kavachkgo`) |
+| [sdk/kavach-ts](sdk/kavach-ts) | v0.2 zero-`memrepo` TypeScript / Node 22 SDK + driver adapters (`@kavach/{core,http,pg,ioredis,kafkajs}`) |
+| [SPEC.md](SPEC.md) | Journal and fixture format, and the host and recorder protocols |
 | [MAP.md](MAP.md) | `kavach map` CLI usage, `map.json` spec, invariant rules, and overlay schema |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |
 | [INTEGRATING.md](INTEGRATING.md) | Using Kavach from a language with no SDK |
-| [sdk](sdk) | The SDKs, one per language |
-| [commands](commands) | Agent commands: `/kavach-implement` |
 | [action.yml](action.yml) | Composite GitHub Action for `kavach replay` and `kavach diff` in CI |
 | [scripts/install.sh](scripts/install.sh) | Zero-dependency installer for Linux and macOS (`amd64` / `arm64`) |
-| [llms.txt](llms.txt) | Index of these docs for LLM tools |
 | [BENCHMARKS.md](BENCHMARKS.md) | Every measured number, with its command |
-| [examples/ledger](examples/ledger) | The demo service: [sdk](examples/ledger/sdk) with the Go SDK, [protocol](examples/ledger/protocol) in Julia with no SDK |
+| [examples/ledger](examples/ledger) | The demo wallet ledger service |
 | [bench](bench) | Ten planted bugs, each with a correct and a too-narrow fix |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute (DCO sign-off required) |
 
 ## Open source
 
-Kavach is licensed under [Apache 2.0](LICENSE). The core replayer, the flight
-recorder, the CLI and the MCP server are Apache 2.0 and will stay that way.
-Any future commercial offering will be built around them, not by moving them.
-
-Contributions are accepted under the [Developer Certificate of Origin](DCO);
-there is no CLA. Telemetry, if it is ever added, will be opt-in.
+Kavach is licensed under [Apache 2.0](LICENSE). The core replayer, flight recorder, CLI, Go & TypeScript SDKs, and MCP server are Apache 2.0 and will stay that way. Contributions are accepted under the [Developer Certificate of Origin](DCO).

@@ -103,6 +103,11 @@ func computeDrift(genesis []journal.Fact, replay map[string]envfacts.JSONFact) (
 		if strings.HasPrefix(k, "flag.") || (!collected && k != "host.runtime") {
 			continue
 		}
+		if k == "env.KAVACH_HOST" {
+			if _, inRec := recorded[k]; !inRec {
+				continue
+			}
+		}
 		unset := journal.Fact{Key: k, Form: journal.FactUnset}
 		rec, ok := recorded[k]
 		if !ok {

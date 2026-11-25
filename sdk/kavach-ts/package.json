@@ -1,0 +1,17 @@
+{
+  "name": "kavach-ts-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/build.mjs --noEmit",
+    "test": "node scripts/build.mjs && node --test \"packages/*/test/*.test.ts\""
+  }
+}
