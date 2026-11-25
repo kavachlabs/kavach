@@ -21,7 +21,7 @@ AI coding agents ship backend PRs faster than unit tests can verify them. Kavach
 brew install kavachlabs/tap/kavach        # or: curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 
 # Install Go or TypeScript/Node 22 driver SDK
-go get github.com/kavachlabs/kavach-go@v0.2.1                                            # Go (+ adapters/{kavachpgx,kavachredis,kavachkgo}@v0.2.1)
+go get github.com/kavachlabs/kavach-go@v0.3.0                                            # Go (+ adapters/{kavachpgx,kavachredis,kavachkgo}@v0.3.0)
 npm install @kavachlabs/core @kavachlabs/http @kavachlabs/pg @kavachlabs/ioredis @kavachlabs/kafkajs  # TypeScript
 
 # Equip Claude Code / Cursor / Codex / Antigravity + scaffold .kavach/ & CI workflow
@@ -209,7 +209,7 @@ No SDK for your language? Speak the host & recorder wire protocols directly via 
 `kavach init` generates a ready-to-commit `.github/workflows/kavach.yml` (Go or Node 22), or use the composite action directly:
 
 ```yaml
-- uses: kavachlabs/kavach@v0.2.1
+- uses: kavachlabs/kavach@v0.3.0
   with:
     fixtures: .kavach/capsules/*.kavach
     old: ./bin/service-base

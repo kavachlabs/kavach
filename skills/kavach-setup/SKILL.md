@@ -13,7 +13,7 @@ description: >
   OCaml, Haskell, Julia, or pure in-memory engines.
 compatibility: Requires the `kavach` CLI on PATH (and `kavach-recorder` for production sidecar recording).
 metadata:
-  version: "0.2.1"
+  version: "0.3.0"
 ---
 
 # Instrument a Service with Kavach (`kavach-setup`)
@@ -61,11 +61,11 @@ Install core (zero external runtime dependencies) plus only the adapter(s) the s
 #### Go (`github.com/kavachlabs/kavach-go`)
 
 ```bash
-go get github.com/kavachlabs/kavach-go@v0.2.1
+go get github.com/kavachlabs/kavach-go@v0.3.0
 # Add only the adapters your service uses (kavachhttp is included in kavach-go):
-go get github.com/kavachlabs/kavach-go/adapters/kavachpgx@v0.2.1
-go get github.com/kavachlabs/kavach-go/adapters/kavachredis@v0.2.1
-go get github.com/kavachlabs/kavach-go/adapters/kavachkgo@v0.2.1
+go get github.com/kavachlabs/kavach-go/adapters/kavachpgx@v0.3.0
+go get github.com/kavachlabs/kavach-go/adapters/kavachredis@v0.3.0
+go get github.com/kavachlabs/kavach-go/adapters/kavachkgo@v0.3.0
 ```
 
 ```go

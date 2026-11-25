@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 export const HOST_COMMAND = "kavach-host";
 export const DEFAULT_INVARIANTS_PATH = ".kavach/invariants.yaml";
 

@@ -470,10 +470,10 @@ func TestScanRepoAndInitTypeScriptPeerAndKavachWrapped(t *testing.T) {
 	writeFixtureFile(t, dir, "package.json", `{
   "name": "@kavachlabs/example-l1-billing",
   "dependencies": {
-    "@kavachlabs/core": "0.2.1",
-    "@kavachlabs/pg": "0.2.1",
-    "@kavachlabs/ioredis": "0.2.1",
-    "@kavachlabs/kafkajs": "0.2.1"
+    "@kavachlabs/core": "0.3.0",
+    "@kavachlabs/pg": "0.3.0",
+    "@kavachlabs/ioredis": "0.3.0",
+    "@kavachlabs/kafkajs": "0.3.0"
   },
   "peerDependencies": {
     "pg": "^8.13.0",

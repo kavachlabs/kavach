@@ -35,7 +35,7 @@ test("KVRING02 header layout, wrap-around, and FrameDecoder round-trip", () => {
     assert.equal(raw.readBigUInt64LE(OFFSET_WRITE), 0n);
     assert.equal(raw.readBigUInt64LE(OFFSET_READ), 0n);
 
-    const w = RingWriter.fromRing(r, { service: "billing", producer: "kavach-ts/0.2.1" });
+    const w = RingWriter.fromRing(r, { service: "billing", producer: "kavach-ts/0.3.0" });
     w.writeStep(
       [
         {

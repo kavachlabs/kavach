@@ -12,7 +12,7 @@ description: >
   and `.kavach/plan/state-map.md` from `kavach-setup` when they exist.
 compatibility: Requires the `kavach` CLI on PATH.
 metadata:
-  version: "0.2.1"
+  version: "0.3.0"
 ---
 
 # Discover, Declare, and Mutation-Test Invariants (`kavach-invariants`)
