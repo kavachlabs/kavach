@@ -136,7 +136,7 @@ func TestCLI(t *testing.T) {
 	mustContain(run(0, "replay", "--json", paths[0], "--bin", newBin), `"verdict": "fixed"`)
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", newBin),
 		"old       still_failing@32", "new       fixed", "first divergence at step seq 32", "missing amount",
-		"variants  47 of 56 reproduce the incident on the old build · 47 of those pass", "verdict   fixed")
+		"variants  51 of 61 reproduce the incident on the old build · 51 of those pass", "verdict   fixed")
 	mustContain(run(1, "diff", paths[0], "--old", newBin, "--new", oldBin), "verdict   still_failing@32")
 
 	// A fix that passes the recorded incident but not its variants is rejected,
@@ -150,7 +150,7 @@ func TestCLI(t *testing.T) {
 	}
 	mustContain(run(1, "replay", saved[0], "--bin", partialBin), "still_failing@23")
 	mustContain(run(0, "diff", paths[0], "--old", oldBin, "--new", partialBin, "--variants", "0"), "verdict   fixed")
-	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 47`)
+	mustContain(run(0, "diff", "--json", paths[0], "--old", oldBin, "--new", newBin), `"verdict": "fixed"`, `"reproducing": 51`)
 
 	mcp := exec.Command(cli, "mcp")
 	mcp.Stdin = strings.NewReader(strings.Join([]string{

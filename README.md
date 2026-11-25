@@ -206,7 +206,7 @@ shows how to speak them directly.
 Check `.kavach` fixtures into `testdata/` and run `kavachlabs/kavach` in pull requests to replay regression fixtures or verify a candidate fix across incident variants (writing a verdict table to the workflow summary):
 
 ```yaml
-- uses: kavachlabs/kavach@v0.1.0
+- uses: kavachlabs/kavach@v0.2.0
   with:
     fixtures: testdata/*.kavach
     old: ./service-base

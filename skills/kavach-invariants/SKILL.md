@@ -11,7 +11,7 @@ description: >
   `kavach-setup` when it exists.
 compatibility: Requires the `kavach` CLI on PATH.
 metadata:
-  version: "0.1.5"
+  version: "0.2.0"
 ---
 
 # Discover and Mutation-Test Invariants (`kavach-invariants`)

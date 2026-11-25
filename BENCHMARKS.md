@@ -18,10 +18,10 @@ Go 1.24.7. Laptop numbers will differ; the commands are below.
 | Replay of demo crash fixture, CLI end to end | < 50 ms | median 5.9 ms, p95 9.1 ms (100 runs) | see below |
 | Fix verification of the demo crash, in-process (2 replays + 56 variants old + 47 new) | — | median 5.9 ms; range 5.7–6.2 ms over 5 runs | `go test -run '^$' -bench VerifyFixture -benchtime 2s -count 5 ./examples/ledger/sdk` |
 | Fix verification of the demo crash, `kavach diff` end to end (105 binary runs, 4 in parallel) | — | correct fix: median 196.4 ms, p95 224.3 ms; partial fix: median 215.7 ms, p95 273.5 ms (50 runs each) | see below |
-| Variants of the demo crash that reproduce it on the old build | ≥ 10 | 47 of 56 | `go test -run VerifyCandidateFixes -v ./examples/ledger/sdk` |
-| Wrong fixes rejected by variants (demo crash) | — | 2 of 2 (`skip evt-008`: 9 variants fail; `deposits only`: 8 fail); correct fix passes 47 of 47 | same |
+| Variants of the demo crash that reproduce it on the old build | ≥ 10 | 51 of 61 | `go test -run VerifyCandidateFixes -v ./examples/ledger/sdk` |
+| Wrong fixes rejected by variants (demo crash) | — | 2 of 2 (`skip evt-008`: 9 variants fail; `deposits only`: 7 fail); correct fix passes 51 of 51 | same |
 | Ten planted bugs (panic, returned error, invariant; see below): old build reproduces the recorded failure | 10 of 10 | 10 of 10 | `go test ./bench -run TestBenchmark -v` |
-| Same ten: correct fix verified as `fixed` | 10 of 10 | 10 of 10 (309 of 445 variants reproduce on the old build, 30.9 per bug on average; each fix passes all it is shown) | same |
+| Same ten: correct fix verified as `fixed` | 10 of 10 | 10 of 10 (344 of 484 variants reproduce on the old build, 34.4 per bug on average; each fix passes all it is shown) | same |
 | Same ten: narrow fix rejected | — | 10 of 10, all `variant_failed` | same |
 | Demo crash fixture size | < 100 KB | 1,954 bytes | `wc -c examples/ledger/testdata/null-amount.kavach` |
 | Determinism | 1,000 replays byte-identical | 1,000 / 1,000 | `go test -run Determinism ./examples/ledger/sdk` |
