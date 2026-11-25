@@ -30,7 +30,7 @@ jobs:
 
       - name: Install devDependencies (TypeScript)
         working-directory: sdk/kavach-ts
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --no-package-lock
 
       - name: Build, typecheck, and test @kavachlabs/* packages
         working-directory: sdk/kavach-ts
