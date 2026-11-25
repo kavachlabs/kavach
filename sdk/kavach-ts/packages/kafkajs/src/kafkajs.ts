@@ -1,4 +1,4 @@
-import type { Input, Kavach, StarterTarget, StepRunner } from "@kavach/core";
+import type { Input, Kavach, StarterTarget, StepRunner } from "@kavachlabs/core";
 
 export const ErrRecordNotCommitted = new Error("kavach-kafkajs: record not committed");
 

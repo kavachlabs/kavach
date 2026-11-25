@@ -409,7 +409,7 @@ export class Kavach {
         // Distinguish Node http.RequestListener (arity >= 2) vs StepHandlerFn (arity <= 1)
         if (target.length >= 2) {
           throw new Error(
-            "kavach: pass HTTP handlers through wrapHandler(kv, handler) from @kavach/http before serveOrReplay",
+            "kavach: pass HTTP handlers through wrapHandler(kv, handler) from @kavachlabs/http before serveOrReplay",
           );
         }
         return this.serveHost(target as StepHandlerFn);

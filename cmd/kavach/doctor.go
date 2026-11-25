@@ -92,7 +92,7 @@ func cmdDoctor(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout)
 		snippetHeading := "Suggested 1-line kavach-go wrap snippet:"
 		if rep.Language == onboard.LangTypeScript {
-			snippetHeading = "Suggested 1-line @kavach/* wrap snippet:"
+			snippetHeading = "Suggested 1-line @kavachlabs/* wrap snippet:"
 		}
 		fmt.Fprintf(stdout, "%s\n%s\n", u.paint(snippetHeading, ansiBold), rep.SuggestedSnippet)
 	}

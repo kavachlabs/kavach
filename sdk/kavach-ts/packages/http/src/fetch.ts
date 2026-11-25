@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { GatewayCall, Kavach } from "@kavach/core";
+import type { GatewayCall, Kavach } from "@kavachlabs/core";
 
 export interface WrapFetchOptions {
   /** Max response body bytes captured in Record mode (default: 4 MiB). */

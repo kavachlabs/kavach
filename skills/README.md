@@ -1,6 +1,6 @@
 # Kavach Agent Skills
 
-Agent skills that teach AI coding agents ([Claude Code](https://code.claude.com/docs), [OpenAI Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), Cursor, and Antigravity) how to reproduce production crashes in microseconds, verify bug fixes across 56 fault-neighborhood variants, build features against locked behavioural contracts, falsify domain invariants, and check other agents' changes with Kavach.
+Agent skills that teach AI coding agents ([Claude Code](https://code.claude.com/docs), [OpenAI Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), Cursor, and Antigravity) how to onboard services with zero-`memrepo` driver capture, reproduce production crashes in microseconds, verify bug fixes across mutated retry and gateway-fault variants, declare and falsify invariants, build features against locked behavioural contracts, and verify other agents' patches with Kavach.
 
 > **[Install](#install)** · **[Skills overview](#skills-overview)** · **[Starter prompts](#starter-prompts)** · **[MCP server](#mcp-server)** · **[Antigravity](#antigravity)**
 
@@ -19,7 +19,9 @@ curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 Or install the skills into your coding agents via the standard `npx skills` CLI:
 
 ```bash
-npx skills add kavachlabs/kavach
+npx skills@latest add kavachlabs/kavach
+# Or pick individual skills:
+npx skills@latest add kavachlabs/kavach --skill kavach-setup --skill kavach-invariants
 ```
 
 ### Register the MCP server
@@ -36,17 +38,29 @@ claude mcp add kavach -- kavach mcp
 
 | Skill | When to use | Primary tools used |
 | --- | --- | --- |
+| [`kavach-setup`](./kavach-setup/SKILL.md) | Onboard a service with v0.2 zero-`memrepo` driver capture (`kavach init`, `kavach doctor`, `github.com/kavachlabs/kavach-go`, `@kavachlabs/*`) in Go or TypeScript/Node 22, or wire a scoped `kavach-host` harness across 13 languages. | `kavach init`, `kavach doctor`, `kavach dev`, `kavach map`, `kavach replay`, `kavach diff` |
+| [`kavach-invariants`](./kavach-invariants/SKILL.md) | Declare zero-boilerplate rules in `.kavach/invariants.yaml` (`at_most_once_emit`, `anti_lobotomy`, `non_negative`, `conservation`) and optional code invariants (`kv.Invariant` / `kv.invariant`), then falsify each one in milliseconds against 1-line mutants. | `.kavach/invariants.yaml`, `.kavach/plan/invariants.md`, `kavach replay`, `kavach diff` |
 | [`kavach-fix`](./kavach-fix/SKILL.md) | Fix a production incident recorded in a `*.kavach` fixture and prove the patch survives 10+ incident variants and 48 neighbour regression variants (`verdict: "fixed"`). | `kavach inspect`, `kavach replay`, `kavach diff` (`kavach_list_incidents`, `kavach_replay`, `kavach_diff`) |
 | [`kavach-implement`](./kavach-implement/SKILL.md) | Build a new feature contract-first: record baseline + feature traffic, declare spec invariants, pause for human `kavach contract approve`, and iterate until `kavach contract check` returns `pass`. | `kavach contract init`, `kavach contract show`, `kavach contract check` (`kavach_contract_show`, `kavach_contract_check`) |
-| [`kavach-setup`](./kavach-setup/SKILL.md) | Map state boundaries into `.kavach/plan/state-map.md`, then instrument a handler or build a `kavach-host` harness in Go, Rust, Python, TypeScript, Java, C, C++, Ruby, PHP, Elixir, OCaml, Haskell, or Julia. | `.kavach/plan/state-map.md`, Language SDKs (`sdk/*`), `kavach-recorder`, `kavach replay` |
 | [`kavach-verify`](./kavach-verify/SKILL.md) | Check another agent's fix or feature without touching the code: replay the incident on the old and new builds, then post one fixed-format result naming the author (or `@coordinator [done]` when it holds). Built for the verifier role in an Antigravity `/swarm` or any agent pipeline. | `kavach replay`, `kavach diff`, `kavach contract check`, `kavach map` (`kavach_replay`, `kavach_diff`, `kavach_contract_check`) |
-| [`kavach-invariants`](./kavach-invariants/SKILL.md) | Propose domain invariants and planned mutants in `.kavach/plan/invariants.md`, declare them via the SDK, and falsify (mutation-test) each one in milliseconds to confirm every invariant catches real bugs. | `.kavach/plan/invariants.md`, `env.Invariant`, `kavach replay`, `kavach diff` |
 
 See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state-map.md`](../examples/ledger/.kavach/plan/state-map.md) and [`invariants.md`](../examples/ledger/.kavach/plan/invariants.md)) for a complete example of the human-reviewable planning artifacts generated before code changes.
 
 ---
 
 ## Starter prompts
+
+### `kavach-setup`
+
+```text
+/kavach-setup Run kavach init and kavach doctor on this service, wrap our existing Postgres, Redis, Kafka, and HTTP drivers at initialization with zero business-logic edits and zero memrepo mocks, record a local capsule with kavach dev, and verify offline replay.
+```
+
+### `kavach-invariants`
+
+```text
+/kavach-invariants Write declarative rules in .kavach/invariants.yaml for our billing pipeline, record the blueprint in .kavach/plan/invariants.md, and falsify each invariant in milliseconds against 1-line mutants with kavach diff.
+```
 
 ### `kavach-fix`
 
@@ -58,12 +72,6 @@ See [`examples/ledger/.kavach/plan/`](../examples/ledger/.kavach/plan/) ([`state
 
 ```text
 /kavach-implement Implement the feature described in docs/spec.md contract-first with Kavach. Stop after kavach contract show so I can approve the contract before you write the implementation.
-```
-
-### `kavach-setup`
-
-```text
-/kavach-setup Map the order-matching handler in internal/matcher/ into .kavach/plan/state-map.md and instrument it with the Kavach Go SDK so it records production failures via kavach-recorder and runs as a kavach-host for deterministic replay.
 ```
 
 ### `kavach-verify`
@@ -78,12 +86,6 @@ In an Antigravity `/swarm`, ask the coordinator for a Kavach verifier:
 /swarm Fix the incident in testdata/null-amount.kavach. Add a worker named verifier whose brief is: load the kavach-verify skill and check every [done] post from the fixer.
 ```
 
-### `kavach-invariants`
-
-```text
-/kavach-invariants Write .kavach/plan/invariants.md for the ledger service, declare the invariants on the handler, and falsify each invariant by mutation-testing it against a recorded journal.
-```
-
 ---
 
 ## MCP server
@@ -92,9 +94,11 @@ All five skills work with both the `kavach` CLI and the `kavach mcp` Model Conte
 
 - `kavach_list_incidents` — discover `*.kavach` fixtures and inspect how each failed
 - `kavach_replay` — reproduce an incident or variant in microseconds (`still_failing@N`, `ok`)
+- `kavach_time_travel` — pause replay at `--until <seq>` and probe live state
 - `kavach_diff` — compare `--old` and `--new` across incident perturbations and 48 regression variants (`fixed`, `variant_failed(K)@N`, `regressed(K)@N`)
 - `kavach_contract_show` — inspect a feature contract and lock status before human approval
 - `kavach_contract_check` — verify a candidate feature build against an approved contract (`pass`, `regression@N`, `unreached@N`, `variant_failed(K)@N`)
+- `kavach_map` — build or inspect the interactive flow map
 
 ---
 

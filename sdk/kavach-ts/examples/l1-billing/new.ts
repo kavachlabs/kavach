@@ -1,7 +1,7 @@
-import { init } from "@kavach/core";
-import { createReplayRedis } from "@kavach/ioredis";
-import { createReplayKafka } from "@kavach/kafkajs";
-import { createReplayPool } from "@kavach/pg";
+import { init } from "@kavachlabs/core";
+import { createReplayRedis } from "@kavachlabs/ioredis";
+import { createReplayKafka } from "@kavachlabs/kafkajs";
+import { createReplayPool } from "@kavachlabs/pg";
 import { type RawBillingEvent, processBillingEvent } from "./processor.ts";
 
 const kv = init({

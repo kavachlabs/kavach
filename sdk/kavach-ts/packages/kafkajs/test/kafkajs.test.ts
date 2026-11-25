@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { StepTable, init } from "@kavach/core";
-import { ErrRecordNotCommitted, createReplayKafka } from "@kavach/kafkajs";
+import { StepTable, init } from "@kavachlabs/core";
+import { ErrRecordNotCommitted, createReplayKafka } from "@kavachlabs/kafkajs";
 
-test("@kavach/kafkajs captures kafka:<topic> Input/Output (raw JSON payload) and replays offline with zero broker", async () => {
+test("@kavachlabs/kafkajs captures kafka:<topic> Input/Output (raw JSON payload) and replays offline with zero broker", async () => {
   const kv = init({ service: "kafka-svc", mode: "replay" });
   const kafka = createReplayKafka(kv);
   const producer = kafka.producer();
@@ -44,7 +44,7 @@ test("@kavach/kafkajs captures kafka:<topic> Input/Output (raw JSON payload) and
   });
 });
 
-test("@kavach/kafkajs signals retryable error on thrown eachMessage and uncommitted eachBatch", async () => {
+test("@kavachlabs/kafkajs signals retryable error on thrown eachMessage and uncommitted eachBatch", async () => {
   const kv = init({ service: "kafka-retry", mode: "replay" });
   const kafka = createReplayKafka(kv);
 

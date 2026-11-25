@@ -11,10 +11,10 @@ import {
   StepTable,
   decodeRecord,
   init,
-} from "@kavach/core";
-import { type PgDatabaseError, type PgPoolLike, createReplayPool, wrapPool } from "@kavach/pg";
+} from "@kavachlabs/core";
+import { type PgDatabaseError, type PgPoolLike, createReplayPool, wrapPool } from "@kavachlabs/pg";
 
-test("@kavach/pg records SELECT as Gateway (pg:select) and INSERT/UPDATE as Output (pg:exec), and replays 100% offline", async () => {
+test("@kavachlabs/pg records SELECT as Gateway (pg:select) and INSERT/UPDATE as Output (pg:exec), and replays 100% offline", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kavach-ts-pg-"));
   const ringPath = path.join(dir, "pg.shm");
   try {
@@ -109,7 +109,7 @@ test("@kavach/pg records SELECT as Gateway (pg:select) and INSERT/UPDATE as Outp
   }
 });
 
-test("@kavach/pg reconstructs Postgres PG_40001 error with err.code = '40001'", async () => {
+test("@kavachlabs/pg reconstructs Postgres PG_40001 error with err.code = '40001'", async () => {
   const kv = init({ service: "pg-fault", mode: "replay" });
   const pool = createReplayPool(kv);
   const table = new StepTable(1n, [

@@ -1,4 +1,4 @@
-import { ErrNoActiveStep, type GatewayCall, type Kavach } from "@kavach/core";
+import { ErrNoActiveStep, type GatewayCall, type Kavach } from "@kavachlabs/core";
 
 export interface IORedisPipelineLike {
   exec(): Promise<Array<[Error | null, unknown]>>;

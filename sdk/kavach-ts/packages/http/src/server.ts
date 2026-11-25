@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import { Readable } from "node:stream";
-import type { Input, Kavach, StepRunner } from "@kavach/core";
+import type { Input, Kavach, StepRunner } from "@kavachlabs/core";
 
 const DEFAULT_MAX_BODY_BYTES = 4 << 20; // 4 MiB
 

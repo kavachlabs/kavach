@@ -4,10 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { FrameDecoder, RecordType, Ring, StepTable, decodeRecord, init } from "@kavach/core";
-import { wrapFetch, wrapHandler } from "@kavach/http";
+import { FrameDecoder, RecordType, Ring, StepTable, decodeRecord, init } from "@kavachlabs/core";
+import { wrapFetch, wrapHandler } from "@kavachlabs/http";
 
-test("@kavach/http wrapHandler records Node http.RequestListener and replays 100% offline with zero TCP socket", async () => {
+test("@kavachlabs/http wrapHandler records Node http.RequestListener and replays 100% offline with zero TCP socket", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kavach-ts-http-"));
   const ringPath = path.join(dir, "http.shm");
   try {
@@ -78,7 +78,7 @@ test("@kavach/http wrapHandler records Node http.RequestListener and replays 100
   }
 });
 
-test("@kavach/http wrapHandler supports Hono/Fetch apps and Fastify-style inject offline", async () => {
+test("@kavachlabs/http wrapHandler supports Hono/Fetch apps and Fastify-style inject offline", async () => {
   const kv = init({ service: "fetch-app", mode: "replay" });
 
   // Hono / Fetch-standard app
@@ -131,7 +131,7 @@ test("@kavach/http wrapHandler supports Hono/Fetch apps and Fastify-style inject
   assert.equal(out2.body_json.fastify, "GET /health");
 });
 
-test("@kavach/http wrapFetch captures outbound HTTP Gateway and replays offline", async () => {
+test("@kavachlabs/http wrapFetch captures outbound HTTP Gateway and replays offline", async () => {
   const kvRep = init({ service: "client-svc", mode: "replay" });
   const recordedBody = JSON.stringify({
     status_code: 200,

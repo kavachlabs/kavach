@@ -11,7 +11,7 @@ import {
   StepTable,
   decodeRecord,
   init,
-} from "@kavach/core";
+} from "@kavachlabs/core";
 
 test("Kavach AsyncLocalStorage step propagation across async/await & Promise.all + PII-scrubbed ring capture", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kavach-ts-core-"));

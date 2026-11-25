@@ -10,7 +10,7 @@ import {
   canonicalizeGatewayCall,
   isFault,
   normalizeSQL,
-} from "@kavach/core";
+} from "@kavachlabs/core";
 
 test("normalizeSQL collapses whitespace, comments, literals, and positional placeholders", () => {
   const sql = `

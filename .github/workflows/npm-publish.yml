@@ -1,0 +1,53 @@
+name: npm-publish
+
+# Builds, typechecks, tests, and publishes the @kavachlabs/* TypeScript / Node 22
+# driver SDK packages (sdk/kavach-ts/) to npm with public access.
+on:
+  push:
+    tags:
+      - 'ts-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run publish.sh with --dry-run (no npm registry upload)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install devDependencies (TypeScript)
+        working-directory: sdk/kavach-ts
+        run: npm install --no-audit --no-fund
+
+      - name: Build, typecheck, and test @kavachlabs/* packages
+        working-directory: sdk/kavach-ts
+        run: |
+          npm run build
+          npm run typecheck
+          npm test
+
+      - name: Publish @kavachlabs/* packages to npm
+        working-directory: sdk/kavach-ts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            ./scripts/publish.sh --dry-run
+          else
+            ./scripts/publish.sh
+          fi

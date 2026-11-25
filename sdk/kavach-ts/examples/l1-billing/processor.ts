@@ -1,7 +1,7 @@
-import type { Kavach } from "@kavach/core";
-import type { IORedisLike } from "@kavach/ioredis";
-import type { KafkaProducerLike } from "@kavach/kafkajs";
-import type { PgPoolLike } from "@kavach/pg";
+import type { Kavach } from "@kavachlabs/core";
+import type { IORedisLike } from "@kavachlabs/ioredis";
+import type { KafkaProducerLike } from "@kavachlabs/kafkajs";
+import type { PgPoolLike } from "@kavachlabs/pg";
 
 export interface RawBillingEvent {
   transaction_id: string;

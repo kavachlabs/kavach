@@ -429,7 +429,7 @@ export async function startConsumer() {
 	if len(rep.Topics) < 2 {
 		t.Fatalf("expected >=2 Kafka topics, got %v", rep.Topics)
 	}
-	for _, want := range []string{`"@kavach/core"`, `"@kavach/pg"`, `"@kavach/ioredis"`, `"@kavach/kafkajs"`, `"@kavach/http"`, "serveOrReplay"} {
+	for _, want := range []string{`"@kavachlabs/core"`, `"@kavachlabs/pg"`, `"@kavachlabs/ioredis"`, `"@kavachlabs/kafkajs"`, `"@kavachlabs/http"`, "serveOrReplay"} {
 		if !strings.Contains(rep.SuggestedSnippet, want) {
 			t.Errorf("TS SuggestedSnippet missing %q:\n%s", want, rep.SuggestedSnippet)
 		}
@@ -468,12 +468,12 @@ export async function startConsumer() {
 func TestScanRepoAndInitTypeScriptPeerAndKavachWrapped(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureFile(t, dir, "package.json", `{
-  "name": "@kavach/example-l1-billing",
+  "name": "@kavachlabs/example-l1-billing",
   "dependencies": {
-    "@kavach/core": "0.2.0",
-    "@kavach/pg": "0.2.0",
-    "@kavach/ioredis": "0.2.0",
-    "@kavach/kafkajs": "0.2.0"
+    "@kavachlabs/core": "0.2.1",
+    "@kavachlabs/pg": "0.2.1",
+    "@kavachlabs/ioredis": "0.2.1",
+    "@kavachlabs/kafkajs": "0.2.1"
   },
   "peerDependencies": {
     "pg": "^8.13.0",
@@ -484,10 +484,10 @@ func TestScanRepoAndInitTypeScriptPeerAndKavachWrapped(t *testing.T) {
     "express": "^4.19.0"
   }
 }`)
-	writeFixtureFile(t, dir, "old.ts", `import { init } from "@kavach/core";
-import { createReplayRedis } from "@kavach/ioredis";
-import { createReplayKafka } from "@kavach/kafkajs";
-import { createReplayPool } from "@kavach/pg";
+	writeFixtureFile(t, dir, "old.ts", `import { init } from "@kavachlabs/core";
+import { createReplayRedis } from "@kavachlabs/ioredis";
+import { createReplayKafka } from "@kavachlabs/kafkajs";
+import { createReplayPool } from "@kavachlabs/pg";
 
 const kv = init({ service: "l1-billing-ts", pii: "standard" });
 const pool = createReplayPool(kv);

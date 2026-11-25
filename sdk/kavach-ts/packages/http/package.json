@@ -1,9 +1,18 @@
 {
-  "name": "@kavach/http",
-  "version": "0.2.0",
+  "name": "@kavachlabs/http",
+  "version": "0.2.1",
   "description": "Kavach v0.2 HTTP server (Node http/Express/Fastify/Hono) and outbound Fetch adapter.",
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kavachlabs/kavach.git",
+    "directory": "sdk/kavach-ts/packages/http"
+  },
+  "homepage": "https://github.com/kavachlabs/kavach/tree/main/sdk/kavach-ts/packages/http",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -15,9 +24,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "LICENSE"],
   "dependencies": {
-    "@kavach/core": "0.2.0"
+    "@kavachlabs/core": "^0.2.1"
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\""
