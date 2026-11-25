@@ -1,0 +1,13 @@
+# Declarative Kavach invariants — zero code invariants required.
+service: l1-billing-ts
+invariants:
+  - name: atomic_single_emit_on_retry
+    kind: at_most_once_emit
+    sink: kafka:events_charged_in_advance
+    key: $.transaction_id
+    on_error_emit_count: 0
+
+  - name: no_silent_billing_drop
+    kind: anti_lobotomy
+    sinks: [kafka:events_enriched, kafka:events_charged_in_advance]
+    min_ratio_vs_baseline: 1.0

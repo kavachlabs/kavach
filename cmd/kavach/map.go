@@ -6,15 +6,22 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/kavachlabs/kavach/internal/kconfig"
 	"github.com/kavachlabs/kavach/internal/kmap"
 	"github.com/kavachlabs/kavach/replay"
 )
+
+// openBrowserFn is injectable for unit tests.
+var openBrowserFn = openInBrowser
 
 func cmdMap(u ui, args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -44,6 +51,9 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 	asJSON := fs.Bool("json", false, "print the built map model as JSON")
 	maxData := fs.Int("max-data", 512, "max bytes of input/output payload previews (0 omits payloads)")
 	title := fs.String("title", "", "override the map title")
+	autoGen := fs.Bool("auto", false, "synthesize .kavach/map.json from static Go AST and .kavach/invariants.yaml")
+	scanDir := fs.String("dir", ".", "repository directory to scan when --auto or default .kavach/ layout is used")
+	openBrowser := fs.Bool("open", false, "open generated HTML map in default browser (disabled when KAVACH_NO_OPEN=1)")
 
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -69,8 +79,51 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 		}
 	}
 
+	usedKavachDefaults := false
+	if *autoGen {
+		absDir, err := filepath.Abs(*scanDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach map: %v\n", err)
+			return exitError
+		}
+		if specPath == "" {
+			specPath = filepath.Join(absDir, kconfig.DefaultMapJSONFile)
+		}
+		invPath := kconfig.FindInvariantsFile(absDir)
+		autoSpec, err := kmap.AutoSpecFromDir(absDir, kmap.AutoOptions{
+			Title:          *title,
+			InvariantsPath: invPath,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach map --auto: %v\n", err)
+			return exitError
+		}
+		if err := kmap.WriteSpecFile(specPath, autoSpec); err != nil {
+			fmt.Fprintf(stderr, "kavach map --auto: write %s: %v\n", specPath, err)
+			return exitError
+		}
+		if len(fixtures) == 0 {
+			fixtures = globCapsules(filepath.Join(absDir, kconfig.DefaultCapsulesDir))
+		}
+		usedKavachDefaults = true
+	} else if specPath == "" && len(fixtures) == 0 && len(overlays) == 0 && len(watchDirs) == 0 {
+		// Clean zero-arg default in initialized repos: .kavach/map.json + .kavach/capsules/*.kavach -> .kavach/map.html
+		absDir, err := filepath.Abs(*scanDir)
+		if err == nil {
+			candSpec := filepath.Join(absDir, kconfig.DefaultMapJSONFile)
+			if st, serr := os.Stat(candSpec); serr == nil && !st.IsDir() {
+				specPath = candSpec
+				usedKavachDefaults = true
+			}
+			if caps := globCapsules(filepath.Join(absDir, kconfig.DefaultCapsulesDir)); len(caps) > 0 {
+				fixtures = caps
+				usedKavachDefaults = true
+			}
+		}
+	}
+
 	if specPath == "" && len(fixtures) == 0 && len(overlays) == 0 && len(watchDirs) == 0 {
-		fmt.Fprintln(stderr, "kavach map: pass a map.json spec, at least one *.kavach fixture, --overlay, or --watch")
+		fmt.Fprintln(stderr, "kavach map: pass a map.json spec, at least one *.kavach fixture, --auto, --overlay, or --watch (or run 'kavach init')")
 		return exitUsage
 	}
 	if *newBin != "" && *bin == "" {
@@ -120,7 +173,12 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 	writeHTML := !*asJSON || outPath != ""
 	htmlDest := outPath
 	if htmlDest == "" && writeHTML {
-		htmlDest = "kavach-map.html"
+		if usedKavachDefaults {
+			absDir, _ := filepath.Abs(*scanDir)
+			htmlDest = filepath.Join(absDir, kconfig.DefaultMapHTMLFile)
+		} else {
+			htmlDest = "kavach-map.html"
+		}
 	}
 
 	baseDir, err := os.Getwd()
@@ -251,6 +309,14 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 		}
 	}
 
+	if *openBrowser && writeHTML && os.Getenv("KAVACH_NO_OPEN") != "1" {
+		if absHTML, err := filepath.Abs(htmlDest); err == nil {
+			if err := openBrowserFn(absHTML); err != nil {
+				fmt.Fprintf(stderr, "kavach map: open browser: %v\n", err)
+			}
+		}
+	}
+
 	if len(replayErrs) > 0 {
 		for _, re := range replayErrs {
 			fmt.Fprintf(stderr, "kavach map: replay %s\n", re)
@@ -258,4 +324,26 @@ func cmdMapWithContext(ctx context.Context, u ui, args []string, stdout, stderr 
 		return exitFail
 	}
 	return exitPass
+}
+
+func globCapsules(dir string) []string {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.kavach"))
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+func openInBrowser(target string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", target)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+	default:
+		cmd = exec.Command("xdg-open", target)
+	}
+	return cmd.Start()
 }

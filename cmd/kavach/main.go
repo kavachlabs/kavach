@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kavachlabs/kavach/internal/kconfig"
 	"github.com/kavachlabs/kavach/journal"
 	"github.com/kavachlabs/kavach/replay"
 	kavach "github.com/kavachlabs/kavach/sdk/go"
@@ -34,12 +35,17 @@ const usage = `kavach inspects, replays and compares Kavach fixtures.
 Usage:
   kavach [--no-banner] <command> ...
 
-  kavach list    [dir] [--json]
-  kavach inspect <fixture> [--json] [--full]
-  kavach replay  <fixture> --bin <host-command> [--until <seq>] [--probe <input>]... [--hold] [--json]
-  kavach diff    <fixture> --old <host-command> --new <host-command> [--variants N] [--regressions N] [--keep DIR] [--json]
-  kavach contract init|show|approve|check ...
-  kavach map     [map.json] [fixture.kavach]... [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--source [GROUP=]DIR]... [--patch P.diff]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N]
+  kavach init        [--dir .] [--service NAME] [--mode driver|scoped] [--force] [--json]
+  kavach doctor      [--dir .] [--json]
+  kavach dev         --cmd "<command>" [--out .kavach/capsules/] [--service NAME] [--pii standard|off] [--ring-path PATH] [--json]
+  kavach skills      [--agent claude|cursor|codex|antigravity|all] [--dry-run] [--json]
+  kavach install-mcp [--target .mcp.json|claude|cursor] [--dry-run] [--json]
+  kavach list        [dir] [--json]
+  kavach inspect     <fixture> [--json] [--full]
+  kavach replay      <fixture> --bin <host-command> [--invariants FILE] [--until <seq>] [--probe <input>]... [--hold] [--json]
+  kavach diff        <fixture>... --old <host-command> --new <host-command> [--invariants FILE] [--variants N] [--regressions N] [--keep DIR] [--json]
+  kavach contract    init|show|approve|check ...
+  kavach map         [map.json] [fixture.kavach]... [--auto] [--open] [--dir DIR] [--bin H] [--new H] [--diff D.json]... [--overlay O.json]... [--source [GROUP=]DIR]... [--patch P.diff]... [--watch DIR]... [--listen ADDR] [--interval D] [-o out.html] [--json] [--max-data N]
   kavach mcp
   kavach version
 
@@ -105,6 +111,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	cmd, args := args[0], args[1:]
 	switch cmd {
+	case "init":
+		return cmdInit(u, args, stdout, stderr)
+	case "doctor":
+		return cmdDoctor(u, args, stdout, stderr)
+	case "dev":
+		return cmdDev(u, args, stdout, stderr)
+	case "skills":
+		return cmdSkills(u, args, stdout, stderr)
+	case "install-mcp":
+		return cmdInstallMCP(u, args, stdout, stderr)
 	case "inspect":
 		return cmdInspect(u, args, stdout, stderr)
 	case "replay":
@@ -363,9 +379,47 @@ func replayWithOpts(bin, fixture string, opts replay.Options) (*replay.Result, t
 	return res, time.Since(start), err
 }
 
+func resolveInvariantsPath(flagVal, fixturePath string) string {
+	v := strings.TrimSpace(flagVal)
+	if v != "" {
+		if strings.EqualFold(v, "none") || strings.EqualFold(v, "off") {
+			return ""
+		}
+		return v
+	}
+	if p := kconfig.FindInvariantsFile("."); p != "" {
+		return p
+	}
+	if fixturePath != "" {
+		abs, err := filepath.Abs(fixturePath)
+		if err == nil {
+			// Check parent dirs up to 2 levels (e.g. <repo>/.kavach/capsules/foo.kavach -> <repo>/.kavach/invariants.yaml).
+			dir := filepath.Dir(abs)
+			for i := 0; i < 3; i++ {
+				if p := kconfig.FindInvariantsFile(dir); p != "" {
+					return p
+				}
+				if filepath.Base(dir) == kconfig.DefaultDir {
+					cand := filepath.Join(dir, "invariants.yaml")
+					if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+						return cand
+					}
+				}
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
+		}
+	}
+	return ""
+}
+
 func cmdReplay(u ui, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := newFlags("replay", stderr)
 	bin := fs.String("bin", os.Getenv("KAVACH_BIN"), "host command, e.g. ./ledger or \"python -m ledger\" (kavach-host is appended)")
+	invariantsPath := fs.String("invariants", "", "path to declarative .kavach/invariants.yaml (auto-detected if present; \"none\" disables)")
 	var until optionalUint64
 	fs.Var(&until, "until", "stop replay after the last step with input seq <= N")
 	var probes stringList
@@ -381,6 +435,7 @@ func cmdReplay(u ui, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		return exitUsage
 	}
 	var opts replay.Options
+	opts.InvariantsPath = resolveInvariantsPath(*invariantsPath, path)
 	if until.set {
 		uval := until.val
 		opts.Until = &uval
@@ -508,6 +563,7 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("diff", stderr)
 	oldBin := fs.String("old", "", "host command for the code that failed")
 	newBin := fs.String("new", "", "host command for the candidate fix")
+	invariantsPath := fs.String("invariants", "", "path to declarative .kavach/invariants.yaml (auto-detected if present; \"none\" disables)")
 	minVariants := fs.Int("variants", replay.DefaultMinVariants, "variants of the incident the fix must also pass; 0 checks only the recorded journal")
 	regressions := fs.Int("regressions", replay.DefaultRegressions, "regression variants of earlier, similar inputs the fix must leave unchanged; 0 skips them")
 	keep := fs.String("keep", "", "directory to save failing variants in (default: a new temporary directory)")
@@ -516,8 +572,8 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return exitUsage
 	}
-	path, ok := oneFixture("diff", pos, stderr)
-	if !ok {
+	if len(pos) == 0 {
+		fmt.Fprintln(stderr, "kavach diff: expected at least one fixture, got 0 arguments")
 		return exitUsage
 	}
 	if *oldBin == "" || *newBin == "" {
@@ -532,7 +588,14 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "kavach diff: --regressions must not be negative")
 		return exitUsage
 	}
-	o, err := verifyFix(path, *oldBin, *newBin, *minVariants, *regressions, *keep)
+
+	if len(pos) > 1 {
+		return cmdDiffMulti(u, pos, *oldBin, *newBin, *invariantsPath, *minVariants, *regressions, *keep, *asJSON, stdout, stderr)
+	}
+
+	path := pos[0]
+	invPath := resolveInvariantsPath(*invariantsPath, path)
+	o, err := verifyFixWithInvariants(path, *oldBin, *newBin, invPath, *minVariants, *regressions, *keep)
 	if err != nil {
 		fmt.Fprintf(stderr, "kavach diff: %v\n", err)
 		return exitError
@@ -544,87 +607,130 @@ func cmdDiff(u ui, args []string, stdout, stderr io.Writer) int {
 			return exitError
 		}
 	} else {
-		u.printBanner(stdout)
-		u.header(stdout, "KAVACH FIX VERIFICATION")
-		fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
-		fmt.Fprintf(stdout, "%s%s\n", u.label("old", 10), u.verdict(v.Old.Status, v.Old.String()))
-		fmt.Fprintf(stdout, "%s%s\n", u.label("new", 10), u.verdict(v.New.Status, v.New.String()))
-		if v.New.Detail != "" && !v.New.Passed() {
-			fmt.Fprintf(stdout, "          %s\n", u.paint(v.New.Detail, verdictColor(v.New.Status)))
-		}
-		if d == nil {
-			fmt.Fprintf(stdout, "%sidentical at every step\n", u.label("outputs", 10))
-		} else {
-			fmt.Fprintf(stdout, "%s\n", u.paint(fmt.Sprintf("first divergence at step seq %d: %s", d.Seq, d.Detail), ansiBold, ansiYellow))
-			if d.Output >= 0 {
-				fmt.Fprintf(stdout, "  %s  %s\n", u.paint("old", ansiBold, ansiRed), u.paint(showOutput(d.Old), ansiRed))
-				fmt.Fprintf(stdout, "  %s  %s\n", u.paint("new", ansiBold, ansiGreen), u.paint(showOutput(d.New), ansiGreen))
-			}
-		}
-		if v.Candidates > 0 {
-			fmt.Fprintf(stdout, "%s%d of %d reproduce the incident on the old build · %d of those pass on the new build\n",
-				u.label("variants", 10), v.Reproducing, v.Candidates, v.Passing)
-			shown := 0
-			for _, c := range v.Variants {
-				if !c.Reproduces || c.Passed {
-					continue
-				}
-				if shown == 5 {
-					fmt.Fprintf(stdout, "          %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.Reproducing-v.Passing-shown), ansiDim))
-					break
-				}
-				shown++
-				fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
-				fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
-				if f := saved[c.ID]; f != "" {
-					fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
-				}
-			}
-		}
-		if v.Candidates > 0 && *regressions > 0 {
-			if v.Neighbours == 0 {
-				fmt.Fprintf(stdout, "%snone: no earlier input resembles the failing one\n", u.label("regressions", 12))
-			} else {
-				fmt.Fprintf(stdout, "%s%d of %d match the old build · %d variants of %d earlier inputs resembling the failing one\n",
-					u.label("regressions", 12), v.RegressionPassing, v.RegressionCounted, v.RegressionCandidates, v.Neighbours)
-			}
-			shown := 0
-			for _, c := range v.Regressions {
-				if !c.Counted || c.Passed {
-					continue
-				}
-				if shown == 5 {
-					fmt.Fprintf(stdout, "            %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.RegressionCounted-v.RegressionPassing-shown), ansiDim))
-					break
-				}
-				shown++
-				fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
-				fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
-				if f := o.savedRegressions[c.ID]; f != "" {
-					fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
-				}
-			}
-		}
-		fmt.Fprintf(stdout, "%s%s\n", u.label("verdict", 10), u.verdict(v.Status, v.String()))
-		if v.Status == replay.StatusVariantFailed || v.Status == replay.StatusRegressed || v.Status == replay.StatusUnverified {
-			fmt.Fprintf(stdout, "          %s\n", u.paint(v.Detail, verdictColor(v.Status)))
-		}
-		fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms for %d replays", ms(wall), replays(v)), ansiYellow))
-		if u.color && v.Status == replay.StatusVariantFailed {
-			if f := saved[v.Variant]; f != "" {
-				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --bin %s", f, *newBin), ansiDim))
-			}
-		}
-		if u.color && v.Status == replay.StatusRegressed {
-			if f := o.savedRegressions[v.Regression]; f != "" {
-				fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --json --bin %s (and --bin %s), and compare the outputs", f, *oldBin, *newBin), ansiDim))
-			}
-		}
+		printDiffOutcome(u, stdout, path, *oldBin, *newBin, *regressions, o, v, saved, d, wall)
 	}
 	if v.Passed() {
 		return exitPass
 	}
 	return exitFail
+}
+
+func cmdDiffMulti(u ui, paths []string, oldBin, newBin, invariantsFlag string, minVariants, regressions int, keep string, asJSON bool, stdout, stderr io.Writer) int {
+	var reports []map[string]any
+	allPassed := true
+	overallCode := exitPass
+	for i, path := range paths {
+		invPath := resolveInvariantsPath(invariantsFlag, path)
+		o, err := verifyFixWithInvariants(path, oldBin, newBin, invPath, minVariants, regressions, keep)
+		if err != nil {
+			fmt.Fprintf(stderr, "kavach diff (%s): %v\n", path, err)
+			return exitError
+		}
+		if !o.v.Passed() {
+			allPassed = false
+			if overallCode == exitPass {
+				overallCode = exitFail
+			}
+		}
+		if asJSON {
+			r := o.report()
+			r["passed"] = o.v.Passed()
+			reports = append(reports, r)
+		} else {
+			if i > 0 {
+				fmt.Fprintln(stdout)
+			}
+			printDiffOutcome(u, stdout, path, oldBin, newBin, regressions, o, o.v, o.saved, o.divergence, o.wall)
+		}
+	}
+	if asJSON {
+		if writeJSON(stdout, stderr, map[string]any{
+			"passed":   allPassed,
+			"fixtures": reports,
+		}) != exitPass {
+			return exitError
+		}
+	}
+	return overallCode
+}
+
+func printDiffOutcome(u ui, stdout io.Writer, path, oldBin, newBin string, regressions int, o *diffOutcome, v *replay.Verification, saved map[int]string, d *replay.Divergence, wall time.Duration) {
+	u.printBanner(stdout)
+	u.header(stdout, "KAVACH FIX VERIFICATION")
+	fmt.Fprintf(stdout, "%s%s\n", u.label("fixture", 10), path)
+	fmt.Fprintf(stdout, "%s%s\n", u.label("old", 10), u.verdict(v.Old.Status, v.Old.String()))
+	fmt.Fprintf(stdout, "%s%s\n", u.label("new", 10), u.verdict(v.New.Status, v.New.String()))
+	if v.New.Detail != "" && !v.New.Passed() {
+		fmt.Fprintf(stdout, "          %s\n", u.paint(v.New.Detail, verdictColor(v.New.Status)))
+	}
+	if d == nil {
+		fmt.Fprintf(stdout, "%sidentical at every step\n", u.label("outputs", 10))
+	} else {
+		fmt.Fprintf(stdout, "%s\n", u.paint(fmt.Sprintf("first divergence at step seq %d: %s", d.Seq, d.Detail), ansiBold, ansiYellow))
+		if d.Output >= 0 {
+			fmt.Fprintf(stdout, "  %s  %s\n", u.paint("old", ansiBold, ansiRed), u.paint(showOutput(d.Old), ansiRed))
+			fmt.Fprintf(stdout, "  %s  %s\n", u.paint("new", ansiBold, ansiGreen), u.paint(showOutput(d.New), ansiGreen))
+		}
+	}
+	if v.Candidates > 0 {
+		fmt.Fprintf(stdout, "%s%d of %d reproduce the incident on the old build · %d of those pass on the new build\n",
+			u.label("variants", 10), v.Reproducing, v.Candidates, v.Passing)
+		shown := 0
+		for _, c := range v.Variants {
+			if !c.Reproduces || c.Passed {
+				continue
+			}
+			if shown == 5 {
+				fmt.Fprintf(stdout, "          %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.Reproducing-v.Passing-shown), ansiDim))
+				break
+			}
+			shown++
+			fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
+			fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
+			if f := saved[c.ID]; f != "" {
+				fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
+			}
+		}
+	}
+	if v.Candidates > 0 && regressions > 0 {
+		if v.Neighbours == 0 {
+			fmt.Fprintf(stdout, "%snone: no earlier input resembles the failing one\n", u.label("regressions", 12))
+		} else {
+			fmt.Fprintf(stdout, "%s%d of %d match the old build · %d variants of %d earlier inputs resembling the failing one\n",
+				u.label("regressions", 12), v.RegressionPassing, v.RegressionCounted, v.RegressionCandidates, v.Neighbours)
+		}
+		shown := 0
+		for _, c := range v.Regressions {
+			if !c.Counted || c.Passed {
+				continue
+			}
+			if shown == 5 {
+				fmt.Fprintf(stdout, "            %s\n", u.paint(fmt.Sprintf("… and %d more (--json lists them all)", v.RegressionCounted-v.RegressionPassing-shown), ansiDim))
+				break
+			}
+			shown++
+			fmt.Fprintf(stdout, "  %s %s\n", u.paint(fmt.Sprintf("✗ %2d", c.ID), ansiBold, ansiRed), c.Mutation)
+			fmt.Fprintf(stdout, "       %s\n", u.paint(c.Detail, ansiRed))
+			if f := o.savedRegressions[c.ID]; f != "" {
+				fmt.Fprintf(stdout, "       %s\n", u.paint("saved "+f, ansiDim))
+			}
+		}
+	}
+	fmt.Fprintf(stdout, "%s%s\n", u.label("verdict", 10), u.verdict(v.Status, v.String()))
+	if v.Status == replay.StatusVariantFailed || v.Status == replay.StatusRegressed || v.Status == replay.StatusUnverified {
+		fmt.Fprintf(stdout, "          %s\n", u.paint(v.Detail, verdictColor(v.Status)))
+	}
+	fmt.Fprintf(stdout, "%s%s\n", u.label("wall", 10), u.paint(fmt.Sprintf("%.1f ms for %d replays", ms(wall), replays(v)), ansiYellow))
+	if u.color && v.Status == replay.StatusVariantFailed {
+		if f := saved[v.Variant]; f != "" {
+			fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --bin %s", f, newBin), ansiDim))
+		}
+	}
+	if u.color && v.Status == replay.StatusRegressed {
+		if f := o.savedRegressions[v.Regression]; f != "" {
+			fmt.Fprintf(stdout, "\n%s\n", u.paint(fmt.Sprintf("next: kavach replay %s --json --bin %s (and --bin %s), and compare the outputs", f, oldBin, newBin), ansiDim))
+		}
+	}
 }
 
 type diffOutcome struct {
@@ -637,11 +743,19 @@ type diffOutcome struct {
 }
 
 func verifyFix(fixture, oldBin, newBin string, minVariants, regressions int, keep string) (*diffOutcome, error) {
+	return verifyFixWithInvariants(fixture, oldBin, newBin, resolveInvariantsPath("", fixture), minVariants, regressions, keep)
+}
+
+func verifyFixWithInvariants(fixture, oldBin, newBin, invariantsPath string, minVariants, regressions int, keep string) (*diffOutcome, error) {
 	j, err := journal.ReadFile(fixture)
 	if err != nil {
 		return nil, err
 	}
-	opts := replay.VerifyOptions{MinVariants: minVariants, Parallel: runtime.NumCPU()}
+	opts := replay.VerifyOptions{
+		MinVariants:    minVariants,
+		Parallel:       runtime.NumCPU(),
+		InvariantsPath: invariantsPath,
+	}
 	if minVariants == 0 {
 		opts.MinVariants = -1
 	}

@@ -40,19 +40,20 @@ type mutationOpts struct {
 }
 
 const (
-	KindField     = "field"     // one field or array element of the input changed, removed or added
-	KindPair      = "pair"      // two fields or elements changed together
-	KindMove      = "move"      // the input moved earlier
-	KindDrop      = "drop"      // earlier inputs dropped
-	KindDuplicate = "duplicate" // an earlier input delivered twice
-	KindClock     = "clock"     // every clock read shifted
+	KindField        = "field"         // one field or array element of the input changed, removed or added
+	KindPair         = "pair"          // two fields or elements changed together
+	KindMove         = "move"          // the input moved earlier
+	KindDrop         = "drop"          // earlier inputs dropped
+	KindDuplicate    = "duplicate"     // an earlier input delivered twice
+	KindClock        = "clock"         // every clock read shifted
+	KindGatewayFault = "gateway_fault" // transient driver/gateway error injected + redelivery
 
 	// KindRegression marks a variant of an earlier input that resembles the
 	// failing one, rather than of the failing input (RegressionVariants).
 	KindRegression = "regression"
 )
 
-var kinds = []string{KindField, KindPair, KindMove, KindDrop, KindDuplicate, KindClock}
+var kinds = []string{KindField, KindPair, KindMove, KindDrop, KindDuplicate, KindClock, KindGatewayFault}
 
 var metadataKeys = map[string]bool{
 	"email":          true,
@@ -244,6 +245,7 @@ func candidatesWith(steps []*step, k int, opts mutationOpts) [][]candidate {
 		drops(base, k),
 		duplicates(base, k),
 		clockShifts(base, k),
+		gatewayFaults(base, steps, k),
 	}
 }
 

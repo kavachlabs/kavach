@@ -1,0 +1,32 @@
+{
+  "name": "@kavach/example-l1-billing",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end Kavach v0.2 TypeScript L1 billing retry double-charge dogfood (zero memrepo, zero code invariants).",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@kavach/core": "0.2.0",
+    "@kavach/pg": "0.2.0",
+    "@kavach/ioredis": "0.2.0",
+    "@kavach/kafkajs": "0.2.0"
+  },
+  "peerDependencies": {
+    "pg": "^8.13.0",
+    "ioredis": "^5.4.0",
+    "kafkajs": "^2.2.4"
+  },
+  "peerDependenciesMeta": {
+    "pg": { "optional": true },
+    "ioredis": { "optional": true },
+    "kafkajs": { "optional": true }
+  },
+  "scripts": {
+    "start:old": "node old.ts",
+    "start:new": "node new.ts",
+    "record": "node record.ts",
+    "e2e": "bash run_e2e.sh"
+  }
+}

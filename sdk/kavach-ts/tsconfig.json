@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/http" },
+    { "path": "packages/pg" },
+    { "path": "packages/ioredis" },
+    { "path": "packages/kafkajs" }
+  ]
+}

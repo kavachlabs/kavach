@@ -1,0 +1,33 @@
+{
+  "name": "@kavach/ioredis",
+  "version": "0.2.0",
+  "description": "Kavach v0.2 Redis adapter for ioredis with offline startup PING, timestamp-independent key fingerprinting, and LOADING fault injection.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@kavach/core": "0.2.0"
+  },
+  "peerDependencies": {
+    "ioredis": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}

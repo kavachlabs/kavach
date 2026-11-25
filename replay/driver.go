@@ -301,7 +301,7 @@ func hostEnviron(genesis []journal.Fact) []string {
 	named := map[string]bool{}
 	for _, f := range genesis {
 		name, ok := strings.CutPrefix(f.Key, "env.")
-		if !ok || name == "" || strings.Contains(name, "=") {
+		if !ok || name == "" || strings.Contains(name, "=") || name == "KAVACH_HOST" {
 			continue
 		}
 		named[name] = true
@@ -319,6 +319,7 @@ func hostEnviron(genesis []journal.Fact) []string {
 			env = append(env, name+"="+v)
 		}
 	}
+	env = append(env, "KAVACH_HOST=1")
 	return env
 }
 
@@ -364,9 +365,28 @@ func startHost(words []string, service string, snapshot []byte, genesis []journa
 	return startHostEnv(words, service, snapshot, hostEnviron(genesis))
 }
 
+func ensureKavachHostEnv(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "KAVACH_HOST=") {
+			if !found {
+				out = append(out, "KAVACH_HOST=1")
+				found = true
+			}
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !found {
+		out = append(out, "KAVACH_HOST=1")
+	}
+	return out
+}
+
 func startHostEnv(words []string, service string, snapshot []byte, env []string) (*host, error) {
 	cmd := exec.Command(words[0], append(append([]string{}, words[1:]...), kavach.HostCommand)...)
-	cmd.Env = env
+	cmd.Env = ensureKavachHostEnv(env)
 	h := &host{cmd: cmd, quit: make(chan struct{}), lines: make(chan []byte), stderr: &tail{}}
 	cmd.Stderr = h.stderr
 	cmd.WaitDelay = time.Second
