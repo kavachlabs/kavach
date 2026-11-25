@@ -206,16 +206,16 @@ func detectAutoManifests(root string, sd *autoScanData) {
 					all[k] = true
 				}
 			}
-			if all["pg"] || all["@kavach/pg"] || all["prisma"] || all["@prisma/client"] || all["drizzle-orm"] {
+			if all["pg"] || all["@kavachlabs/pg"] || all["prisma"] || all["@prisma/client"] || all["drizzle-orm"] {
 				addAutoGateway(sd, "gw_postgres", "state", "PostgreSQL", "SQL database client", "")
 			}
-			if all["ioredis"] || all["@kavach/ioredis"] || all["redis"] {
+			if all["ioredis"] || all["@kavachlabs/ioredis"] || all["redis"] {
 				addAutoGateway(sd, "gw_redis", "state", "Redis", "Redis cache & coordination client", "")
 			}
-			if all["kafkajs"] || all["@kavach/kafkajs"] {
+			if all["kafkajs"] || all["@kavachlabs/kafkajs"] {
 				addAutoGateway(sd, "gw_kafka", "external", "Kafka Broker", "kafkajs client", "")
 			}
-			if all["express"] || all["fastify"] || all["hono"] || all["next"] || all["@kavach/http"] {
+			if all["express"] || all["fastify"] || all["hono"] || all["next"] || all["@kavachlabs/http"] {
 				addAutoSink(sd, "http:response", "http:response", "HTTP response emitted to caller", "")
 			}
 		}

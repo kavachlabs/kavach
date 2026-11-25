@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SDK_ROOT="$(cd "${ROOT}/../.." && pwd)"
-KAVACH="${KAVACH:-/Users/koustav/code/kavach-labs/kavach/kavach}"
+REPO_ROOT="$(cd "${SDK_ROOT}/../.." && pwd)"
 ENTERPRISE_INC="/Users/koustav/code/kavach-labs/kavach-enterprise/include"
 
 export KAVACH_NO_BANNER=1
@@ -12,13 +12,18 @@ export KAVACH_NO_OPEN=1
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kavach-ts-e2e-XXXXXX")"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+if [[ -z "${KAVACH:-}" ]]; then
+  KAVACH="${TMP_DIR}/kavach"
+  (cd "${REPO_ROOT}" && GOWORK=off go build -o "${KAVACH}" ./cmd/kavach)
+fi
+
 echo "==> 1. Build, typecheck, and run all TypeScript unit/integration tests"
 (cd "${SDK_ROOT}" && npm run build && npm run typecheck && npm test)
 
 echo "==> 2. Verify C++23 kavach::daemon::ShmRingConsumer decodes TS-produced KVRING02 ring"
 TS_RING="${TMP_DIR}/ts_producer.shm"
 node --input-type=module - "${TS_RING}" "${SDK_ROOT}/packages/core/dist/index.js" <<'EOF'
-import { init } from "@kavach/core";
+import { init } from "@kavachlabs/core";
 const ringPath = process.argv[2];
 const kv = init({ service: "ts-cpp-interop", ringPath, pii: "standard", mode: "record" });
 await kv.runStep(

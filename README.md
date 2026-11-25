@@ -12,17 +12,20 @@
 
 # Kavach — Deterministic PR Verification for Stateful Backends
 
-AI coding agents ship backend PRs faster than unit tests can verify them. Kavach wraps your existing Postgres, Redis, Kafka, and HTTP clients in **Go** (`kavach-go`) and **TypeScript / Node 22** (`@kavach/*`) to record PII-scrubbed production traces and deterministically replay every PR across mutated retry and failure schedules—with **zero business-logic rewrites** and **zero live DBs in CI**.
+AI coding agents ship backend PRs faster than unit tests can verify them. Kavach wraps your existing Postgres, Redis, Kafka, and HTTP clients in **Go** (`kavach-go`) and **TypeScript / Node 22** (`@kavachlabs/*`) to record PII-scrubbed production traces and deterministically replay every PR across mutated retry and failure schedules—with **zero business-logic rewrites** and **zero live DBs in CI**.
 
 ### 1. Install & equip your coding agent
 
 ```bash
-# Go or TypeScript/Node 22
-go get github.com/kavachlabs/kavach-go                                     # Go
-npm install @kavach/core @kavach/http @kavach/pg @kavach/ioredis @kavach/kafkajs  # TypeScript
+# Install Kavach CLI
+brew install kavachlabs/tap/kavach        # or: curl -fsSL https://www.thekavachlabs.com/install.sh | sh
+
+# Install Go or TypeScript/Node 22 driver SDK
+go get github.com/kavachlabs/kavach-go@v0.2.1                                            # Go (+ adapters/{kavachpgx,kavachredis,kavachkgo}@v0.2.1)
+npm install @kavachlabs/core @kavachlabs/http @kavachlabs/pg @kavachlabs/ioredis @kavachlabs/kafkajs  # TypeScript
 
 # Equip Claude Code / Cursor / Codex / Antigravity + scaffold .kavach/ & CI workflow
-npx skills@latest add kavachlabs/kavach --skill kavach-setup
+npx skills@latest add kavachlabs/kavach --skill kavach-setup --skill kavach-invariants
 kavach init
 ```
 
@@ -49,11 +52,11 @@ kv.ServeOrReplay(mux)
 **TypeScript / Node 22 (`sdk/kavach-ts`)**
 
 ```ts
-import { init } from "@kavach/core";
-import { wrapHandler } from "@kavach/http";
-import { wrapPool } from "@kavach/pg";
-import { wrapRedis } from "@kavach/ioredis";
-import { wrapKafka } from "@kavach/kafkajs";
+import { init } from "@kavachlabs/core";
+import { wrapHandler } from "@kavachlabs/http";
+import { wrapPool } from "@kavachlabs/pg";
+import { wrapRedis } from "@kavachlabs/ioredis";
+import { wrapKafka } from "@kavachlabs/kafkajs";
 
 const kv = init({ service: "events-processor", pii: "standard" });
 const pool = wrapPool(kv, rawPool);
@@ -101,9 +104,11 @@ Explore multi-arm coding agent runs on real open-source incidents at [benchmark.
 
 ## Install CLI
 
-Install prebuilt `kavach` and `kavach-recorder` binaries **plus all five Kavach agent skills** on Linux or macOS (`amd64` / `arm64`) in a single command (no Go toolchain required):
+Install prebuilt `kavach` and `kavach-recorder` binaries via Homebrew or our zero-dependency shell installer (Linux/macOS `amd64` / `arm64`, also installs all five Kavach agent skills):
 
 ```bash
+brew install kavachlabs/tap/kavach
+# or:
 curl -fsSL https://www.thekavachlabs.com/install.sh | sh
 ```
 
@@ -204,7 +209,7 @@ No SDK for your language? Speak the host & recorder wire protocols directly via 
 `kavach init` generates a ready-to-commit `.github/workflows/kavach.yml` (Go or Node 22), or use the composite action directly:
 
 ```yaml
-- uses: kavachlabs/kavach@v0.2.0
+- uses: kavachlabs/kavach@v0.2.1
   with:
     fixtures: .kavach/capsules/*.kavach
     old: ./bin/service-base
@@ -217,7 +222,7 @@ No SDK for your language? Speak the host & recorder wire protocols directly via 
 | File | What it is |
 | --- | --- |
 | [sdk/kavach-go](sdk/kavach-go) | v0.2 zero-`memrepo` Go SDK + driver adapters (`kavachhttp`, `kavachpgx`, `kavachredis`, `kavachkgo`) |
-| [sdk/kavach-ts](sdk/kavach-ts) | v0.2 zero-`memrepo` TypeScript / Node 22 SDK + driver adapters (`@kavach/{core,http,pg,ioredis,kafkajs}`) |
+| [sdk/kavach-ts](sdk/kavach-ts) | v0.2 zero-`memrepo` TypeScript / Node 22 SDK + driver adapters (`@kavachlabs/{core,http,pg,ioredis,kafkajs}`) |
 | [SPEC.md](SPEC.md) | Journal and fixture format, and the host and recorder protocols |
 | [MAP.md](MAP.md) | `kavach map` CLI usage, `map.json` spec, invariant rules, and overlay schema |
 | [AGENTS.md](AGENTS.md) | How an AI coding agent should use Kavach |

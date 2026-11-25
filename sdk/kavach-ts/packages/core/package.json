@@ -1,9 +1,18 @@
 {
-  "name": "@kavach/core",
-  "version": "0.2.0",
+  "name": "@kavachlabs/core",
+  "version": "0.2.1",
   "description": "Zero-dependency Kavach v0.2 core SDK for Node 22: AsyncLocalStorage step propagation, KVRING02 ring writer, kavach-host stdio protocol, deterministic HMAC-SHA256 PII scrubber, two-tier gateway matcher, and declarative invariants.",
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kavachlabs/kavach.git",
+    "directory": "sdk/kavach-ts/packages/core"
+  },
+  "homepage": "https://github.com/kavachlabs/kavach/tree/main/sdk/kavach-ts/packages/core",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -15,7 +24,7 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "LICENSE"],
   "dependencies": {},
   "scripts": {
     "test": "node --test \"test/*.test.ts\""

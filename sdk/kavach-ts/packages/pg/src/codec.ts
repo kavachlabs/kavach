@@ -1,4 +1,4 @@
-import { CODE_PG_40001, type GatewayCall, isFault, normalizeSQL, sqlKind } from "@kavach/core";
+import { CODE_PG_40001, type GatewayCall, isFault, normalizeSQL, sqlKind } from "@kavachlabs/core";
 
 export interface TypedCell {
   t: "null" | "bool" | "int64" | "float64" | "string" | "bytes" | "time" | "json";

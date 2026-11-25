@@ -72,26 +72,26 @@ var goStdlibDrivers = map[string]Driver{
 }
 
 var tsManifestDrivers = map[string]Driver{
-	"pg":              {Name: "pg", Language: LangTypeScript, Category: "database", ImportPath: "pg", Adapter: "@kavach/pg"},
-	"@kavach/pg":      {Name: "pg", Language: LangTypeScript, Category: "database", ImportPath: "@kavach/pg", Adapter: "@kavach/pg"},
-	"prisma":          {Name: "prisma", Language: LangTypeScript, Category: "database", ImportPath: "prisma", Adapter: "@kavach/pg"},
-	"@prisma/client":  {Name: "prisma", Language: LangTypeScript, Category: "database", ImportPath: "@prisma/client", Adapter: "@kavach/pg"},
-	"drizzle-orm":     {Name: "drizzle-orm", Language: LangTypeScript, Category: "database", ImportPath: "drizzle-orm", Adapter: "@kavach/pg"},
-	"ioredis":         {Name: "ioredis", Language: LangTypeScript, Category: "cache", ImportPath: "ioredis", Adapter: "@kavach/ioredis"},
-	"@kavach/ioredis": {Name: "ioredis", Language: LangTypeScript, Category: "cache", ImportPath: "@kavach/ioredis", Adapter: "@kavach/ioredis"},
-	"redis":           {Name: "redis", Language: LangTypeScript, Category: "cache", ImportPath: "redis", Adapter: "@kavach/ioredis"},
-	"kafkajs":         {Name: "kafkajs", Language: LangTypeScript, Category: "queue", ImportPath: "kafkajs", Adapter: "@kavach/kafkajs"},
-	"@kavach/kafkajs": {Name: "kafkajs", Language: LangTypeScript, Category: "queue", ImportPath: "@kavach/kafkajs", Adapter: "@kavach/kafkajs"},
-	"express":         {Name: "express", Language: LangTypeScript, Category: "http", ImportPath: "express", Adapter: "@kavach/http"},
-	"fastify":         {Name: "fastify", Language: LangTypeScript, Category: "http", ImportPath: "fastify", Adapter: "@kavach/http"},
-	"hono":            {Name: "hono", Language: LangTypeScript, Category: "http", ImportPath: "hono", Adapter: "@kavach/http"},
-	"next":            {Name: "next", Language: LangTypeScript, Category: "http", ImportPath: "next", Adapter: "@kavach/http"},
-	"@kavach/http":    {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "@kavach/http", Adapter: "@kavach/http"},
+	"pg":                  {Name: "pg", Language: LangTypeScript, Category: "database", ImportPath: "pg", Adapter: "@kavachlabs/pg"},
+	"@kavachlabs/pg":      {Name: "pg", Language: LangTypeScript, Category: "database", ImportPath: "@kavachlabs/pg", Adapter: "@kavachlabs/pg"},
+	"prisma":              {Name: "prisma", Language: LangTypeScript, Category: "database", ImportPath: "prisma", Adapter: "@kavachlabs/pg"},
+	"@prisma/client":      {Name: "prisma", Language: LangTypeScript, Category: "database", ImportPath: "@prisma/client", Adapter: "@kavachlabs/pg"},
+	"drizzle-orm":         {Name: "drizzle-orm", Language: LangTypeScript, Category: "database", ImportPath: "drizzle-orm", Adapter: "@kavachlabs/pg"},
+	"ioredis":             {Name: "ioredis", Language: LangTypeScript, Category: "cache", ImportPath: "ioredis", Adapter: "@kavachlabs/ioredis"},
+	"@kavachlabs/ioredis": {Name: "ioredis", Language: LangTypeScript, Category: "cache", ImportPath: "@kavachlabs/ioredis", Adapter: "@kavachlabs/ioredis"},
+	"redis":               {Name: "redis", Language: LangTypeScript, Category: "cache", ImportPath: "redis", Adapter: "@kavachlabs/ioredis"},
+	"kafkajs":             {Name: "kafkajs", Language: LangTypeScript, Category: "queue", ImportPath: "kafkajs", Adapter: "@kavachlabs/kafkajs"},
+	"@kavachlabs/kafkajs": {Name: "kafkajs", Language: LangTypeScript, Category: "queue", ImportPath: "@kavachlabs/kafkajs", Adapter: "@kavachlabs/kafkajs"},
+	"express":             {Name: "express", Language: LangTypeScript, Category: "http", ImportPath: "express", Adapter: "@kavachlabs/http"},
+	"fastify":             {Name: "fastify", Language: LangTypeScript, Category: "http", ImportPath: "fastify", Adapter: "@kavachlabs/http"},
+	"hono":                {Name: "hono", Language: LangTypeScript, Category: "http", ImportPath: "hono", Adapter: "@kavachlabs/http"},
+	"next":                {Name: "next", Language: LangTypeScript, Category: "http", ImportPath: "next", Adapter: "@kavachlabs/http"},
+	"@kavachlabs/http":    {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "@kavachlabs/http", Adapter: "@kavachlabs/http"},
 }
 
 var tsStdlibDrivers = map[string]Driver{
-	"http":      {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "node:http", Adapter: "@kavach/http", Source: "ast"},
-	"node:http": {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "node:http", Adapter: "@kavach/http", Source: "ast"},
+	"http":      {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "node:http", Adapter: "@kavachlabs/http", Source: "ast"},
+	"node:http": {Name: "node:http", Language: LangTypeScript, Category: "http", ImportPath: "node:http", Adapter: "@kavachlabs/http", Source: "ast"},
 }
 
 var rustManifestDrivers = map[string]Driver{
@@ -315,7 +315,7 @@ func parsePackageJSON(path, source string) (name string, drivers []Driver) {
 			}
 		}
 	}
-	// Check real driver packages before @kavach/* aliases so peer/optional real driver versions win cleanly.
+	// Check real driver packages before @kavachlabs/* aliases so peer/optional real driver versions win cleanly.
 	check(pkg.PeerDependencies)
 	check(pkg.OptionalDependencies)
 	check(pkg.Dependencies)

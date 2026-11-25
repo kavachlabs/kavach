@@ -5,8 +5,17 @@ Wrap your existing Postgres, Redis, Kafka, and HTTP clients at initialization—
 ## 1. Install & initialize
 
 ```bash
-go get github.com/kavachlabs/kavach-go
-npx skills@latest add kavachlabs/kavach --skill kavach-setup
+# Install Kavach CLI
+brew install kavachlabs/tap/kavach        # or: curl -fsSL https://www.thekavachlabs.com/install.sh | sh
+
+# Install Go core + thin adapter(s) for your stack
+go get github.com/kavachlabs/kavach-go@v0.2.1
+go get github.com/kavachlabs/kavach-go/adapters/kavachpgx@v0.2.1
+go get github.com/kavachlabs/kavach-go/adapters/kavachredis@v0.2.1
+go get github.com/kavachlabs/kavach-go/adapters/kavachkgo@v0.2.1
+
+# Equip your coding agent & scaffold .kavach/
+npx skills@latest add kavachlabs/kavach --skill kavach-setup --skill kavach-invariants
 kavach init
 ```
 

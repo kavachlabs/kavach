@@ -1,4 +1,4 @@
-import type { Kavach } from "@kavach/core";
+import type { Kavach } from "@kavachlabs/core";
 import {
   type RecordedExec,
   type RecordedResultSet,

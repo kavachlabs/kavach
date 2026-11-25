@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import { scrubBytes, scrubHeaders, scrubString } from "@kavach/core";
+import { scrubBytes, scrubHeaders, scrubString } from "@kavachlabs/core";
 
 test("PII scrubber preserves exact JSON key order, numbers, and matches Go HMAC-SHA256 tokens", () => {
   const key = Buffer.from("kavach-pii-v1:events-processor", "utf8");

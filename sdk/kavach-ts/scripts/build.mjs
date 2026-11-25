@@ -6,9 +6,15 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packages = ["core", "http", "pg", "ioredis", "kafkajs"];
 
-// Ensure local workspace symlinks exist under node_modules/@kavach/* so
-// Node 22 and tsc resolve @kavach/* cleanly with zero network access.
-const scopeDir = path.join(root, "node_modules", "@kavach");
+// Remove any stale legacy symlink directory if present.
+const legacyScopeDir = path.join(root, "node_modules", "@kavach");
+if (fs.existsSync(legacyScopeDir)) {
+  fs.rmSync(legacyScopeDir, { recursive: true, force: true });
+}
+
+// Ensure local workspace symlinks exist under node_modules/@kavachlabs/* so
+// Node 22 and tsc resolve @kavachlabs/* cleanly with zero network access.
+const scopeDir = path.join(root, "node_modules", "@kavachlabs");
 fs.mkdirSync(scopeDir, { recursive: true });
 for (const pkg of packages) {
   const linkPath = path.join(scopeDir, pkg);
@@ -62,8 +68,6 @@ if (!fs.existsSync(typesNodeLink) && fs.existsSync(siblingTypesNode)) {
 }
 
 const noEmit = process.argv.includes("--noEmit");
-const args = noEmit ? ["-b", "tsconfig.json", "--dry"] : ["-b", "tsconfig.json"];
-// For true --noEmit typecheck across all packages & tests:
 if (noEmit) {
   for (const pkg of packages) {
     const res = spawnSync(tscBin, ["-p", path.join(root, "packages", pkg, "tsconfig.json"), "--noEmit"], {
@@ -75,5 +79,5 @@ if (noEmit) {
   process.exit(0);
 }
 
-const res = spawnSync(tscBin, args, { cwd: root, stdio: "inherit" });
+const res = spawnSync(tscBin, ["-b", "tsconfig.json"], { cwd: root, stdio: "inherit" });
 process.exit(res.status ?? 1);

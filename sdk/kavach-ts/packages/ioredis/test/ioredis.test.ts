@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CODE_REDIS_LOADING, StepTable, init } from "@kavach/core";
-import { createReplayRedis, extractRedisKeyArgs, wrapRedis } from "@kavach/ioredis";
+import { CODE_REDIS_LOADING, StepTable, init } from "@kavachlabs/core";
+import { createReplayRedis, extractRedisKeyArgs, wrapRedis } from "@kavachlabs/ioredis";
 
-test("@kavach/ioredis extracts timestamp-independent (cmd, key) args and supports startup ping offline", async () => {
+test("@kavachlabs/ioredis extracts timestamp-independent (cmd, key) args and supports startup ping offline", async () => {
   assert.deepEqual(extractRedisKeyArgs("zadd", ["subscription_refreshed_v2", 1700000000, "org:sub|bucket1"]), [
     "subscription_refreshed_v2",
   ]);
@@ -18,7 +18,7 @@ test("@kavach/ioredis extracts timestamp-independent (cmd, key) args and support
   assert.equal(await rdb.quit?.(), "OK");
 });
 
-test("@kavach/ioredis replays ZADD regardless of score/timestamp and injects LOADING fault", async () => {
+test("@kavachlabs/ioredis replays ZADD regardless of score/timestamp and injects LOADING fault", async () => {
   const kv = init({ service: "redis-svc", mode: "replay" });
   const rdb = createReplayRedis(kv);
 
@@ -80,7 +80,7 @@ test("@kavach/ioredis replays ZADD regardless of score/timestamp and injects LOA
   assert.equal(faultErr.message, "LOADING Redis is loading the dataset in memory");
 });
 
-test("@kavach/ioredis wrapRedis records live commands transparently", async () => {
+test("@kavachlabs/ioredis wrapRedis records live commands transparently", async () => {
   const kv = init({ service: "redis-rec", mode: "off" });
   const fake = {
     async ping() {

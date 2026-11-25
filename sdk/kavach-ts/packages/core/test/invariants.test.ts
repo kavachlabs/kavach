@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InvariantEvaluator, parseInvariantsYAML } from "@kavach/core";
+import { InvariantEvaluator, parseInvariantsYAML } from "@kavachlabs/core";
 
 test("zero-dep invariants.yaml parser and evaluator enforce all 4 invariant kinds", () => {
   const yaml = `

@@ -152,16 +152,16 @@ func scanTSFile(
 		registerTSImport(m[1], imported, seenDrivers)
 	}
 
-	hasPG := imported["pg"] || imported["@kavach/pg"]
+	hasPG := imported["pg"] || imported["@kavachlabs/pg"]
 	hasPrisma := imported["@prisma/client"] || imported["prisma"]
 	hasDrizzle := hasPrefixKey(imported, "drizzle-orm")
-	hasIORedis := imported["ioredis"] || imported["@kavach/ioredis"]
+	hasIORedis := imported["ioredis"] || imported["@kavachlabs/ioredis"]
 	hasNodeRedis := imported["redis"]
-	hasKafkaJS := imported["kafkajs"] || imported["@kavach/kafkajs"]
+	hasKafkaJS := imported["kafkajs"] || imported["@kavachlabs/kafkajs"]
 	hasExpress := imported["express"]
 	hasFastify := imported["fastify"]
 	hasHono := imported["hono"]
-	hasHTTP := imported["http"] || imported["node:http"] || imported["@kavach/http"]
+	hasHTTP := imported["http"] || imported["node:http"] || imported["@kavachlabs/http"]
 	hasCrypto := imported["crypto"] || imported["node:crypto"]
 
 	nextAppRoute, isNextApp := nextAppRoutePath(relPath)
@@ -190,79 +190,79 @@ func scanTSFile(
 		if (hasPG || strings.Contains(line, "pg.Pool")) && reTSNewPool.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new Pool",
-				Category: "pg", Adapter: "@kavach/pg",
+				Category: "pg", Adapter: "@kavachlabs/pg",
 			})
 		}
 		if (hasPG || strings.Contains(line, "pg.Client")) && reTSNewPGClient.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new Client",
-				Category: "pg", Adapter: "@kavach/pg",
+				Category: "pg", Adapter: "@kavachlabs/pg",
 			})
 		}
 		if (hasPrisma || strings.Contains(line, "PrismaClient")) && reTSNewPrisma.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new PrismaClient",
-				Category: "prisma", Adapter: "@kavach/pg",
+				Category: "prisma", Adapter: "@kavachlabs/pg",
 			})
 		}
 		if hasDrizzle && reTSDrizzleInit.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "drizzle",
-				Category: "drizzle-orm", Adapter: "@kavach/pg",
+				Category: "drizzle-orm", Adapter: "@kavachlabs/pg",
 			})
 		}
 		if (hasIORedis || strings.Contains(line, "IORedis")) && reTSNewRedis.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new Redis",
-				Category: "ioredis", Adapter: "@kavach/ioredis",
+				Category: "ioredis", Adapter: "@kavachlabs/ioredis",
 			})
 		}
 		if hasNodeRedis && reTSCreateRedis.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "redis.createClient",
-				Category: "redis", Adapter: "@kavach/ioredis",
+				Category: "redis", Adapter: "@kavachlabs/ioredis",
 			})
 		}
 		if (hasKafkaJS || strings.Contains(line, "new Kafka")) && reTSNewKafka.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new Kafka",
-				Category: "kafkajs", Adapter: "@kavach/kafkajs",
+				Category: "kafkajs", Adapter: "@kavachlabs/kafkajs",
 			})
 		}
 		if hasKafkaJS && reTSKafkaProducer.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "kafka.producer",
-				Category: "kafkajs", Adapter: "@kavach/kafkajs",
+				Category: "kafkajs", Adapter: "@kavachlabs/kafkajs",
 			})
 		}
 		if hasKafkaJS && reTSKafkaConsumer.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "kafka.consumer",
-				Category: "kafkajs", Adapter: "@kavach/kafkajs",
+				Category: "kafkajs", Adapter: "@kavachlabs/kafkajs",
 			})
 		}
 		if hasExpress && reTSExpressInit.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "express()",
-				Category: "express", Adapter: "@kavach/http",
+				Category: "express", Adapter: "@kavachlabs/http",
 			})
 		}
 		if hasFastify && reTSFastifyInit.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "fastify()",
-				Category: "fastify", Adapter: "@kavach/http",
+				Category: "fastify", Adapter: "@kavachlabs/http",
 			})
 		}
 		if (hasHono || strings.Contains(line, "new Hono")) && reTSHonoInit.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "new Hono()",
-				Category: "hono", Adapter: "@kavach/http",
+				Category: "hono", Adapter: "@kavachlabs/http",
 			})
 		}
 		if hasHTTP && reTSHTTPCreateSrv.MatchString(line) {
 			rep.InitSites = append(rep.InitSites, CallSite{
 				File: relPath, Line: lineNum, Func: curFunc, Symbol: "http.createServer",
-				Category: "node:http", Adapter: "@kavach/http",
+				Category: "node:http", Adapter: "@kavachlabs/http",
 			})
 		}
 
@@ -556,7 +556,7 @@ func buildTypeScriptSnippet(rep *DoctorReport) string {
 	}
 
 	if len(adapters) == 0 {
-		return fmt.Sprintf(`import { init } from "@kavach/core";
+		return fmt.Sprintf(`import { init } from "@kavachlabs/core";
 
 const kv = init({
   service: %q,
@@ -566,36 +566,36 @@ const kv = init({
 	}
 
 	var imports []string
-	imports = append(imports, `import { init } from "@kavach/core";`)
-	if adapters["@kavach/http"] {
-		imports = append(imports, `import { wrapHandler } from "@kavach/http";`)
+	imports = append(imports, `import { init } from "@kavachlabs/core";`)
+	if adapters["@kavachlabs/http"] {
+		imports = append(imports, `import { wrapHandler } from "@kavachlabs/http";`)
 	}
-	if adapters["@kavach/pg"] {
-		imports = append(imports, `import { wrapPool } from "@kavach/pg";`)
+	if adapters["@kavachlabs/pg"] {
+		imports = append(imports, `import { wrapPool } from "@kavachlabs/pg";`)
 	}
-	if adapters["@kavach/ioredis"] {
-		imports = append(imports, `import { wrapRedis } from "@kavach/ioredis";`)
+	if adapters["@kavachlabs/ioredis"] {
+		imports = append(imports, `import { wrapRedis } from "@kavachlabs/ioredis";`)
 	}
-	if adapters["@kavach/kafkajs"] {
-		imports = append(imports, `import { wrapKafka } from "@kavach/kafkajs";`)
+	if adapters["@kavachlabs/kafkajs"] {
+		imports = append(imports, `import { wrapKafka } from "@kavachlabs/kafkajs";`)
 	}
 
 	var wraps []string
-	if adapters["@kavach/pg"] {
+	if adapters["@kavachlabs/pg"] {
 		wraps = append(wraps, `const pool = wrapPool(kv, rawPool);`)
 	}
-	if adapters["@kavach/ioredis"] {
+	if adapters["@kavachlabs/ioredis"] {
 		wraps = append(wraps, `const redis = wrapRedis(kv, rawRedis);`)
 	}
-	if adapters["@kavach/kafkajs"] {
+	if adapters["@kavachlabs/kafkajs"] {
 		wraps = append(wraps, `const kafka = wrapKafka(kv, rawKafka);`)
 	}
-	if adapters["@kavach/http"] {
+	if adapters["@kavachlabs/http"] {
 		wraps = append(wraps, `const app = wrapHandler(kv, expressApp);`)
 	}
 
 	serveTarget := "app"
-	if !adapters["@kavach/http"] && adapters["@kavach/kafkajs"] {
+	if !adapters["@kavachlabs/http"] && adapters["@kavachlabs/kafkajs"] {
 		serveTarget = "consumer"
 	}
 

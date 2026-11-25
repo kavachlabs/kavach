@@ -1,7 +1,7 @@
-import { init } from "@kavach/core";
-import { type IORedisLike, wrapRedis } from "@kavach/ioredis";
-import { createReplayKafka } from "@kavach/kafkajs";
-import { type PgPoolLike, wrapPool } from "@kavach/pg";
+import { init } from "@kavachlabs/core";
+import { type IORedisLike, wrapRedis } from "@kavachlabs/ioredis";
+import { createReplayKafka } from "@kavachlabs/kafkajs";
+import { type PgPoolLike, wrapPool } from "@kavachlabs/pg";
 import { type RawBillingEvent, processBillingEvent } from "./processor.ts";
 
 // Records realistic baseline traffic on the unpatched service through KVRING02

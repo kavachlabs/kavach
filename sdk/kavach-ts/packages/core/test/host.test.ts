@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import readline from "node:readline";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { init } from "@kavach/core";
+import { init } from "@kavachlabs/core";
 
 test("SPEC §9 kavach-host stdio protocol loop supports hello/ready/step/gateway/emit/reset/end with async handlers", async () => {
   const driverToHost = new PassThrough();
