@@ -13,10 +13,10 @@ Wrap your existing database, cache, queue, and HTTP drivers at initialization—
 Core `github.com/kavachlabs/kavach-go` has **zero third-party dependencies** (and includes `adapters/kavachhttp`). Install only the additional driver adapter modules your service uses:
 
 ```bash
-go get github.com/kavachlabs/kavach-go@v0.2.1
-go get github.com/kavachlabs/kavach-go/adapters/kavachpgx@v0.2.1
-go get github.com/kavachlabs/kavach-go/adapters/kavachredis@v0.2.1
-go get github.com/kavachlabs/kavach-go/adapters/kavachkgo@v0.2.1
+go get github.com/kavachlabs/kavach-go@v0.3.0
+go get github.com/kavachlabs/kavach-go/adapters/kavachpgx@v0.3.0
+go get github.com/kavachlabs/kavach-go/adapters/kavachredis@v0.3.0
+go get github.com/kavachlabs/kavach-go/adapters/kavachkgo@v0.3.0
 ```
 
 | Package | Libraries | Key Exports | Behavior (Record / Replay) |

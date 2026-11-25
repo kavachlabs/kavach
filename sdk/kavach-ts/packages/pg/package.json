@@ -1,6 +1,6 @@
 {
   "name": "@kavachlabs/pg",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Kavach v0.2 PostgreSQL adapter for pg (node-postgres), Drizzle, and Prisma @prisma/adapter-pg.",
   "license": "Apache-2.0",
   "type": "module",
@@ -26,7 +26,7 @@
   },
   "files": ["dist", "README.md", "LICENSE"],
   "dependencies": {
-    "@kavachlabs/core": "^0.2.1"
+    "@kavachlabs/core": "^0.3.0"
   },
   "peerDependencies": {
     "pg": ">=8.0.0"

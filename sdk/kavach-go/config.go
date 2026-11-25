@@ -12,7 +12,7 @@ import (
 )
 
 // Version is the semantic version reported in KVRING02 Open frames and host ready messages.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // HostCommand is the final CLI argument that activates Replay mode (SPEC §9.1).
 const HostCommand = host.HostCommand

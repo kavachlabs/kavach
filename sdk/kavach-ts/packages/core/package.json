@@ -1,6 +1,6 @@
 {
   "name": "@kavachlabs/core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Zero-dependency Kavach v0.2 core SDK for Node 22: AsyncLocalStorage step propagation, KVRING02 ring writer, kavach-host stdio protocol, deterministic HMAC-SHA256 PII scrubber, two-tier gateway matcher, and declarative invariants.",
   "license": "Apache-2.0",
   "type": "module",
