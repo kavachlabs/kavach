@@ -13,5 +13,9 @@
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/build.mjs --noEmit",
     "test": "node scripts/build.mjs && node --test \"packages/*/test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
   }
 }
